@@ -18,7 +18,12 @@ Erledigt:
 - Autosave- und Realtime-Verhalten im Panel gestrafft: Rendern per `requestAnimationFrame`, Speichern nur bei echten Aenderungen, sofortiges Speichern nach Drag-Ende.
 - PWA-Dateien unter `C:\EQWeb\wwwroot` ueberarbeitet und PNG-App-Icons erzeugt.
 - Lokalen Funktionstest gegen `http://192.168.0.248:8080` durchgefuehrt: Startseite, Manifest, Service Worker, API-State und Icons liefern erfolgreich aus.
-
+- Fuer C:\EQWeb eine Desktop-Verknuepfung C:\Users\Wolf\Desktop\EQ Panel.lnk angelegt, die den Start als Administrator ausloest.
+- Nach einer UI-Regression den funktionierenden 3-Lab-Stand fuer EQWeb wiederhergestellt und fehlende Profil-/Visual-EQ-Funktionen zurueckgebracht.
+- Den Laufzeitfehler um Get-UsableIPv4Addresses behoben, sodass das Panel wieder korrekt rendert.
+- Smartphone- und Tablet-Ansichten in EQWeb aufgeraeumt: erklaerende Ueberschrift-/Hilfetexte entfernt, Bedienflaechen kompakter gelassen.
+- Ein sauberes Backup des funktionsfaehigen EQWeb-Stands erstellt: C:\EQWeb\backups\EQWeb-backup-20260326-214242.zip.
+- Root- und Server-Zertifikate fuer einen HTTPS/PWA-Versuch vorbereitet (C:\EQWeb\certs\EQWeb-Local-Root-CA.cer), den HTTPS-Umbau aber wegen bestehender HTTP.sys-/URL-Registrierungskonflikte nicht produktiv uebernommen.
 Entscheidungen:
 - Der gemeinsame Wissensspeicher liegt kuenftig in einem privaten GitHub-Repo statt auf einem selbst gehosteten Gitea-Server.
 - Pro Geraet soll ein eigener SSH-Key fuer GitHub verwendet werden, statt Tokens dauerhaft zu nutzen.
@@ -30,9 +35,8 @@ Entscheidungen:
 Offen:
 - SSH-Verbindung des Homeservers zu GitHub nach Eintragen des Public Keys testen.
 - Fuer weitere Geraete wie Raspberry Pi jeweils eigenen SSH-Key erzeugen und in GitHub hinterlegen.
-- Echten Browser-Test auf Smartphone/Tablet fuer EQWeb durchfuehren: Installierbarkeit als PWA und Verhalten im mobilen Chrome pruefen.
-- Falls Chrome die Installation trotz korrekter Assets nicht anbietet, den Secure-Context-/HTTP-vs-HTTPS-Punkt fuer EQWeb entscheiden.
-
+- Falls EQWeb spaeter als echte PWA installierbar sein soll, HTTPS nicht mehr direkt ueber den eingebauten HttpListener erzwingen, sondern bestehende HTTP.sys-Konflikte gezielt aufraeumen oder einen separaten Reverse-Proxy/HTTPS-Frontend-Weg waehlen.
+- Optional die mobile EQWeb-Oberflaeche weiter visuell verdichten, falls auf Smartphone/Tablet noch mehr Platz fuer Regler gewonnen werden soll.
 Naechster Start:
-- `ccmem start: lies C:\ccmem\START-HERE.md und arbeite mit diesem Wissensspeicher`
-- Danach bei EQWeb den echten Mobiltest mit Smartphone/Tablet machen und je nach Ergebnis entweder PWA-Installpfad finalisieren oder den Bindungs-/HTTPS-Ansatz nachziehen.
+- ccmem start: lies C:\ccmem\START-HERE.md und arbeite mit diesem Wissensspeicher
+- Danach bei EQWeb entweder nur weitere Mobile-UI-Feinarbeit machen oder den HTTPS/PWA-Pfad ueber Reverse Proxy bzw. bereinigte HTTP.sys-Registrierungen sauber neu ansetzen.
