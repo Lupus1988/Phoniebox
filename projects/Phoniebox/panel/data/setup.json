@@ -1,0 +1,95 @@
+{
+  "reader": {
+    "type": "USB",
+    "connection_hint": "USB-Reader anstecken oder RC522 per SPI verdrahten",
+    "read_behavior": "play",
+    "remove_behavior": "stop"
+  },
+  "buttons": [
+    {
+      "id": "btn-1",
+      "name": "Play/Pause",
+      "pin": "GPIO17",
+      "press_type": "kurz"
+    },
+    {
+      "id": "btn-2",
+      "name": "Vor",
+      "pin": "GPIO27",
+      "press_type": "kurz"
+    },
+    {
+      "id": "btn-3",
+      "name": "Zurück",
+      "pin": "GPIO22",
+      "press_type": "kurz"
+    },
+    {
+      "id": "btn-4",
+      "name": "Lautstärke +",
+      "pin": "GPIO23",
+      "press_type": "kurz"
+    },
+    {
+      "id": "btn-5",
+      "name": "Lautstärke -",
+      "pin": "GPIO24",
+      "press_type": "kurz"
+    },
+    {
+      "id": "btn-6",
+      "name": "Sleep/Power",
+      "pin": "GPIO25",
+      "press_type": "lang"
+    }
+  ],
+  "leds": [
+    {
+      "id": "led-1",
+      "name": "Power",
+      "pin": "GPIO12",
+      "function": "power_on",
+      "brightness": 50
+    },
+    {
+      "id": "led-2",
+      "name": "Stand-by",
+      "pin": "GPIO13",
+      "function": "standby",
+      "brightness": 30
+    },
+    {
+      "id": "led-3",
+      "name": "Sleep 1/3",
+      "pin": "GPIO18",
+      "function": "sleep_1",
+      "brightness": 50
+    },
+    {
+      "id": "led-4",
+      "name": "Sleep 2/3",
+      "pin": "GPIO19",
+      "function": "sleep_2",
+      "brightness": 70
+    },
+    {
+      "id": "led-5",
+      "name": "Sleep 3/3",
+      "pin": "GPIO20",
+      "function": "sleep_3",
+      "brightness": 90
+    }
+  ],
+  "wifi": {
+    "mode": "hotspot_only",
+    "country": "DE",
+    "fallback_hotspot": true,
+    "hotspot_security": "open",
+    "hotspot_ssid": "Phonie-hotspot",
+    "hotspot_password": "",
+    "hotspot_channel": 6,
+    "hostname": "phoniebox",
+    "browser_name": "phoniebox.local",
+    "saved_networks": []
+  }
+}

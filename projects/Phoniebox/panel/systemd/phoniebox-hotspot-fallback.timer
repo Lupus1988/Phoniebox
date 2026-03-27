@@ -1,0 +1,10 @@
+[Unit]
+Description=Run hotspot fallback cycle every 30 seconds
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=30s
+Unit=phoniebox-hotspot-fallback.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="eyebrow">Bibliothek</p>
+      <h2>Alben und RFID-Zuordnung</h2>
+      <p class="subtle">Dein PDF als editierbare Tabelle: Album, Ordner, Tag und Kollisionsprüfung.</p>
+    </div>
+  </section>
+
+  <article class="card">
+    <div class="section-header">
+      <h3>Albumordner importieren</h3>
+      <span class="badge">Ordner -> Playlist</span>
+    </div>
+    <form method="post" class="grid form-grid" enctype="multipart/form-data">
+      <input type="hidden" name="action" value="import_album">
+      <label>
+        <span>Name</span>
+        <input name="name" placeholder="Albumname">
+      </label>
+      <label>
+        <span>RFID-UID optional</span>
+        <input name="rfid_uid" placeholder="1234567890">
+      </label>
+      <label class="full">
+        <span>Albumordner</span>
+        <input type="file" name="album_files" webkitdirectory directory multiple>
+      </label>
+      <p class="subtle full">Der Upload erwartet einen kompletten Ordner. Danach wird automatisch `playlist.m3u` erzeugt und im Album gespeichert.</p>
+      <button class="primary wide" type="submit">Album importieren</button>
+    </form>
+  </article>
+
+  <article class="card">
+    <div class="section-header">
+      <h3>RFID-Verlinkung</h3>
+      <span class="badge">Link hinzufügen</span>
+    </div>
+    <p class="subtle">Beim Klick auf „Link hinzufügen“ öffnet sich ein Popup. Der nächste gescannte Tag wird automatisch verknüpft. Falls der Tag bereits belegt ist, wird kein Link erstellt.</p>
+    <div class="chip-stack">
+      {% for album in library_data.albums %}
+        <button
+          type="button"
+          class="drag-chip js-open-link-modal"
+          data-album-id="{{ album.id }}"
+          data-album-name="{{ album.name }}"
+        >
+          {{ album.name }}: Link hinzufügen
+        </button>
+      {% endfor %}
+    </div>
+  </article>
+
+  <article class="card">
+    <div class="section-header">
+      <h3>Bestehende Alben</h3>
+      <span class="badge">{{ library_data.albums|length }} Einträge</span>
+    </div>
+    <div class="album-list">
+      {% for album in library_data.albums %}
+        <form method="post" class="album-row">
+          <input type="hidden" name="action" value="save_album">
+          <input type="hidden" name="album_id" value="{{ album.id }}">
+          <label>
+            <span>Album</span>
+            <input name="name" value="{{ album.name }}">
+          </label>
+          <label>
+            <span>Ordner</span>
+            <input name="folder" value="{{ album.folder }}">
+          </label>
+          <label>
+            <span>Playlist</span>
+            <input name="playlist" value="{{ album.playlist }}">
+          </label>
+          <label>
+            <span>Titel</span>
+            <input name="track_count" value="{{ album.track_count or 0 }}">
+          </label>
+          <label>
+            <span>RFID-Status</span>
+            <input name="rfid_uid" value="{{ album.rfid_uid }}" placeholder="unverlinkt">
+          </label>
+          <label>
+            <span>Cover</span>
+            <input name="cover_url" value="{{ album.cover_url }}">
+          </label>
+          <div class="row-actions">
+            <button class="primary" type="submit">Speichern</button>
+            <button type="button" class="js-open-link-modal" data-album-id="{{ album.id }}" data-album-name="{{ album.name }}">Link hinzufügen</button>
+            <button formaction="{{ url_for('library') }}" name="action" value="unlink_rfid">RFID löschen</button>
+            <button formaction="{{ url_for('library') }}" name="action" value="delete_album" class="danger">Entfernen</button>
+          </div>
+        </form>
+      {% endfor %}
+    </div>
+  </article>
+
+  <dialog class="modal" id="rfid-link-modal">
+    <div class="modal-body">
+      <div class="section-header">
+        <h3>Jetzt Tag scannen</h3>
+        <button type="button" class="modal-close" data-close-modal>Schließen</button>
+      </div>
+      <p id="rfid-link-album" class="subtle"></p>
+      <div class="info-box">
+        <p id="rfid-link-message"><strong>Warte auf den nächsten Scan.</strong></p>
+        <p class="subtle">Der nächste gescannte RFID-Tag wird für dieses Album verwendet.</p>
+      </div>
+      <div class="inline-actions stacked-actions">
+        <button type="button" class="danger" id="rfid-link-cancel">Abbrechen</button>
+      </div>
+    </div>
+  </dialog>
+  <script src="{{ url_for('static', filename='library-link.js') }}"></script>
+{% endblock %}

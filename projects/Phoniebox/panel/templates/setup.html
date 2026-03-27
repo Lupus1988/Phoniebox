@@ -1,0 +1,419 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="eyebrow">Setup</p>
+      <h2>Reader, Tasten, LEDs und WLAN</h2>
+      <p class="subtle">Hardware-Mapping und Netzwerkkonzept in einer Oberfläche statt in Einzelskripten.</p>
+    </div>
+  </section>
+
+  {% if setup_warnings %}
+    <article class="card warning-card">
+      <div class="section-header">
+        <h3>Konflikte</h3>
+        <span class="badge">{{ setup_warnings|length }} Hinweise</span>
+      </div>
+      <ul class="list">
+        {% for warning in setup_warnings %}
+          <li>{{ warning }}</li>
+        {% endfor %}
+      </ul>
+    </article>
+  {% endif %}
+
+  <div class="grid setup-grid">
+    <article class="card">
+      <div class="section-header">
+        <h3>Hardware Readiness</h3>
+        <span class="badge">{% if hardware_profile.ready_for_integration %}vorbereitet{% else %}offen{% endif %}</span>
+      </div>
+      <div class="status-grid">
+        <div><span>Reader</span><strong>{{ hardware_profile.reader.configured_type }}</strong></div>
+        <div><span>Buttons</span><strong>{{ hardware_profile.buttons.configured }}</strong></div>
+        <div><span>LEDs</span><strong>{{ hardware_profile.leds.configured }}</strong></div>
+        <div><span>Audio</span><strong>{{ hardware_profile.audio.albums_with_playlist }} Playlists</strong></div>
+      </div>
+      <div class="split-list">
+        <div>
+          <h4>Treiberprofil</h4>
+          <ul class="list">
+            <li><strong>Reader</strong><span>{{ hardware_profile.reader.driver }} • {{ hardware_profile.reader.transport }}</span></li>
+            <li><strong>Buttons</strong><span>{{ hardware_profile.buttons.backend }}</span></li>
+            <li><strong>LEDs</strong><span>{{ hardware_profile.leds.backend }}</span></li>
+            <li><strong>Audio</strong><span>{{ hardware_profile.audio.backend }}</span></li>
+          </ul>
+        </div>
+        <div>
+          <h4>Hinweise</h4>
+        <ul class="list">
+          {% for warning in hardware_profile.warnings %}
+            <li>{{ warning }}</li>
+          {% else %}
+            <li>Keine offenen Hinweise.</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </article>
+
+    <article class="card">
+      <div class="section-header">
+        <h3>RFID-Reader</h3>
+      </div>
+      <form method="post" class="grid form-grid compact">
+        <input type="hidden" name="section" value="reader">
+        <label>
+          <span>Reader-Typ</span>
+          <select name="reader_type">
+            {% for option in reader_options %}
+              <option value="{{ option.id }}" {% if setup_data.reader.type == option.id %}selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Lesen</span>
+          <select name="read_behavior">
+            {% for option in ["play", "album_load", "queue_append"] %}
+              <option value="{{ option }}" {% if setup_data.reader.read_behavior == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Entfernen</span>
+          <select name="remove_behavior">
+            {% for option in ["stop", "pause", "nichts"] %}
+              <option value="{{ option }}" {% if setup_data.reader.remove_behavior == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="full">
+          <span>Anschluss-Hinweis</span>
+          <textarea name="connection_hint" rows="3">{{ setup_data.reader.connection_hint }}</textarea>
+        </label>
+        <button class="primary wide" type="submit">Reader speichern</button>
+      </form>
+      <div class="info-box">
+        <h4>Aktives Reader-Profil</h4>
+        <p><strong>{{ reader_option.label }}</strong></p>
+        <p class="subtle">Treiber: {{ reader_option.driver }} • Transport: {{ reader_option.transport }}</p>
+        <p class="subtle">Reservierte Pins werden automatisch aus den GPIO-Dropdowns entfernt. Lesen/Entfernen eines Tags folgt den Optionen in diesem Reader-Block.</p>
+      </div>
+    </article>
+
+    <article class="card">
+      <div class="section-header">
+        <h3>WLAN & Hotspot</h3>
+        <span class="badge">
+          {% if wifi_snapshot.nmcli_available %}Live-Status{% else %}Konfigurationsmodus{% endif %}
+        </span>
+      </div>
+      <div class="status-grid">
+        <div><span>WLAN</span><strong>{{ wifi_snapshot.wifi_enabled }}</strong></div>
+        <div><span>Konnektivität</span><strong>{{ wifi_snapshot.connectivity }}</strong></div>
+        <div><span>Aktives WLAN</span><strong>{{ wifi_snapshot.active_ssid }}</strong></div>
+        <div><span>Gerät</span><strong>{{ wifi_snapshot.device }}</strong></div>
+      </div>
+      <form method="post" class="grid form-grid compact">
+        <input type="hidden" name="section" value="wifi">
+        <label>
+          <span>Modus</span>
+          <select name="mode">
+            {% for option in ["client_only", "client_with_fallback_hotspot", "hotspot_only"] %}
+              <option value="{{ option }}" {% if setup_data.wifi.mode == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Land</span>
+          <input name="country" value="{{ setup_data.wifi.country }}">
+        </label>
+        <label>
+          <span>Hotspot SSID</span>
+          <input name="hotspot_ssid" value="{{ setup_data.wifi.hotspot_ssid }}">
+        </label>
+        <label>
+          <span>Hotspot Sicherheit</span>
+          <select name="hotspot_security">
+            {% for option in ["open", "wpa2"] %}
+              <option value="{{ option }}" {% if setup_data.wifi.hotspot_security == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Hotspot Passwort</span>
+          <input name="hotspot_password" value="{{ setup_data.wifi.hotspot_password }}">
+        </label>
+        <label>
+          <span>Hotspot Kanal</span>
+          <input type="number" name="hotspot_channel" min="1" max="13" value="{{ setup_data.wifi.hotspot_channel }}">
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="fallback_hotspot" {% if setup_data.wifi.fallback_hotspot %}checked{% endif %}>
+          <span>Fallback-Hotspot aktivieren, wenn kein Client-WLAN erreichbar ist</span>
+        </label>
+        <label>
+          <span>Hostname</span>
+          <input name="hostname" value="{{ setup_data.wifi.hostname }}">
+        </label>
+        <label>
+          <span>Browser-Name</span>
+          <input name="browser_name" value="{{ setup_data.wifi.browser_name }}">
+        </label>
+        <button class="primary wide" type="submit">WLAN-Profil speichern</button>
+      </form>
+      <div class="inline-actions stacked-actions">
+        <form method="post">
+          <input type="hidden" name="section" value="apply_network">
+          <button class="primary" type="submit">Auf System anwenden</button>
+        </form>
+        <form method="post">
+          <input type="hidden" name="section" value="run_fallback_cycle">
+          <button type="submit">Fallback-Zyklus testen</button>
+        </form>
+        <form method="post">
+          <input type="hidden" name="section" value="factory_wifi">
+          <button class="danger" type="submit">Factory-Hotspot laden</button>
+        </form>
+      </div>
+
+      <div class="info-box">
+        <h4>Erreichbarkeit</h4>
+        <p>Empfohlen im Heimnetz: <strong>http://{{ network_info.recommended_name }}</strong></p>
+        <p>Aktuell eingetragen: <strong>http://{{ network_info.browser_name }}</strong></p>
+        <p><strong>phonie.box</strong> ist nicht automatisch ein Standardname. Das geht nur, wenn Router, lokaler DNS oder Captive-Portal-Setup diesen Namen gezielt aufloesen.</p>
+      </div>
+
+      <div class="info-box">
+        <h4>Letzte Systemanwendung</h4>
+        <p><strong>{{ apply_report.summary }}</strong></p>
+        <ul class="list">
+          {% for detail in apply_report.details %}
+            <li>{{ detail }}</li>
+          {% else %}
+            <li>Noch keine Systemaenderung ausgefuehrt.</li>
+          {% endfor %}
+        </ul>
+      </div>
+
+      <div class="split-list">
+        <div>
+          <h4>Gespeicherte Netzwerke</h4>
+          <ul class="list">
+            {% for network in setup_data.wifi.saved_networks %}
+              <li class="network-row">
+                <div>
+                  <strong>{{ network.ssid }}</strong>
+                  <span>Priorität {{ network.priority }}</span>
+                </div>
+                <form method="post">
+                  <input type="hidden" name="section" value="delete_wifi_network">
+                  <input type="hidden" name="network_id" value="{{ network.id }}">
+                  <button class="danger" type="submit">Löschen</button>
+                </form>
+              </li>
+            {% else %}
+              <li>Noch keine gespeicherten WLANs.</li>
+            {% endfor %}
+          </ul>
+          <form method="post" class="grid form-grid compact">
+            <input type="hidden" name="section" value="add_wifi_network">
+            <label>
+              <span>SSID</span>
+              <input name="ssid" placeholder="Kinderzimmer-WLAN">
+            </label>
+            <label>
+              <span>Passwort</span>
+              <input name="password" placeholder="optional">
+            </label>
+            <label>
+              <span>Priorität</span>
+              <input type="number" name="priority" min="1" max="100" value="10">
+            </label>
+            <button class="primary wide" type="submit">Netzwerk speichern</button>
+          </form>
+        </div>
+        <div>
+          <h4>Erkannte Netzwerke</h4>
+          <ul class="list">
+            {% for network in wifi_snapshot.scanned_networks %}
+              <li>
+                <strong>{{ network.ssid }}</strong>
+                <span>{{ network.signal }}% • {{ network.security }}</span>
+              </li>
+            {% else %}
+              <li>Kein Live-Scan verfügbar. Das Panel speichert trotzdem die Soll-Konfiguration.</li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+    </article>
+  </div>
+
+  <article class="card">
+    <div class="section-header">
+      <h3>Tastenerkennung</h3>
+      <span class="badge">{{ setup_data.buttons|length }} Tasten</span>
+    </div>
+    <div class="drag-layout">
+      <div class="drag-palette">
+        <h4>Funktionsbausteine</h4>
+        <div class="chip-stack">
+          {% for option in button_functions %}
+            <button
+              class="drag-chip"
+              type="button"
+              draggable="true"
+              data-function-chip="{{ option }}"
+            >
+              {{ option }}
+            </button>
+          {% endfor %}
+        </div>
+      </div>
+    <form method="post">
+      <input type="hidden" name="section" value="buttons">
+      <input type="hidden" name="button_count" value="{{ button_mapping_rows|length }}">
+      <div class="mapping-grid">
+        {% for row in button_mapping_rows %}
+          <article class="mapping-card">
+            <div class="mapping-head">
+              <h4>Taster {{ loop.index }}</h4>
+              <select name="button_pin_{{ row.index }}">
+                {% for pin in button_pin_choices %}
+                  <option value="{{ pin }}" {% if row.pin == pin %}selected{% endif %}>{{ pin }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="drop-grid">
+              <div class="drop-slot" data-drop-slot>
+                <span>Kurz</span>
+                <strong data-drop-label>{{ row.short_function or "Funktion hierhin ziehen" }}</strong>
+                <input type="hidden" name="button_short_function_{{ row.index }}" value="{{ row.short_function }}">
+              </div>
+              <div class="drop-slot" data-drop-slot>
+                <span>Lang</span>
+                <strong data-drop-label>{{ row.long_function or "Funktion hierhin ziehen" }}</strong>
+                <input type="hidden" name="button_long_function_{{ row.index }}" value="{{ row.long_function }}">
+              </div>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+      <button class="primary" type="submit">Tasten speichern</button>
+    </form>
+    </div>
+    <div class="info-box">
+      <h4>Kontrollfenster</h4>
+      <p>Später soll hier die echte Tasterkennung landen. Vorab kannst du den GPIO-Workflow simulieren und die Zuordnung testen.</p>
+      <form method="post" class="grid form-grid compact">
+        <input type="hidden" name="section" value="simulate_gpio">
+        <label>
+          <span>Erkannter GPIO</span>
+          <select name="sim_pin">
+            {% for pin in button_pin_choices %}
+              <option value="{{ pin }}">{{ pin }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Tastendruck</span>
+          <select name="sim_press_type">
+            {% for option in ["kurz", "lang"] %}
+              <option value="{{ option }}">{{ option }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button class="primary wide" type="submit">GPIO-Ereignis simulieren</button>
+      </form>
+      <ul class="list">
+        <li><strong>Letztes Ereignis</strong><span>{{ runtime_state.last_event }}</span></li>
+        <li><strong>Letzte Taste</strong><span>{{ runtime_state.hardware.last_button or "-" }} • {{ runtime_state.hardware.last_button_press_type or "-" }}</span></li>
+        <li><strong>Erkannte GPIOs</strong><span>{{ runtime_state.hardware.pressed_buttons|join(", ") if runtime_state.hardware.pressed_buttons else "-" }}</span></li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="card">
+    <div class="section-header">
+      <h3>Runtime Diagnose</h3>
+      <span class="badge">{{ runtime_state.playback_state }}</span>
+    </div>
+    <div class="split-list">
+      <div>
+        <h4>RFID</h4>
+        <form method="post" class="grid form-grid compact">
+          <input type="hidden" name="section" value="simulate_rfid">
+          <label>
+            <span>Simulierter Tag</span>
+            <input name="sim_rfid_uid" placeholder="1234567890">
+          </label>
+          <button class="primary wide" type="submit">RFID-Scan simulieren</button>
+        </form>
+        <form method="post" class="grid form-grid compact">
+          <input type="hidden" name="section" value="simulate_tag_remove">
+          <button type="submit">Tag entfernen simulieren</button>
+        </form>
+      </div>
+      <div>
+        <h4>Audio/Timer</h4>
+        <form method="post" class="grid form-grid compact">
+          <input type="hidden" name="section" value="simulate_tick">
+          <label>
+            <span>Fortschritt in Sekunden</span>
+            <input type="number" name="elapsed" min="1" max="120" value="5">
+          </label>
+          <button class="primary wide" type="submit">Tick simulieren</button>
+        </form>
+        <ul class="list">
+          <li><strong>Aktiver Tag</strong><span>{{ runtime_state.active_rfid_uid or "-" }}</span></li>
+          <li><strong>Sleeptimer</strong><span>{{ runtime_state.sleep_timer.remaining_seconds }}s • Stufe {{ runtime_state.sleep_timer.level }}</span></li>
+          <li><strong>Aktueller Titel</strong><span>{{ runtime_state.last_event }}</span></li>
+          <li><strong>Playback Backend</strong><span>{{ runtime_state.playback_session.backend or hardware_profile.audio.playback_backend or "mock" }} • {{ runtime_state.playback_session.state or "idle" }}</span></li>
+        </ul>
+      </div>
+    </div>
+    <div class="info-box">
+      <h4>Ereignisprotokoll</h4>
+      <ul class="list">
+        {% for event in runtime_state.event_log %}
+          <li><strong>{{ event.message }}</strong><span>{{ event.level }} • {{ event.at }}</span></li>
+        {% else %}
+          <li>Noch keine Ereignisse protokolliert.</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </article>
+
+  <article class="card">
+    <div class="section-header">
+      <h3>LED-Zuweisung</h3>
+    </div>
+    <form method="post">
+      <input type="hidden" name="section" value="leds">
+      <input type="hidden" name="led_count" value="{{ setup_data.leds|length }}">
+      <div class="table-grid">
+        <div>Name</div>
+        <div>PIN</div>
+        <div>Funktion</div>
+        <div>Helligkeit %</div>
+        {% for led in setup_data.leds %}
+          <input name="led_name_{{ loop.index0 }}" value="{{ led.name }}">
+          <select name="led_pin_{{ loop.index0 }}">
+            {% for pin in led_pin_choices %}
+              <option value="{{ pin }}" {% if led.pin == pin %}selected{% endif %}>{{ pin }}</option>
+            {% endfor %}
+          </select>
+          <select name="led_function_{{ loop.index0 }}">
+            {% for option in led_functions %}
+              <option value="{{ option }}" {% if led.function == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+          <input type="number" name="led_brightness_{{ loop.index0 }}" min="0" max="100" value="{{ led.brightness }}">
+        {% endfor %}
+      </div>
+      <button class="primary" type="submit">LEDs speichern</button>
+    </form>
+  </article>
+  <script src="{{ url_for('static', filename='setup-dnd.js') }}"></script>
+{% endblock %}

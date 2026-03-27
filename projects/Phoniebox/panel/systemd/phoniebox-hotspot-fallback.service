@@ -1,0 +1,8 @@
+[Unit]
+Description=Phoniebox Hotspot Fallback Cycle
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/phoniebox-panel
+ExecStart=/usr/bin/python3 /opt/phoniebox-panel/scripts/fallback_hotspot.py

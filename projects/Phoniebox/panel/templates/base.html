@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Phoniebox Panel</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-kicker">Phoniebox</span>
+          <h1>Panel</h1>
+          <p>Kinderbox-Steuerung mit Hardware-Setup und WLAN-Fallback.</p>
+        </div>
+        <nav class="nav">
+          {% for item in nav_items %}
+            <a
+              class="nav-link {% if active_path == url_for(item.endpoint) %}active{% endif %}"
+              href="{{ url_for(item.endpoint) }}"
+            >
+              {{ item.label }}
+            </a>
+          {% endfor %}
+        </nav>
+      </aside>
+      <main class="content">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            <div class="flash-stack">
+              {% for category, message in messages %}
+                <div class="flash flash-{{ category }}">{{ message }}</div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </body>
+</html>

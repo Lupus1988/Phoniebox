@@ -1,0 +1,1122 @@
+import json
+import os
+import secrets
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
+from werkzeug.utils import secure_filename
+
+
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+from runtime.service import RuntimeService
+from system.networking import apply_wifi_profile, ensure_hostname, fallback_hotspot_cycle
+
+DATA_DIR = BASE_DIR / "data"
+MEDIA_DIR = BASE_DIR / "media"
+ALBUMS_DIR = MEDIA_DIR / "albums"
+PLAYER_FILE = DATA_DIR / "player_state.json"
+LIBRARY_FILE = DATA_DIR / "library.json"
+SETTINGS_FILE = DATA_DIR / "settings.json"
+SETUP_FILE = DATA_DIR / "setup.json"
+APPLY_REPORT_FILE = DATA_DIR / "last_apply_report.json"
+RUNTIME_FILE = DATA_DIR / "runtime_state.json"
+LINK_SESSION_FILE = DATA_DIR / "rfid_link_session.json"
+
+
+app = Flask(
+    __name__,
+    template_folder=str(BASE_DIR / "templates"),
+    static_folder=str(BASE_DIR / "static"),
+)
+app.secret_key = "phoniebox-panel-dev-secret"
+runtime_service = RuntimeService()
+
+GPIO_PINS = [
+    "GPIO2", "GPIO3", "GPIO4", "GPIO5", "GPIO6", "GPIO7", "GPIO8", "GPIO9", "GPIO10",
+    "GPIO11", "GPIO12", "GPIO13", "GPIO16", "GPIO17", "GPIO18", "GPIO19", "GPIO20",
+    "GPIO21", "GPIO22", "GPIO23", "GPIO24", "GPIO25", "GPIO26", "GPIO27",
+]
+PWM_PINS = {"GPIO12", "GPIO13", "GPIO18", "GPIO19"}
+BUTTON_FUNCTIONS = [
+    "Play/Pause", "Vor", "Zurück", "Lautstärke +", "Lautstärke -", "Sleep/Power",
+]
+LED_FUNCTIONS = ["power_on", "standby", "sleep_1", "sleep_2", "sleep_3"]
+READER_OPTIONS = [
+    {"id": "USB", "label": "USB Keyboard Reader", "driver": "hid/keyboard-reader", "transport": "usb"},
+    {"id": "RC522", "label": "RC522", "driver": "mfrc522", "transport": "spi"},
+    {"id": "PN532_I2C", "label": "PN532 (I2C)", "driver": "pn532", "transport": "i2c"},
+    {"id": "PN532_SPI", "label": "PN532 (SPI)", "driver": "pn532", "transport": "spi"},
+    {"id": "PN532_UART", "label": "PN532 (UART)", "driver": "pn532", "transport": "uart"},
+]
+
+
+def load_json(path, default):
+    if not path.exists():
+        return default
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def save_json(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(".tmp")
+    with temp_path.open("w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2, ensure_ascii=False)
+    temp_path.replace(path)
+
+
+def slugify_name(value):
+    cleaned = secure_filename((value or "").strip())
+    return cleaned.replace("_", "-").lower() or f"album-{secrets.token_hex(4)}"
+
+
+def safe_relative_path(raw_name):
+    parts = []
+    for part in Path(raw_name).parts:
+        if part in {"", ".", ".."}:
+            continue
+        cleaned = secure_filename(part)
+        if cleaned:
+            parts.append(cleaned)
+    return Path(*parts) if parts else Path("datei")
+
+
+def is_audio_file(path):
+    return path.suffix.lower() in {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".aac"}
+
+
+def is_cover_file(path):
+    return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def build_playlist(album_dir):
+    audio_files = sorted(
+        [path for path in album_dir.rglob("*") if path.is_file() and is_audio_file(path)],
+        key=lambda item: str(item.relative_to(album_dir)).lower(),
+    )
+    playlist_path = album_dir / "playlist.m3u"
+    playlist_lines = ["#EXTM3U"]
+    for track in audio_files:
+        playlist_lines.append(track.relative_to(album_dir).as_posix())
+    playlist_path.write_text("\n".join(playlist_lines) + "\n", encoding="utf-8")
+    return playlist_path, audio_files
+
+
+def detect_cover(album_dir):
+    image_files = sorted([path for path in album_dir.rglob("*") if path.is_file() and is_cover_file(path)])
+    if not image_files:
+        return ""
+    preferred = next((path for path in image_files if path.stem.lower() in {"cover", "folder"}), image_files[0])
+    return preferred.relative_to(BASE_DIR).as_posix()
+
+
+def import_album_folder(files, album_name, rfid_uid=""):
+    if not files:
+        raise ValueError("Kein Ordnerinhalt hochgeladen.")
+
+    library_data = load_library()
+    album_slug = slugify_name(album_name)
+    album_dir = ALBUMS_DIR / album_slug
+    if album_dir.exists():
+        shutil.rmtree(album_dir)
+    album_dir.mkdir(parents=True, exist_ok=True)
+
+    raw_paths = [safe_relative_path(getattr(storage, "filename", "") or "") for storage in files]
+    root_prefix = None
+    if raw_paths:
+        first_parts = [path.parts[0] for path in raw_paths if len(path.parts) > 1]
+        if first_parts and len(first_parts) == len(raw_paths) and len(set(first_parts)) == 1:
+            root_prefix = first_parts[0]
+
+    for storage, raw_path in zip(files, raw_paths):
+        source_name = getattr(storage, "filename", "") or ""
+        relative_path = raw_path
+        if root_prefix and relative_path.parts and relative_path.parts[0] == root_prefix:
+            relative_path = Path(*relative_path.parts[1:]) if len(relative_path.parts) > 1 else Path(relative_path.name)
+        if str(relative_path) in {"", "."}:
+            relative_path = safe_relative_path(source_name)
+        target = album_dir / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        storage.save(target)
+
+    playlist_path, audio_files = build_playlist(album_dir)
+    if not audio_files:
+        shutil.rmtree(album_dir, ignore_errors=True)
+        raise ValueError("Im hochgeladenen Ordner wurden keine Audiodateien gefunden.")
+
+    cover_url = detect_cover(album_dir)
+    album_entry = {
+        "id": f"album-{secrets.token_hex(4)}",
+        "name": album_name.strip() or album_slug,
+        "folder": album_dir.relative_to(BASE_DIR).as_posix(),
+        "playlist": playlist_path.relative_to(BASE_DIR).as_posix(),
+        "track_count": len(audio_files),
+        "rfid_uid": rfid_uid.strip(),
+        "cover_url": cover_url,
+    }
+
+    conflict = album_conflict(library_data["albums"], album_entry["id"], album_entry["rfid_uid"])
+    if conflict:
+        shutil.rmtree(album_dir, ignore_errors=True)
+        raise ValueError(f"RFID-Tag bereits mit {conflict['name']} verknüpft.")
+
+    library_data["albums"].append(album_entry)
+    save_library(library_data)
+    return album_entry
+
+
+def default_player():
+    return {
+        "current_album": "Lieblingsgeschichten",
+        "current_track": "Lieblingsgeschichten",
+        "cover_url": "",
+        "volume": 45,
+        "position_seconds": 0,
+        "duration_seconds": 278,
+        "sleep_timer_minutes": 0,
+        "is_playing": True,
+        "playlist": "media/albums/lieblingsgeschichten/playlist.m3u",
+        "playlist_entries": [],
+        "current_track_index": 0,
+        "queue": [],
+    }
+
+
+def default_library():
+    return {
+        "albums": [
+            {
+                "id": "album-1",
+                "name": "Lieblingsgeschichten",
+                "folder": "media/albums/lieblingsgeschichten",
+                "playlist": "media/albums/lieblingsgeschichten/playlist.m3u",
+                "track_count": 0,
+                "rfid_uid": "1234567890",
+                "cover_url": "",
+            },
+            {
+                "id": "album-2",
+                "name": "Schlaflieder",
+                "folder": "media/albums/schlaflieder",
+                "playlist": "media/albums/schlaflieder/playlist.m3u",
+                "track_count": 0,
+                "rfid_uid": "",
+                "cover_url": "",
+            },
+            {
+                "id": "album-3",
+                "name": "Tierstimmen",
+                "folder": "media/albums/tierstimmen",
+                "playlist": "media/albums/tierstimmen/playlist.m3u",
+                "track_count": 0,
+                "rfid_uid": "",
+                "cover_url": "",
+            },
+        ]
+    }
+
+
+def default_settings():
+    return {
+        "max_volume": 85,
+        "volume_step": 5,
+        "sleep_timer_step": 5,
+        "rfid_read_action": "play",
+        "rfid_remove_action": "stop",
+        "reader_mode": "album_load",
+    }
+
+
+def default_setup():
+    return {
+        "reader": {
+            "type": "USB",
+            "connection_hint": "USB-Reader anstecken oder RC522 per SPI verdrahten",
+            "read_behavior": "play",
+            "remove_behavior": "stop",
+        },
+        "buttons": [
+            {"id": "btn-1", "name": "Play/Pause", "pin": "GPIO17", "press_type": "kurz"},
+            {"id": "btn-2", "name": "Vor", "pin": "GPIO27", "press_type": "kurz"},
+            {"id": "btn-3", "name": "Zurück", "pin": "GPIO22", "press_type": "kurz"},
+            {"id": "btn-4", "name": "Lautstärke +", "pin": "GPIO23", "press_type": "kurz"},
+            {"id": "btn-5", "name": "Lautstärke -", "pin": "GPIO24", "press_type": "kurz"},
+            {"id": "btn-6", "name": "Sleep/Power", "pin": "GPIO25", "press_type": "lang"},
+        ],
+        "leds": [
+            {"id": "led-1", "name": "Power", "pin": "GPIO12", "function": "power_on", "brightness": 50},
+            {"id": "led-2", "name": "Stand-by", "pin": "GPIO13", "function": "standby", "brightness": 30},
+            {"id": "led-3", "name": "Sleep 1/3", "pin": "GPIO18", "function": "sleep_1", "brightness": 50},
+            {"id": "led-4", "name": "Sleep 2/3", "pin": "GPIO19", "function": "sleep_2", "brightness": 70},
+            {"id": "led-5", "name": "Sleep 3/3", "pin": "GPIO20", "function": "sleep_3", "brightness": 90},
+        ],
+        "wifi": {
+            "mode": "client_with_fallback_hotspot",
+            "country": "DE",
+            "fallback_hotspot": True,
+            "hotspot_security": "open",
+            "hotspot_ssid": "Phonie-hotspot",
+            "hotspot_password": "",
+            "hotspot_channel": 6,
+            "hostname": "phoniebox",
+            "browser_name": "phoniebox.local",
+            "saved_networks": [
+                {"id": "wifi-1", "ssid": "Wohnzimmer", "password": "", "priority": 10},
+            ],
+        },
+    }
+
+
+def factory_wifi_defaults():
+    return {
+        "mode": "hotspot_only",
+        "country": "DE",
+        "fallback_hotspot": True,
+        "hotspot_security": "open",
+        "hotspot_ssid": "Phonie-hotspot",
+        "hotspot_password": "",
+        "hotspot_channel": 6,
+        "hostname": "phoniebox",
+        "browser_name": "phoniebox.local",
+        "saved_networks": [],
+    }
+
+
+def default_apply_report():
+    return {"ok": True, "summary": "Noch nicht angewendet.", "details": []}
+
+
+def default_link_session():
+    return {
+        "active": False,
+        "album_id": "",
+        "album_name": "",
+        "status": "idle",
+        "message": "",
+        "last_uid": "",
+    }
+
+
+def ensure_data_files():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    ALBUMS_DIR.mkdir(parents=True, exist_ok=True)
+    defaults = {
+        PLAYER_FILE: default_player(),
+        LIBRARY_FILE: default_library(),
+        SETTINGS_FILE: default_settings(),
+        SETUP_FILE: default_setup(),
+        APPLY_REPORT_FILE: default_apply_report(),
+        RUNTIME_FILE: runtime_service.ensure_runtime(),
+        LINK_SESSION_FILE: default_link_session(),
+    }
+    for path, default in defaults.items():
+        if not path.exists():
+            save_json(path, default)
+
+
+def load_player():
+    return load_json(PLAYER_FILE, default_player())
+
+
+def save_player(data):
+    save_json(PLAYER_FILE, data)
+
+
+def load_library():
+    return load_json(LIBRARY_FILE, default_library())
+
+
+def save_library(data):
+    save_json(LIBRARY_FILE, data)
+
+
+def load_settings():
+    return load_json(SETTINGS_FILE, default_settings())
+
+
+def save_settings(data):
+    save_json(SETTINGS_FILE, data)
+
+
+def load_setup():
+    return load_json(SETUP_FILE, default_setup())
+
+
+def save_setup(data):
+    save_json(SETUP_FILE, data)
+
+
+def load_apply_report():
+    return load_json(APPLY_REPORT_FILE, default_apply_report())
+
+
+def save_apply_report(data):
+    save_json(APPLY_REPORT_FILE, data)
+
+
+def load_link_session():
+    return load_json(LINK_SESSION_FILE, default_link_session())
+
+
+def save_link_session(data):
+    save_json(LINK_SESSION_FILE, data)
+
+
+def start_link_session(album):
+    session = {
+        "active": True,
+        "album_id": album.get("id", ""),
+        "album_name": album.get("name", ""),
+        "status": "waiting_for_scan",
+        "message": "Jetzt Tag scannen",
+        "last_uid": "",
+    }
+    save_link_session(session)
+    return session
+
+
+def finish_link_session(session, status, message, uid=""):
+    session["active"] = False
+    session["status"] = status
+    session["message"] = message
+    session["last_uid"] = uid
+    save_link_session(session)
+    return session
+
+
+def to_int(value, fallback, minimum=None, maximum=None):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = fallback
+    if minimum is not None:
+        number = max(minimum, number)
+    if maximum is not None:
+        number = min(maximum, number)
+    return number
+
+
+def format_mmss(total_seconds):
+    minutes = max(total_seconds, 0) // 60
+    seconds = max(total_seconds, 0) % 60
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def progress_percent(position, duration):
+    if duration <= 0:
+        return 0
+    return round((position / duration) * 100, 1)
+
+
+def album_conflict(albums, album_id, rfid_uid):
+    if not rfid_uid:
+        return None
+    for album in albums:
+        if album["id"] != album_id and album.get("rfid_uid", "").strip() == rfid_uid:
+            return album
+    return None
+
+
+def nmcli_available():
+    return shutil.which("nmcli") is not None
+
+
+def run_nmcli(command):
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def get_wifi_snapshot():
+    snapshot = {
+        "nmcli_available": nmcli_available(),
+        "wifi_enabled": "unbekannt",
+        "connectivity": "unbekannt",
+        "active_ssid": "nicht verbunden",
+        "device": "-",
+        "scanned_networks": [],
+    }
+    if not snapshot["nmcli_available"]:
+        return snapshot
+
+    general = run_nmcli(["nmcli", "-t", "-f", "WIFI,CONNECTIVITY", "general"])
+    if general:
+        parts = general.split(":")
+        if len(parts) >= 2:
+            snapshot["wifi_enabled"] = parts[0]
+            snapshot["connectivity"] = parts[1]
+
+    active = run_nmcli(["nmcli", "-t", "-f", "ACTIVE,SSID,DEVICE", "dev", "wifi"])
+    if active:
+        for line in active.splitlines():
+            active_flag, ssid, device = (line.split(":", 2) + ["", ""])[:3]
+            if active_flag == "yes":
+                snapshot["active_ssid"] = ssid or "verbunden"
+                snapshot["device"] = device or "-"
+                break
+
+    scanned = run_nmcli(["nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "dev", "wifi", "list"])
+    if scanned:
+        for line in scanned.splitlines():
+            in_use, ssid, signal, security = (line.split(":", 3) + ["", "", "", ""])[:4]
+            snapshot["scanned_networks"].append(
+                {
+                    "in_use": in_use == "*",
+                    "ssid": ssid or "(versteckt)",
+                    "signal": signal or "-",
+                    "security": security or "offen",
+                }
+            )
+    return snapshot
+
+
+def reserved_reader_pins(reader_type):
+    reader_type = (reader_type or "").strip().upper()
+    if reader_type == "RC522":
+        return {"GPIO8", "GPIO9", "GPIO10", "GPIO11", "GPIO25"}
+    if reader_type == "PN532_I2C":
+        return {"GPIO2", "GPIO3"}
+    if reader_type == "PN532_SPI":
+        return {"GPIO8", "GPIO9", "GPIO10", "GPIO11"}
+    if reader_type == "PN532_UART":
+        return {"GPIO14", "GPIO15"}
+    return set()
+
+
+def pin_choices(reader_type, role):
+    reserved = reserved_reader_pins(reader_type)
+    pins = GPIO_PINS
+    if role == "led":
+        pins = [pin for pin in GPIO_PINS if pin in PWM_PINS or pin not in reserved]
+    else:
+        pins = [pin for pin in GPIO_PINS if pin not in reserved]
+    return pins
+
+
+def reader_catalog():
+    return READER_OPTIONS
+
+
+def collect_conflicts(setup_data):
+    warnings = []
+    buttons = setup_data.get("buttons", [])
+    leds = setup_data.get("leds", [])
+    reader = setup_data.get("reader", {})
+
+    button_pins = {}
+    press_functions = {}
+    for button in buttons:
+        pin = button.get("pin", "").strip()
+        press_type = button.get("press_type", "kurz").strip() or "kurz"
+        function_name = button.get("name", "Taste").strip() or "Taste"
+        if pin:
+            button_pins.setdefault(pin, {}).setdefault(press_type, []).append(function_name)
+        press_functions.setdefault(press_type, {}).setdefault(function_name, []).append(pin or "-")
+    for pin, by_press_type in button_pins.items():
+        for press_type, names in by_press_type.items():
+            if len(names) > 1:
+                warnings.append(f"Tasten-PIN {pin} ist für {press_type} mehrfach belegt: {', '.join(names)}")
+    for press_type, functions in press_functions.items():
+        for function_name, pins in functions.items():
+            if len(pins) > 1:
+                warnings.append(f"Funktion {function_name} ist für {press_type} mehrfach vergeben: {', '.join(pins)}")
+
+    led_pins = {}
+    for led in leds:
+        pin = led.get("pin", "").strip()
+        if pin:
+            led_pins.setdefault(pin, []).append(led.get("name", "LED"))
+    for pin, names in led_pins.items():
+        if len(names) > 1:
+            warnings.append(f"LED-PIN {pin} ist mehrfach belegt: {', '.join(names)}")
+
+    overlap = set(button_pins) & set(led_pins)
+    for pin in sorted(overlap):
+        warnings.append(f"PIN {pin} ist gleichzeitig für Taste und LED vergeben.")
+
+    reserved = reserved_reader_pins(reader.get("type", ""))
+    for pin, by_press_type in button_pins.items():
+        if pin in reserved:
+            warnings.append(f"Tasten-PIN {pin} kollidiert mit Reader-{reader.get('type', 'Unbekannt')}.")
+    for pin, names in led_pins.items():
+        if pin in reserved:
+            warnings.append(f"LED-PIN {pin} kollidiert mit Reader-{reader.get('type', 'Unbekannt')}.")
+
+    wifi = setup_data.get("wifi", {})
+    if wifi.get("hotspot_security") == "wpa2" and len(wifi.get("hotspot_password", "")) < 8:
+        warnings.append("Hotspot mit WPA2 braucht mindestens 8 Zeichen Passwort.")
+
+    return warnings
+
+
+def mapping_errors(setup_data):
+    errors = []
+    buttons = setup_data.get("buttons", [])
+    seen_pin_press = set()
+    seen_function_press = set()
+    for button in buttons:
+        pin = button.get("pin", "").strip()
+        press_type = button.get("press_type", "kurz").strip() or "kurz"
+        function_name = button.get("name", "").strip()
+        if not pin or not function_name:
+            continue
+        key_pin = (pin, press_type)
+        if key_pin in seen_pin_press:
+            errors.append(f"GPIO {pin} ist für {press_type} mehrfach belegt.")
+        seen_pin_press.add(key_pin)
+        key_function = (function_name, press_type)
+        if key_function in seen_function_press:
+            errors.append(f"Funktion {function_name} ist für {press_type} mehrfach vergeben.")
+        seen_function_press.add(key_function)
+    return errors
+
+
+def current_reader_option(reader_type):
+    return next((option for option in READER_OPTIONS if option["id"] == reader_type), READER_OPTIONS[0])
+
+
+def network_targets(setup_data):
+    wifi = setup_data.get("wifi", {})
+    hostname = (wifi.get("hostname") or "phoniebox").strip()
+    browser_name = (wifi.get("browser_name") or f"{hostname}.local").strip()
+    return {
+        "hostname": hostname,
+        "browser_name": browser_name,
+        "recommended_name": f"{hostname}.local",
+        "custom_box_name": "phonie.box",
+        "supports_custom_box": False,
+    }
+
+
+def summarize_apply(ok):
+    if ok:
+        return "Systemprofil erfolgreich angewendet."
+    return "Systemprofil konnte nicht vollständig angewendet werden."
+
+
+@app.context_processor
+def inject_shell():
+    return {"nav_items": nav_items(), "active_path": request.path}
+
+
+def nav_items():
+    return [
+        {"endpoint": "player", "label": "Player"},
+        {"endpoint": "library", "label": "Bibliothek"},
+        {"endpoint": "settings", "label": "Einstellungen"},
+        {"endpoint": "setup", "label": "Setup"},
+    ]
+
+
+ensure_data_files()
+
+
+@app.context_processor
+def inject_choices():
+    setup_data = load_setup()
+    reader_type = setup_data.get("reader", {}).get("type", "USB")
+    return {
+        "reader_options": reader_catalog(),
+        "button_functions": BUTTON_FUNCTIONS,
+        "led_functions": LED_FUNCTIONS,
+        "button_pin_choices": pin_choices(reader_type, "button"),
+        "led_pin_choices": pin_choices(reader_type, "led"),
+    }
+
+
+@app.route("/")
+def index():
+    return redirect(url_for("player"))
+
+
+@app.route("/player", methods=["GET", "POST"])
+def player():
+    snapshot = runtime_service.status()
+    player_state = snapshot["player"]
+    runtime_state = snapshot["runtime"]
+    settings = load_settings()
+
+    if request.method == "POST":
+        action = request.form.get("action", "").strip()
+        if action == "toggle_play":
+            runtime_service.toggle_playback()
+        elif action == "stop":
+            runtime_service.stop()
+        elif action == "prev":
+            runtime_service.previous_track()
+        elif action == "next":
+            runtime_service.next_track()
+        elif action == "volume_down":
+            runtime_service.set_volume(-settings["volume_step"])
+        elif action == "volume_up":
+            runtime_service.set_volume(settings["volume_step"])
+        elif action == "sleep_down":
+            level = max(0, int(runtime_state.get("sleep_timer", {}).get("level", 0)) - 1)
+            runtime_service.set_sleep_level(level)
+        elif action == "sleep_up":
+            level = min(3, int(runtime_state.get("sleep_timer", {}).get("level", 0)) + 1)
+            runtime_service.set_sleep_level(level)
+        flash("Playerstatus aktualisiert.", "success")
+        return redirect(url_for("player"))
+
+    player_state["sleep_timer_minutes"] = int(runtime_state.get("sleep_timer", {}).get("remaining_seconds", 0)) // 60
+    context = {
+        "player_state": player_state,
+        "runtime_state": runtime_state,
+        "volume_percent": player_state["volume"],
+        "position_label": format_mmss(player_state["position_seconds"]),
+        "duration_label": format_mmss(player_state["duration_seconds"]),
+        "progress_percent": progress_percent(player_state["position_seconds"], player_state["duration_seconds"]),
+    }
+    return render_template("player.html", **context)
+
+
+@app.route("/library", methods=["GET", "POST"])
+def library():
+    library_data = load_library()
+    if request.method == "POST":
+        action = request.form.get("action", "").strip()
+        albums = library_data["albums"]
+        if action == "import_album":
+            files = [item for item in request.files.getlist("album_files") if getattr(item, "filename", "")]
+            album_name = request.form.get("name", "").strip()
+            rfid_uid = request.form.get("rfid_uid", "").strip()
+            if not album_name:
+                flash("Albumname ist erforderlich.", "error")
+                return redirect(url_for("library"))
+            try:
+                album_entry = import_album_folder(files, album_name, rfid_uid)
+            except ValueError as exc:
+                flash(str(exc), "error")
+                return redirect(url_for("library"))
+            flash(f"Album {album_entry['name']} importiert und Playlist erzeugt.", "success")
+            return redirect(url_for("library"))
+
+        if action == "save_album":
+            album_id = request.form.get("album_id", "").strip() or f"album-{secrets.token_hex(4)}"
+            name = request.form.get("name", "").strip() or "Neues Album"
+            folder = request.form.get("folder", "").strip()
+            rfid_uid = request.form.get("rfid_uid", "").strip()
+            cover_url = request.form.get("cover_url", "").strip()
+            conflict = album_conflict(albums, album_id, rfid_uid)
+            if conflict:
+                flash(f"RFID-Tag bereits mit {conflict['name']} verknüpft.", "error")
+                return redirect(url_for("library"))
+
+            existing = next((album for album in albums if album["id"] == album_id), None)
+            payload = {
+                "id": album_id,
+                "name": name,
+                "folder": folder,
+                "playlist": request.form.get("playlist", "").strip(),
+                "track_count": to_int(request.form.get("track_count"), 0, 0, 5000),
+                "rfid_uid": rfid_uid,
+                "cover_url": cover_url,
+            }
+            if existing:
+                existing.update(payload)
+                flash(f"Album {name} aktualisiert.", "success")
+            else:
+                albums.append(payload)
+                flash(f"Album {name} angelegt.", "success")
+            save_library(library_data)
+            return redirect(url_for("library"))
+
+        if action == "delete_album":
+            album_id = request.form.get("album_id", "").strip()
+            target_album = next((album for album in albums if album["id"] == album_id), None)
+            if target_album:
+                album_path = BASE_DIR / target_album.get("folder", "")
+                if album_path.exists() and ALBUMS_DIR in album_path.parents:
+                    shutil.rmtree(album_path, ignore_errors=True)
+            library_data["albums"] = [album for album in albums if album["id"] != album_id]
+            save_library(library_data)
+            flash("Album entfernt.", "success")
+            return redirect(url_for("library"))
+
+        if action == "unlink_rfid":
+            album_id = request.form.get("album_id", "").strip()
+            for album in albums:
+                if album["id"] == album_id:
+                    album["rfid_uid"] = ""
+                    break
+            save_library(library_data)
+            flash("RFID-Zuordnung entfernt.", "success")
+            return redirect(url_for("library"))
+
+    return render_template("library.html", library_data=library_data, link_session=load_link_session())
+
+
+@app.route("/settings", methods=["GET", "POST"])
+def settings():
+    data = load_settings()
+    if request.method == "POST":
+        data["max_volume"] = to_int(request.form.get("max_volume"), data["max_volume"], 10, 100)
+        data["volume_step"] = to_int(request.form.get("volume_step"), data["volume_step"], 1, 25)
+        data["sleep_timer_step"] = to_int(request.form.get("sleep_timer_step"), data["sleep_timer_step"], 1, 60)
+        data["rfid_read_action"] = request.form.get("rfid_read_action", data["rfid_read_action"])
+        data["rfid_remove_action"] = request.form.get("rfid_remove_action", data["rfid_remove_action"])
+        data["reader_mode"] = request.form.get("reader_mode", data["reader_mode"])
+        save_settings(data)
+        flash("Einstellungen gespeichert.", "success")
+        return redirect(url_for("settings"))
+    return render_template("settings.html", settings=data)
+
+
+def collect_rows(prefix, columns):
+    rows = []
+    row_count = to_int(request.form.get(f"{prefix}_count"), 0, 0, 50)
+    for index in range(row_count):
+        row = {}
+        is_empty = True
+        for column in columns:
+            value = request.form.get(f"{prefix}_{column}_{index}", "").strip()
+            row[column] = value
+            if value:
+                is_empty = False
+        if not is_empty:
+            rows.append(row)
+    return rows
+
+
+def default_button_rows():
+    return [
+        {"id": "btn-1", "name": "Play/Pause", "pin": "GPIO17", "press_type": "kurz"},
+        {"id": "btn-2", "name": "Vor", "pin": "GPIO27", "press_type": "kurz"},
+        {"id": "btn-3", "name": "Zurück", "pin": "GPIO22", "press_type": "kurz"},
+        {"id": "btn-4", "name": "Lautstärke +", "pin": "GPIO23", "press_type": "kurz"},
+        {"id": "btn-5", "name": "Lautstärke -", "pin": "GPIO24", "press_type": "kurz"},
+        {"id": "btn-6", "name": "Sleep/Power", "pin": "GPIO25", "press_type": "lang"},
+    ]
+
+
+def button_mapping_rows(setup_data):
+    rows = []
+    buttons = setup_data.get("buttons", []) or default_button_rows()
+    for index, button in enumerate(buttons):
+        rows.append(
+            {
+                "index": index,
+                "pin": button.get("pin", ""),
+                "short_function": button.get("name", "") if button.get("press_type", "kurz") == "kurz" else "",
+                "long_function": button.get("name", "") if button.get("press_type", "kurz") == "lang" else "",
+            }
+        )
+    return rows
+
+
+@app.route("/setup", methods=["GET", "POST"])
+def setup():
+    data = load_setup()
+    runtime_snapshot = runtime_service.status()
+    if request.method == "POST":
+        section = request.form.get("section", "").strip()
+
+        if section == "reader":
+            data["reader"]["type"] = request.form.get("reader_type", data["reader"]["type"]).strip() or "USB"
+            data["reader"]["connection_hint"] = request.form.get(
+                "connection_hint", data["reader"]["connection_hint"]
+            ).strip()
+            data["reader"]["read_behavior"] = request.form.get("read_behavior", data["reader"]["read_behavior"]).strip()
+            data["reader"]["remove_behavior"] = request.form.get(
+                "remove_behavior", data["reader"]["remove_behavior"]
+            ).strip()
+            save_setup(data)
+            flash("Reader-Setup gespeichert.", "success")
+            return redirect(url_for("setup"))
+
+        if section == "buttons":
+            new_buttons = []
+            row_count = to_int(request.form.get("button_count"), 0, 0, 50)
+            for index in range(row_count):
+                pin = request.form.get(f"button_pin_{index}", "").strip()
+                short_function = request.form.get(f"button_short_function_{index}", "").strip()
+                long_function = request.form.get(f"button_long_function_{index}", "").strip()
+                if pin and short_function:
+                    new_buttons.append(
+                        {
+                            "id": f"btn-{len(new_buttons) + 1}",
+                            "name": short_function,
+                            "pin": pin,
+                            "press_type": "kurz",
+                        }
+                    )
+                if pin and long_function:
+                    new_buttons.append(
+                        {
+                            "id": f"btn-{len(new_buttons) + 1}",
+                            "name": long_function,
+                            "pin": pin,
+                            "press_type": "lang",
+                        }
+                    )
+            candidate = dict(data)
+            candidate["buttons"] = new_buttons
+            errors = mapping_errors(candidate)
+            if errors:
+                for error in errors:
+                    flash(error, "error")
+                return redirect(url_for("setup"))
+            data["buttons"] = new_buttons
+            save_setup(data)
+            flash("Tastenbelegung gespeichert.", "success")
+            return redirect(url_for("setup"))
+
+        if section == "leds":
+            rows = collect_rows("led", ["name", "pin", "function", "brightness"])
+            data["leds"] = [
+                {
+                    "id": f"led-{index + 1}",
+                    "name": row["name"],
+                    "pin": row["pin"],
+                    "function": row["function"],
+                    "brightness": to_int(row["brightness"], 50, 0, 100),
+                }
+                for index, row in enumerate(rows)
+            ]
+            save_setup(data)
+            flash("LED-Zuweisungen gespeichert.", "success")
+            return redirect(url_for("setup"))
+
+        if section == "simulate_gpio":
+            pin = request.form.get("sim_pin", "").strip()
+            press_type = request.form.get("sim_press_type", "kurz").strip()
+            result = runtime_service.trigger_gpio_pin(pin, press_type)
+            flash(result["runtime"]["last_event"], "success")
+            return redirect(url_for("setup"))
+
+        if section == "simulate_rfid":
+            uid = request.form.get("sim_rfid_uid", "").strip()
+            result = runtime_service.assign_album_by_rfid(uid)
+            flash(result["runtime"]["last_event"], "success" if result.get("ok") else "error")
+            return redirect(url_for("setup"))
+
+        if section == "simulate_tag_remove":
+            result = runtime_service.remove_rfid_tag()
+            flash(result["runtime"]["last_event"], "success")
+            return redirect(url_for("setup"))
+
+        if section == "simulate_tick":
+            elapsed = to_int(request.form.get("elapsed"), 5, 1, 120)
+            result = runtime_service.tick(elapsed)
+            flash(f"Runtime um {elapsed}s fortgeschrieben: {result['runtime']['last_event']}", "success")
+            return redirect(url_for("setup"))
+
+        if section == "wifi":
+            wifi = data["wifi"]
+            wifi["mode"] = request.form.get("mode", wifi["mode"]).strip()
+            wifi["country"] = request.form.get("country", wifi["country"]).strip() or "DE"
+            wifi["fallback_hotspot"] = request.form.get("fallback_hotspot") == "on"
+            wifi["hotspot_security"] = request.form.get("hotspot_security", wifi.get("hotspot_security", "open")).strip()
+            wifi["hotspot_ssid"] = request.form.get("hotspot_ssid", wifi["hotspot_ssid"]).strip()
+            wifi["hotspot_password"] = request.form.get("hotspot_password", wifi["hotspot_password"]).strip()
+            wifi["hotspot_channel"] = to_int(request.form.get("hotspot_channel"), wifi["hotspot_channel"], 1, 13)
+            wifi["hostname"] = request.form.get("hostname", wifi.get("hostname", "phoniebox")).strip() or "phoniebox"
+            wifi["browser_name"] = request.form.get(
+                "browser_name", wifi.get("browser_name", f"{wifi['hostname']}.local")
+            ).strip() or f"{wifi['hostname']}.local"
+            save_setup(data)
+            flash("WLAN-/Hotspot-Profil gespeichert.", "success")
+            return redirect(url_for("setup"))
+
+        if section == "factory_wifi":
+            data["wifi"] = factory_wifi_defaults()
+            save_setup(data)
+            save_apply_report(
+                {
+                    "ok": True,
+                    "summary": "Factory-Hotspot-Profil geladen.",
+                    "details": [
+                        "Modus auf hotspot_only gesetzt",
+                        "Offener Hotspot Phonie-hotspot vorbereitet",
+                        "Hostname auf phoniebox.local gesetzt",
+                    ],
+                }
+            )
+            flash("Factory-Hotspot-Profil geladen.", "success")
+            return redirect(url_for("setup"))
+
+        if section == "apply_network":
+            wifi = data["wifi"]
+            hostname_result = ensure_hostname(wifi.get("hostname", "phoniebox"))
+            network_result = apply_wifi_profile(wifi)
+            details = hostname_result.get("details", []) + network_result.get("details", [])
+            ok = hostname_result.get("ok", False) and network_result.get("ok", False)
+            report = {
+                "ok": ok,
+                "summary": summarize_apply(ok),
+                "details": details or ["Keine Detailausgabe vorhanden."],
+            }
+            save_apply_report(report)
+            flash(report["summary"], "success" if ok else "error")
+            return redirect(url_for("setup"))
+
+        if section == "run_fallback_cycle":
+            result = fallback_hotspot_cycle(data["wifi"])
+            save_apply_report(
+                {
+                    "ok": result.get("ok", False),
+                    "summary": result.get("summary", "Fallback-Zyklus ausgeführt."),
+                    "details": result.get("details", []),
+                }
+            )
+            flash(result.get("summary", "Fallback-Zyklus ausgeführt."), "success" if result.get("ok") else "error")
+            return redirect(url_for("setup"))
+
+        if section == "add_wifi_network":
+            wifi = data["wifi"]
+            ssid = request.form.get("ssid", "").strip()
+            password = request.form.get("password", "").strip()
+            priority = to_int(request.form.get("priority"), 10, 1, 100)
+            if not ssid:
+                flash("SSID darf nicht leer sein.", "error")
+                return redirect(url_for("setup"))
+            existing = next((entry for entry in wifi["saved_networks"] if entry["ssid"] == ssid), None)
+            if existing:
+                existing["password"] = password
+                existing["priority"] = priority
+                flash(f"Netzwerk {ssid} aktualisiert.", "success")
+            else:
+                wifi["saved_networks"].append(
+                    {
+                        "id": f"wifi-{secrets.token_hex(4)}",
+                        "ssid": ssid,
+                        "password": password,
+                        "priority": priority,
+                    }
+                )
+                flash(f"Netzwerk {ssid} gespeichert.", "success")
+            save_setup(data)
+            return redirect(url_for("setup"))
+
+        if section == "delete_wifi_network":
+            network_id = request.form.get("network_id", "").strip()
+            wifi = data["wifi"]
+            wifi["saved_networks"] = [
+                network for network in wifi["saved_networks"] if network["id"] != network_id
+            ]
+            save_setup(data)
+            flash("Gespeichertes WLAN entfernt.", "success")
+            return redirect(url_for("setup"))
+
+    wifi_snapshot = get_wifi_snapshot()
+    return render_template(
+        "setup.html",
+        setup_data=data,
+        wifi_snapshot=wifi_snapshot,
+        setup_warnings=collect_conflicts(data),
+        network_info=network_targets(data),
+        apply_report=load_apply_report(),
+        hardware_profile=runtime_snapshot["runtime"]["hardware"].get("profile", {}),
+        runtime_state=runtime_snapshot["runtime"],
+        button_mapping_rows=button_mapping_rows(data),
+        reader_option=current_reader_option(data.get("reader", {}).get("type", "USB")),
+    )
+
+
+@app.route("/api/runtime")
+def api_runtime():
+    return jsonify(runtime_service.status())
+
+
+@app.route("/api/hardware")
+def api_hardware():
+    snapshot = runtime_service.status()
+    return jsonify(snapshot["runtime"]["hardware"].get("profile", {}))
+
+
+@app.route("/api/runtime/tick", methods=["POST"])
+def api_runtime_tick():
+    payload = request.get_json(silent=True) or {}
+    elapsed = to_int(payload.get("elapsed", request.form.get("elapsed", 1)), 1, 1, 60)
+    return jsonify(runtime_service.tick(elapsed))
+
+
+@app.route("/api/runtime/rfid", methods=["POST"])
+def api_runtime_rfid():
+    payload = request.get_json(silent=True) or {}
+    uid = str(payload.get("uid", request.form.get("uid", ""))).strip()
+    session = load_link_session()
+    if session.get("active") and uid:
+        library_data = load_library()
+        albums = library_data.get("albums", [])
+        target = next((album for album in albums if album["id"] == session.get("album_id", "")), None)
+        if not target:
+            updated = finish_link_session(session, "error", "Album nicht mehr vorhanden.", uid)
+            return jsonify({"ok": False, "link_session": updated}), 404
+        conflict = album_conflict(albums, target["id"], uid)
+        if conflict:
+            updated = finish_link_session(session, "conflict", "Tag bereits anderweitig verlinkt", uid)
+            return jsonify({"ok": False, "link_session": updated}), 409
+        target["rfid_uid"] = uid
+        save_library(library_data)
+        updated = finish_link_session(session, "linked", f"Tag mit {target['name']} verknüpft", uid)
+        return jsonify({"ok": True, "linked_album": target, "link_session": updated})
+    result = runtime_service.assign_album_by_rfid(uid)
+    return jsonify(result), (200 if result.get("ok") else 404)
+
+
+@app.route("/api/runtime/rfid/remove", methods=["POST"])
+def api_runtime_rfid_remove():
+    return jsonify(runtime_service.remove_rfid_tag())
+
+
+@app.route("/api/runtime/audio-test", methods=["POST"])
+def api_runtime_audio_test():
+    payload = request.get_json(silent=True) or {}
+    elapsed = to_int(payload.get("elapsed", request.form.get("elapsed", 5)), 5, 1, 120)
+    return jsonify(runtime_service.tick(elapsed))
+
+
+@app.route("/api/runtime/playback")
+def api_runtime_playback():
+    snapshot = runtime_service.status()
+    return jsonify(snapshot["runtime"].get("playback_session", {}))
+
+
+@app.route("/api/runtime/button", methods=["POST"])
+def api_runtime_button():
+    payload = request.get_json(silent=True) or {}
+    name = str(payload.get("name", request.form.get("name", ""))).strip()
+    press_type = str(payload.get("press_type", request.form.get("press_type", "kurz"))).strip()
+    return jsonify(runtime_service.trigger_button(name, press_type))
+
+
+@app.route("/api/library/link-session", methods=["POST"])
+def api_library_link_session_start():
+    payload = request.get_json(silent=True) or {}
+    album_id = str(payload.get("album_id", request.form.get("album_id", ""))).strip()
+    library_data = load_library()
+    album = next((entry for entry in library_data.get("albums", []) if entry["id"] == album_id), None)
+    if not album:
+        return jsonify({"ok": False, "message": "Album nicht gefunden."}), 404
+    return jsonify({"ok": True, "link_session": start_link_session(album)})
+
+
+@app.route("/api/library/link-session", methods=["GET"])
+def api_library_link_session_status():
+    return jsonify({"ok": True, "link_session": load_link_session()})
+
+
+@app.route("/api/library/link-session/cancel", methods=["POST"])
+def api_library_link_session_cancel():
+    session = load_link_session()
+    updated = finish_link_session(session, "cancelled", "Verlinkung abgebrochen.")
+    return jsonify({"ok": True, "link_session": updated})
+
+
+if __name__ == "__main__":
+    ensure_data_files()
+    app.run(host="0.0.0.0", port=5080, debug=False)

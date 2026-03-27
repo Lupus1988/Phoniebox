@@ -1,0 +1,11 @@
+[Unit]
+Description=Run phoniebox runtime tick every second
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=1s
+AccuracySec=500ms
+Unit=phoniebox-runtime-tick.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+{
+  "current_album": "",
+  "current_track": "",
+  "cover_url": "",
+  "volume": 45,
+  "position_seconds": 0,
+  "duration_seconds": 0,
+  "sleep_timer_minutes": 0,
+  "is_playing": false,
+  "queue": [],
+  "playlist": "",
+  "playlist_entries": [],
+  "current_track_index": 0
+}

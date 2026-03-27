@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="eyebrow">Einstellungen</p>
+      <h2>Globale Player- und RFID-Optionen</h2>
+      <p class="subtle">Lautstärkegrenzen, Steps und Reader-Verhalten zentral verwalten.</p>
+    </div>
+  </section>
+
+  <article class="card">
+    <form method="post" class="grid form-grid">
+      <label>
+        <span>Maximallautstärke in %</span>
+        <input type="number" name="max_volume" min="10" max="100" value="{{ settings.max_volume }}">
+      </label>
+      <label>
+        <span>Lautstärke-Step in %</span>
+        <input type="number" name="volume_step" min="1" max="25" value="{{ settings.volume_step }}">
+      </label>
+      <label>
+        <span>Sleeptimer-Step in Minuten</span>
+        <input type="number" name="sleep_timer_step" min="1" max="60" value="{{ settings.sleep_timer_step }}">
+      </label>
+      <label>
+        <span>Beim Lesen eines verlinkten Tags</span>
+        <select name="rfid_read_action">
+          {% for option in ["play", "album_load", "queue_append"] %}
+            <option value="{{ option }}" {% if settings.rfid_read_action == option %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Beim Entfernen eines verlinkten Tags</span>
+        <select name="rfid_remove_action">
+          {% for option in ["stop", "pause", "nichts"] %}
+            <option value="{{ option }}" {% if settings.rfid_remove_action == option %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Reader-Modus</span>
+        <select name="reader_mode">
+          {% for option in ["album_load", "play", "queue_append"] %}
+            <option value="{{ option }}" {% if settings.reader_mode == option %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button class="primary wide" type="submit">Einstellungen speichern</button>
+    </form>
+  </article>
+{% endblock %}

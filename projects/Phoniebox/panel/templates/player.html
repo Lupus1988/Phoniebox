@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="hero">
+    <div>
+      <p class="eyebrow">Player</p>
+      <h2>{{ player_state.current_album }}</h2>
+      <p class="subtle">Aktueller Titel mit Cover, Lautstärke, Sleeptimer und Warteschlange.</p>
+    </div>
+    <div class="status-pill {% if player_state.is_playing %}ok{% else %}idle{% endif %}">
+      {% if player_state.is_playing %}Läuft{% else %}Pausiert{% endif %}
+    </div>
+  </section>
+
+  <div class="grid two-up">
+    <article class="card player-card">
+      <div class="cover">
+        <div class="cover-placeholder">Cover</div>
+      </div>
+      <div class="player-meta">
+        <p class="track">{{ player_state.current_track }}</p>
+        <p class="subtle">von {{ player_state.current_album }}</p>
+      </div>
+      <div class="meter-group">
+        <div class="meter-label">
+          <span>{{ position_label }}</span>
+          <span>{{ duration_label }}</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" style="width: {{ progress_percent }}%"></div>
+        </div>
+      </div>
+      <form class="inline-actions" method="post">
+        <button name="action" value="volume_down">Lautstärke -</button>
+        <span class="value">{{ volume_percent }}%</span>
+        <button name="action" value="volume_up">Lautstärke +</button>
+      </form>
+      <form class="inline-actions" method="post">
+        <button name="action" value="sleep_down">Sleeptimer -</button>
+        <span class="value">{{ player_state.sleep_timer_minutes }} min</span>
+        <button name="action" value="sleep_up">Sleeptimer +</button>
+      </form>
+      <form class="transport" method="post">
+        <button name="action" value="prev">Zurück</button>
+        <button name="action" value="toggle_play" class="primary">
+          {% if player_state.is_playing %}Pause{% else %}Play{% endif %}
+        </button>
+        <button name="action" value="stop">Stop</button>
+        <button name="action" value="next">Vor</button>
+      </form>
+    </article>
+
+    <article class="card queue-card">
+      <div class="section-header">
+        <h3>Warteschlange</h3>
+        <span class="badge">{{ player_state.queue|length }} Titel</span>
+      </div>
+      <ul class="list">
+        {% for item in player_state.queue %}
+          <li>{{ item }}</li>
+        {% else %}
+          <li>Keine weiteren Titel geplant.</li>
+        {% endfor %}
+      </ul>
+    </article>
+  </div>
+
+  <article class="card runtime-card">
+    <div class="section-header">
+      <h3>Runtime</h3>
+      <span class="badge">{{ runtime_state.playback_state }}</span>
+    </div>
+    <div class="status-grid">
+      <div><span>Power</span><strong>{% if runtime_state.powered_on %}an{% else %}aus{% endif %}</strong></div>
+      <div><span>Sleeptimer</span><strong>Stufe {{ runtime_state.sleep_timer.level }}</strong></div>
+      <div><span>Letztes Event</span><strong>{{ runtime_state.last_event }}</strong></div>
+      <div><span>RFID</span><strong>{{ runtime_state.hardware.last_scanned_uid or "-" }}</strong></div>
+      <div><span>Playback</span><strong>{{ runtime_state.playback_session.backend or "mock" }}</strong></div>
+      <div><span>Backend-Status</span><strong>{{ runtime_state.playback_session.state or "idle" }}</strong></div>
+    </div>
+    <div class="split-list">
+      <div>
+        <h4>LED-Status</h4>
+        <ul class="list">
+          {% for led in runtime_state.led_status %}
+            <li>
+              <strong>{{ led.name }}</strong>
+              <span>{{ led.pin }} • {% if led.is_on %}an{% else %}aus{% endif %} • {{ led.brightness }}%</span>
+            </li>
+          {% else %}
+            <li>Noch keine LED-Daten.</li>
+          {% endfor %}
+        </ul>
+      </div>
+      <div>
+        <h4>API Schnelltest</h4>
+        <ul class="list">
+          <li><strong>GET</strong><span>/api/runtime</span></li>
+          <li><strong>POST</strong><span>/api/runtime/tick</span></li>
+          <li><strong>POST</strong><span>/api/runtime/rfid</span></li>
+          <li><strong>POST</strong><span>/api/runtime/button</span></li>
+        </ul>
+      </div>
+    </div>
+  </article>
+{% endblock %}

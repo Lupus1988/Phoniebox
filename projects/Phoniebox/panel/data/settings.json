@@ -1,0 +1,8 @@
+{
+  "max_volume": 85,
+  "volume_step": 5,
+  "sleep_timer_step": 5,
+  "rfid_read_action": "play",
+  "rfid_remove_action": "stop",
+  "reader_mode": "album_load"
+}
