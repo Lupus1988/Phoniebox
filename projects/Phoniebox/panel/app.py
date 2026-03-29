@@ -15,6 +15,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from runtime.service import RuntimeService
+from system.audio import apply_audio_profile, deploy_audio_profile, detect_audio_environment, i2s_profile_catalog
 from system.networking import apply_wifi_profile, ensure_hostname, fallback_hotspot_cycle
 
 DATA_DIR = BASE_DIR / "data"
@@ -27,6 +28,7 @@ SETUP_FILE = DATA_DIR / "setup.json"
 APPLY_REPORT_FILE = DATA_DIR / "last_apply_report.json"
 RUNTIME_FILE = DATA_DIR / "runtime_state.json"
 LINK_SESSION_FILE = DATA_DIR / "rfid_link_session.json"
+AUDIO_PROFILE_DIR = DATA_DIR / "generated" / "audio"
 
 
 app = Flask(
@@ -54,6 +56,21 @@ READER_OPTIONS = [
     {"id": "PN532_SPI", "label": "PN532 (SPI)", "driver": "pn532", "transport": "spi"},
     {"id": "PN532_UART", "label": "PN532 (UART)", "driver": "pn532", "transport": "uart"},
 ]
+AUDIO_OUTPUT_OPTIONS = [
+    {"id": "auto", "label": "Automatisch erkennen"},
+    {"id": "usb_dac", "label": "USB-Soundkarte / USB-DAC"},
+    {"id": "i2s_dac", "label": "GPIO / I2S Audio-HAT"},
+    {"id": "analog_jack", "label": "Analoger Ausgang"},
+    {"id": "hdmi", "label": "HDMI-Audio"},
+    {"id": "bluetooth", "label": "Bluetooth-Lautsprecher"},
+]
+AUDIO_BACKEND_OPTIONS = [
+    {"id": "auto", "label": "Automatisch"},
+    {"id": "mpg123", "label": "mpg123"},
+    {"id": "cvlc", "label": "cvlc"},
+    {"id": "mock", "label": "Mock / Simulation"},
+]
+AUDIO_MIXER_OPTIONS = ["auto", "Master", "PCM", "Speaker", "Digital"]
 
 
 def load_json(path, default):
@@ -69,6 +86,20 @@ def save_json(path, data):
     with temp_path.open("w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2, ensure_ascii=False)
     temp_path.replace(path)
+
+
+def merge_defaults(data, defaults):
+    if not isinstance(defaults, dict):
+        return data if data is not None else defaults
+    result = dict(defaults)
+    if not isinstance(data, dict):
+        return result
+    for key, value in data.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = merge_defaults(value, result[key])
+        else:
+            result[key] = value
+    return result
 
 
 def slugify_name(value):
@@ -256,6 +287,19 @@ def default_setup():
             {"id": "led-4", "name": "Sleep 2/3", "pin": "GPIO19", "function": "sleep_2", "brightness": 70},
             {"id": "led-5", "name": "Sleep 3/3", "pin": "GPIO20", "function": "sleep_3", "brightness": 90},
         ],
+        "audio": {
+            "output_mode": "auto",
+            "preferred_output": "auto",
+            "playback_backend": "auto",
+            "i2s_profile": "auto",
+            "mixer_control": "auto",
+            "startup_volume": 45,
+            "external_soundcard_required": False,
+            "mono_downmix": False,
+            "apply_boot_config": False,
+            "enable_audio_service": True,
+            "connection_hint": "Automatisch erkennen oder USB-/GPIO-Soundkarte auswählen",
+        },
         "wifi": {
             "mode": "client_with_fallback_hotspot",
             "country": "DE",
@@ -337,7 +381,7 @@ def save_library(data):
 
 
 def load_settings():
-    return load_json(SETTINGS_FILE, default_settings())
+    return merge_defaults(load_json(SETTINGS_FILE, default_settings()), default_settings())
 
 
 def save_settings(data):
@@ -345,7 +389,7 @@ def save_settings(data):
 
 
 def load_setup():
-    return load_json(SETUP_FILE, default_setup())
+    return merge_defaults(load_json(SETUP_FILE, default_setup()), default_setup())
 
 
 def save_setup(data):
@@ -587,6 +631,33 @@ def current_reader_option(reader_type):
     return next((option for option in READER_OPTIONS if option["id"] == reader_type), READER_OPTIONS[0])
 
 
+def audio_output_choices():
+    return AUDIO_OUTPUT_OPTIONS
+
+
+def audio_backend_choices():
+    return AUDIO_BACKEND_OPTIONS
+
+
+def audio_i2s_profile_choices():
+    return i2s_profile_catalog()
+
+
+def audio_output_device_choices():
+    environment = detect_audio_environment()
+    choices = [{"id": "auto", "label": "Automatisch / bestes Gerät"}]
+    for card in environment.get("playback_devices", []):
+        label = f"{card.get('name', 'Karte')} / {card.get('device_name', 'Ausgabe')} ({card.get('alsa_hw', '')})"
+        choices.append({"id": card.get("alsa_hw", "auto"), "label": label})
+    for card in environment.get("cards", []):
+        hw_id = f"hw:{card.get('card_index', '0')},0"
+        if any(choice["id"] == hw_id for choice in choices):
+            continue
+        label = f"{card.get('name', 'Karte')} ({hw_id})"
+        choices.append({"id": hw_id, "label": label})
+    return choices
+
+
 def network_targets(setup_data):
     wifi = setup_data.get("wifi", {})
     hostname = (wifi.get("hostname") or "phoniebox").strip()
@@ -633,6 +704,11 @@ def inject_choices():
         "led_functions": LED_FUNCTIONS,
         "button_pin_choices": pin_choices(reader_type, "button"),
         "led_pin_choices": pin_choices(reader_type, "led"),
+        "audio_output_options": audio_output_choices(),
+        "audio_backend_options": audio_backend_choices(),
+        "audio_i2s_profile_options": audio_i2s_profile_choices(),
+        "audio_output_device_choices": audio_output_device_choices(),
+        "audio_mixer_options": AUDIO_MIXER_OPTIONS,
     }
 
 
@@ -668,6 +744,10 @@ def player():
         elif action == "sleep_up":
             level = min(3, int(runtime_state.get("sleep_timer", {}).get("level", 0)) + 1)
             runtime_service.set_sleep_level(level)
+        elif action == "seek":
+            runtime_service.seek(to_int(request.form.get("seek_position"), player_state.get("position_seconds", 0), 0))
+        elif action == "clear_queue":
+            runtime_service.clear_queue()
         flash("Playerstatus aktualisiert.", "success")
         return redirect(url_for("player"))
 
@@ -754,6 +834,24 @@ def library():
                     break
             save_library(library_data)
             flash("RFID-Zuordnung entfernt.", "success")
+            return redirect(url_for("library"))
+
+        if action == "play_album":
+            album_id = request.form.get("album_id", "").strip()
+            result = runtime_service.load_album_by_id(album_id, autoplay=True)
+            flash(result["runtime"]["last_event"], "success" if result.get("ok") else "error")
+            return redirect(url_for("library"))
+
+        if action == "load_album":
+            album_id = request.form.get("album_id", "").strip()
+            result = runtime_service.load_album_by_id(album_id, autoplay=False)
+            flash(result["runtime"]["last_event"], "success" if result.get("ok") else "error")
+            return redirect(url_for("library"))
+
+        if action == "queue_album":
+            album_id = request.form.get("album_id", "").strip()
+            result = runtime_service.queue_album_by_id(album_id)
+            flash(result["runtime"]["last_event"], "success" if result.get("ok") else "error")
             return redirect(url_for("library"))
 
     return render_template("library.html", library_data=library_data, link_session=load_link_session())
@@ -890,6 +988,43 @@ def setup():
             flash("LED-Zuweisungen gespeichert.", "success")
             return redirect(url_for("setup"))
 
+        if section == "audio":
+            audio = data["audio"]
+            audio["output_mode"] = request.form.get("output_mode", audio.get("output_mode", "auto")).strip() or "auto"
+            audio["preferred_output"] = request.form.get(
+                "preferred_output",
+                audio.get("preferred_output", "auto"),
+            ).strip() or "auto"
+            audio["playback_backend"] = request.form.get(
+                "playback_backend",
+                audio.get("playback_backend", "auto"),
+            ).strip() or "auto"
+            audio["i2s_profile"] = request.form.get(
+                "i2s_profile",
+                audio.get("i2s_profile", "auto"),
+            ).strip() or "auto"
+            audio["mixer_control"] = request.form.get(
+                "mixer_control",
+                audio.get("mixer_control", "auto"),
+            ).strip() or "auto"
+            audio["startup_volume"] = to_int(
+                request.form.get("startup_volume"),
+                audio.get("startup_volume", 45),
+                0,
+                100,
+            )
+            audio["external_soundcard_required"] = request.form.get("external_soundcard_required") == "on"
+            audio["mono_downmix"] = request.form.get("mono_downmix") == "on"
+            audio["apply_boot_config"] = request.form.get("apply_boot_config") == "on"
+            audio["enable_audio_service"] = request.form.get("enable_audio_service") == "on"
+            audio["connection_hint"] = request.form.get(
+                "audio_connection_hint",
+                audio.get("connection_hint", ""),
+            ).strip()
+            save_setup(data)
+            flash("Audio-Profil gespeichert.", "success")
+            return redirect(url_for("setup"))
+
         if section == "simulate_gpio":
             pin = request.form.get("sim_pin", "").strip()
             press_type = request.form.get("sim_press_type", "kurz").strip()
@@ -912,6 +1047,11 @@ def setup():
             elapsed = to_int(request.form.get("elapsed"), 5, 1, 120)
             result = runtime_service.tick(elapsed)
             flash(f"Runtime um {elapsed}s fortgeschrieben: {result['runtime']['last_event']}", "success")
+            return redirect(url_for("setup"))
+
+        if section == "reset_runtime":
+            result = runtime_service.reset_state()
+            flash(result["runtime"]["last_event"], "success")
             return redirect(url_for("setup"))
 
         if section == "wifi":
@@ -961,6 +1101,29 @@ def setup():
             }
             save_apply_report(report)
             flash(report["summary"], "success" if ok else "error")
+            return redirect(url_for("setup"))
+
+        if section == "apply_audio":
+            result = apply_audio_profile(data.get("audio", {}), AUDIO_PROFILE_DIR)
+            report = {
+                "ok": result.get("ok", False),
+                "summary": "Audio-Profil erkannt und vorbereitet." if result.get("ok") else "Audio-Profil nur teilweise vorbereitet.",
+                "details": result.get("details", []) or ["Keine Detailausgabe vorhanden."],
+            }
+            save_apply_report(report)
+            flash(report["summary"], "success" if report["ok"] else "error")
+            return redirect(url_for("setup"))
+
+        if section == "deploy_audio":
+            apply_audio_profile(data.get("audio", {}), AUDIO_PROFILE_DIR)
+            result = deploy_audio_profile(data.get("audio", {}), AUDIO_PROFILE_DIR)
+            report = {
+                "ok": result.get("ok", False),
+                "summary": "Audio-Systemprofil installiert." if result.get("ok") else "Audio-Systemprofil konnte nicht vollständig installiert werden.",
+                "details": result.get("details", []) or ["Keine Detailausgabe vorhanden."],
+            }
+            save_apply_report(report)
+            flash(report["summary"], "success" if report["ok"] else "error")
             return redirect(url_for("setup"))
 
         if section == "run_fallback_cycle":
@@ -1019,6 +1182,8 @@ def setup():
         setup_warnings=collect_conflicts(data),
         network_info=network_targets(data),
         apply_report=load_apply_report(),
+        audio_environment=detect_audio_environment(),
+        audio_profile_dir=AUDIO_PROFILE_DIR,
         hardware_profile=runtime_snapshot["runtime"]["hardware"].get("profile", {}),
         runtime_state=runtime_snapshot["runtime"],
         button_mapping_rows=button_mapping_rows(data),
@@ -1035,6 +1200,11 @@ def api_runtime():
 def api_hardware():
     snapshot = runtime_service.status()
     return jsonify(snapshot["runtime"]["hardware"].get("profile", {}))
+
+
+@app.route("/api/audio")
+def api_audio():
+    return jsonify(detect_audio_environment())
 
 
 @app.route("/api/runtime/tick", methods=["POST"])
@@ -1092,6 +1262,39 @@ def api_runtime_button():
     name = str(payload.get("name", request.form.get("name", ""))).strip()
     press_type = str(payload.get("press_type", request.form.get("press_type", "kurz"))).strip()
     return jsonify(runtime_service.trigger_button(name, press_type))
+
+
+@app.route("/api/runtime/seek", methods=["POST"])
+def api_runtime_seek():
+    payload = request.get_json(silent=True) or {}
+    position_seconds = to_int(payload.get("position_seconds", request.form.get("position_seconds", 0)), 0, 0)
+    return jsonify(runtime_service.seek(position_seconds))
+
+
+@app.route("/api/runtime/reset", methods=["POST"])
+def api_runtime_reset():
+    return jsonify(runtime_service.reset_state())
+
+
+@app.route("/api/runtime/load-album", methods=["POST"])
+def api_runtime_load_album():
+    payload = request.get_json(silent=True) or {}
+    album_id = str(payload.get("album_id", request.form.get("album_id", ""))).strip()
+    raw_autoplay = payload.get("autoplay", request.form.get("autoplay", "false"))
+    if isinstance(raw_autoplay, bool):
+        autoplay = raw_autoplay
+    else:
+        autoplay = str(raw_autoplay).strip().lower() in {"1", "true", "on", "yes"}
+    result = runtime_service.load_album_by_id(album_id, autoplay=autoplay)
+    return jsonify(result), (200 if result.get("ok") else 404)
+
+
+@app.route("/api/runtime/queue-album", methods=["POST"])
+def api_runtime_queue_album():
+    payload = request.get_json(silent=True) or {}
+    album_id = str(payload.get("album_id", request.form.get("album_id", ""))).strip()
+    result = runtime_service.queue_album_by_id(album_id)
+    return jsonify(result), (200 if result.get("ok") else 404)
 
 
 @app.route("/api/library/link-session", methods=["POST"])

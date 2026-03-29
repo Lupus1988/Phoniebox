@@ -87,6 +87,9 @@
             <input name="cover_url" value="{{ album.cover_url }}">
           </label>
           <div class="row-actions">
+            <button formaction="{{ url_for('library') }}" name="action" value="play_album" class="primary">Jetzt abspielen</button>
+            <button formaction="{{ url_for('library') }}" name="action" value="load_album">Nur laden</button>
+            <button formaction="{{ url_for('library') }}" name="action" value="queue_album">Zur Warteschlange</button>
             <button class="primary" type="submit">Speichern</button>
             <button type="button" class="js-open-link-modal" data-album-id="{{ album.id }}" data-album-name="{{ album.name }}">Link hinzufügen</button>
             <button formaction="{{ url_for('library') }}" name="action" value="unlink_rfid">RFID löschen</button>

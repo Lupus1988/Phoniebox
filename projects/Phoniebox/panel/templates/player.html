@@ -39,6 +39,11 @@
         <span class="value">{{ player_state.sleep_timer_minutes }} min</span>
         <button name="action" value="sleep_up">Sleeptimer +</button>
       </form>
+      <form class="inline-actions" method="post">
+        <input type="hidden" name="action" value="seek">
+        <input type="number" name="seek_position" min="0" max="{{ player_state.duration_seconds or 0 }}" value="{{ player_state.position_seconds }}">
+        <button type="submit">Position setzen</button>
+      </form>
       <form class="transport" method="post">
         <button name="action" value="prev">Zurück</button>
         <button name="action" value="toggle_play" class="primary">
@@ -50,15 +55,18 @@
     </article>
 
     <article class="card queue-card">
-      <div class="section-header">
-        <h3>Warteschlange</h3>
-        <span class="badge">{{ player_state.queue|length }} Titel</span>
-      </div>
-      <ul class="list">
-        {% for item in player_state.queue %}
-          <li>{{ item }}</li>
-        {% else %}
-          <li>Keine weiteren Titel geplant.</li>
+    <div class="section-header">
+      <h3>Warteschlange</h3>
+      <span class="badge">{{ player_state.queue|length }} Titel</span>
+    </div>
+    <form method="post" class="inline-actions">
+      <button name="action" value="clear_queue">Warteschlange leeren</button>
+    </form>
+    <ul class="list">
+      {% for item in player_state.queue %}
+        <li>{{ item }}</li>
+      {% else %}
+        <li>Keine weiteren Titel geplant.</li>
         {% endfor %}
       </ul>
     </article>
@@ -98,6 +106,8 @@
           <li><strong>POST</strong><span>/api/runtime/tick</span></li>
           <li><strong>POST</strong><span>/api/runtime/rfid</span></li>
           <li><strong>POST</strong><span>/api/runtime/button</span></li>
+          <li><strong>POST</strong><span>/api/runtime/seek</span></li>
+          <li><strong>POST</strong><span>/api/runtime/load-album</span></li>
         </ul>
       </div>
     </div>

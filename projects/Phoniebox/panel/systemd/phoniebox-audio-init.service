@@ -1,0 +1,13 @@
+[Unit]
+Description=Phoniebox Audio Init
+After=sound.target
+Wants=sound.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/phoniebox-panel
+ExecStart=/opt/phoniebox-panel/data/generated/audio/set-startup-volume.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

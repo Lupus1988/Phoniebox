@@ -3,8 +3,8 @@
   <section class="hero">
     <div>
       <p class="eyebrow">Setup</p>
-      <h2>Reader, Tasten, LEDs und WLAN</h2>
-      <p class="subtle">Hardware-Mapping und Netzwerkkonzept in einer Oberfläche statt in Einzelskripten.</p>
+      <h2>Reader, Audio, Tasten, LEDs und WLAN</h2>
+      <p class="subtle">Hardware-Mapping und Systemprofile in einer Oberfläche statt in Einzelskripten.</p>
     </div>
   </section>
 
@@ -248,6 +248,132 @@
         </div>
       </div>
     </article>
+
+    <article class="card">
+      <div class="section-header">
+        <h3>Audio-Ausgabe</h3>
+        <span class="badge">
+          {% if hardware_profile.audio.detected_cards %}{{ hardware_profile.audio.detected_cards|length }} Karten{% else %}Soll-Profil{% endif %}
+        </span>
+      </div>
+      <div class="status-grid">
+        <div><span>Gerät</span><strong>{{ hardware_profile.audio.device_model or audio_environment.device_model }}</strong></div>
+        <div><span>Ausgabeweg</span><strong>{{ setup_data.audio.output_mode }}</strong></div>
+        <div><span>Zielgerät</span><strong>{{ setup_data.audio.preferred_output }}</strong></div>
+        <div><span>Startlautstärke</span><strong>{{ setup_data.audio.startup_volume }}%</strong></div>
+      </div>
+      <form method="post" class="grid form-grid compact">
+        <input type="hidden" name="section" value="audio">
+        <label>
+          <span>Ausgabemodus</span>
+          <select name="output_mode">
+            {% for option in audio_output_options %}
+              <option value="{{ option.id }}" {% if setup_data.audio.output_mode == option.id %}selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Bevorzugtes Zielgerät</span>
+          <select name="preferred_output">
+            {% for option in audio_output_device_choices %}
+              <option value="{{ option.id }}" {% if setup_data.audio.preferred_output == option.id %}selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Playback-Backend</span>
+          <select name="playback_backend">
+            {% for option in audio_backend_options %}
+              <option value="{{ option.id }}" {% if setup_data.audio.playback_backend == option.id %}selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>I2S-Profil</span>
+          <select name="i2s_profile">
+            {% for option in audio_i2s_profile_options %}
+              <option value="{{ option.id }}" {% if setup_data.audio.i2s_profile == option.id %}selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Mixer-Control</span>
+          <select name="mixer_control">
+            {% for option in audio_mixer_options %}
+              <option value="{{ option }}" {% if setup_data.audio.mixer_control == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Startlautstärke</span>
+          <input type="number" name="startup_volume" min="0" max="100" value="{{ setup_data.audio.startup_volume }}">
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="external_soundcard_required" {% if setup_data.audio.external_soundcard_required %}checked{% endif %}>
+          <span>Externe Soundkarte bewusst erzwingen, falls das Zielgerät kein brauchbares Onboard-Audio hat</span>
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="mono_downmix" {% if setup_data.audio.mono_downmix %}checked{% endif %}>
+          <span>Mono-Downmix für kleine Einzel-Lautsprecher vorbereiten</span>
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="apply_boot_config" {% if setup_data.audio.apply_boot_config %}checked{% endif %}>
+          <span>Boot-Konfiguration für Audio mitverwalten, wenn das Profil Overlay-/HDMI-Einstellungen braucht</span>
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="enable_audio_service" {% if setup_data.audio.enable_audio_service %}checked{% endif %}>
+          <span>Startlautstärke-Service auf dem Zielsystem aktiv halten</span>
+        </label>
+        <label class="full">
+          <span>Anschluss-Hinweis</span>
+          <textarea name="audio_connection_hint" rows="3">{{ setup_data.audio.connection_hint }}</textarea>
+        </label>
+        <button class="primary wide" type="submit">Audio-Profil speichern</button>
+      </form>
+      <div class="inline-actions stacked-actions">
+        <form method="post">
+          <input type="hidden" name="section" value="apply_audio">
+          <button type="submit">Audio-Profil erzeugen</button>
+        </form>
+        <form method="post">
+          <input type="hidden" name="section" value="deploy_audio">
+          <button class="primary" type="submit">Audio aufs System anwenden</button>
+        </form>
+      </div>
+      <div class="info-box">
+        <h4>Erkannte Soundkarten</h4>
+        <ul class="list">
+          {% for card in audio_environment.cards %}
+            <li><strong>{{ card.name or card.card_id }}</strong><span>{{ card.description or ("Card " ~ card.card_index) }}</span></li>
+          {% else %}
+            <li>Noch keine ALSA-Karte erkannt. Das Profil bleibt trotzdem speicherbar.</li>
+          {% endfor %}
+        </ul>
+      </div>
+      <div class="info-box">
+        <h4>Universal-Hinweise</h4>
+        <ul class="list">
+          {% if audio_environment.recommended_external_card %}
+            <li>Pi Zero 2 W erkannt: plane USB-DAC oder GPIO-/I2S-Audio-HAT als Standardpfad ein.</li>
+          {% endif %}
+          {% for note in audio_environment.notes %}
+            <li>{{ note }}</li>
+          {% else %}
+            <li>Keine besonderen Audio-Hinweise erkannt.</li>
+          {% endfor %}
+        </ul>
+      </div>
+      <div class="info-box">
+        <h4>Erzeugte Systemartefakte</h4>
+        <ul class="list">
+          <li><strong>ALSA</strong><span>{{ audio_profile_dir }}/asound.conf</span></li>
+          <li><strong>Boot-Snippet</strong><span>{{ audio_profile_dir }}/boot-config.txt</span></li>
+          <li><strong>Startlautstärke</strong><span>{{ audio_profile_dir }}/set-startup-volume.sh</span></li>
+          <li><strong>Zusammenfassung</strong><span>{{ audio_profile_dir }}/README.txt</span></li>
+        </ul>
+        <p class="subtle">Diese Dateien werden beim Audio-Profil-Apply vorbereitet. Im nächsten Schritt können wir daraus echte Systemdeployments bauen.</p>
+      </div>
+    </article>
   </div>
 
   <article class="card">
@@ -364,6 +490,10 @@
             <input type="number" name="elapsed" min="1" max="120" value="5">
           </label>
           <button class="primary wide" type="submit">Tick simulieren</button>
+        </form>
+        <form method="post" class="grid form-grid compact">
+          <input type="hidden" name="section" value="reset_runtime">
+          <button type="submit" class="danger">Runtime zurücksetzen</button>
         </form>
         <ul class="list">
           <li><strong>Aktiver Tag</strong><span>{{ runtime_state.active_rfid_uid or "-" }}</span></li>

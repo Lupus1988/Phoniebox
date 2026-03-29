@@ -1,6 +1,8 @@
 import shutil
 from pathlib import Path
 
+from system.audio import detect_audio_environment
+
 
 def command_exists(name):
     return shutil.which(name) is not None
@@ -81,12 +83,15 @@ def detect_leds(setup_data):
     }
 
 
-def detect_audio(library_data):
+def detect_audio(library_data, setup_data=None):
     albums = library_data.get("albums", [])
     playlist_count = sum(1 for album in albums if album.get("playlist"))
+    setup_data = setup_data or {}
+    audio_setup = setup_data.get("audio", {})
+    audio_env = detect_audio_environment()
     backend = "python-playlist-core"
-    ready = True
-    notes = []
+    ready = bool(audio_env.get("cards")) or command_exists("mpg123") or command_exists("cvlc")
+    notes = list(audio_env.get("notes", []))
     if command_exists("mpg123"):
         notes.append("mpg123 vorhanden, kann später als Playback-Backend dienen.")
     elif command_exists("cvlc"):
@@ -99,6 +104,14 @@ def detect_audio(library_data):
         "backend": backend,
         "ready": ready,
         "notes": notes,
+        "device_model": audio_env.get("device_model", "Unbekannt"),
+        "detected_cards": audio_env.get("cards", []),
+        "playback_devices": audio_env.get("playback_devices", []),
+        "selected_output_mode": audio_setup.get("output_mode", "auto"),
+        "selected_output": audio_setup.get("preferred_output", "auto"),
+        "startup_volume": audio_setup.get("startup_volume", 45),
+        "recommended_external_card": audio_env.get("recommended_external_card", False),
+        "is_pi_zero_2w": audio_env.get("is_pi_zero_2w", False),
     }
 
 
@@ -106,7 +119,7 @@ def detect_hardware(setup_data, library_data):
     reader = detect_reader(setup_data)
     buttons = detect_buttons(setup_data)
     leds = detect_leds(setup_data)
-    audio = detect_audio(library_data)
+    audio = detect_audio(library_data, setup_data)
     warnings = []
     for block in [reader, buttons, leds, audio]:
         warnings.extend(block.get("notes", []))
