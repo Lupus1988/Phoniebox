@@ -1,0 +1,20 @@
+Phoniebox Anschlussplan: USB Keyboard Reader
+
+Geeignet fuer:
+- USB-RFID-Reader, die sich wie eine USB-Tastatur verhalten
+- typische USB-Desktopreader mit fertigem USB-Kabel
+
+Anschluss:
+1. Raspberry Pi herunterfahren oder Reader sauber abziehen.
+2. Reader in einen freien USB-Port stecken.
+3. Raspberry Pi starten.
+4. In Phoniebox unter Setup den Reader-Typ "USB Keyboard Reader" auswaehlen.
+
+Es ist keine GPIO-Verdrahtung noetig.
+
+Hinweise:
+- USB-Reader belegen keine GPIO-Pins.
+- Wenn der Reader nicht erkannt wird:
+  - anderen USB-Port probieren
+  - anderes USB-Kabel probieren
+  - bei schwacher Stromversorgung einen aktiven USB-Hub testen

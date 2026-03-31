@@ -1,0 +1,29 @@
+Phoniebox Anschlussplan: RC522 ueber SPI
+
+Wichtig:
+- Nur mit 3.3V betreiben.
+- 5V koennen Reader oder Raspberry Pi beschaedigen.
+
+Reader im Setup:
+- Reader-Typ: RC522
+- Transport: SPI
+- Treiber: mfrc522
+
+Verdrahtung RC522 -> Raspberry Pi:
+- SDA / SS  -> GPIO8  / Pin 24
+- SCK       -> GPIO11 / Pin 23
+- MOSI      -> GPIO10 / Pin 19
+- MISO      -> GPIO9  / Pin 21
+- IRQ       -> nicht anschliessen
+- GND       -> GND    / Pin 6
+- RST       -> GPIO25 / Pin 22
+- 3.3V      -> 3V3    / Pin 1
+
+Kurzablauf:
+1. Raspberry Pi ausschalten.
+2. RC522 gemaess obiger Liste verdrahten.
+3. SPI am Raspberry Pi aktivieren.
+4. In Phoniebox den Reader-Typ "RC522" waehlen.
+
+Reservierte Pins:
+- GPIO8, GPIO9, GPIO10, GPIO11, GPIO25

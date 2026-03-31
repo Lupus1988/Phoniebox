@@ -65,8 +65,6 @@ class RuntimeServiceTest(unittest.TestCase):
                 "reader": {
                     "type": "USB",
                     "connection_hint": "",
-                    "read_behavior": "play",
-                    "remove_behavior": "stop",
                 },
                 "buttons": [],
                 "leds": [],
@@ -139,6 +137,37 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertIn("03 bonus", queued["player"]["queue"])
         self.assertEqual(sought["player"]["position_seconds"], 37)
         self.assertEqual(cleared["player"]["queue"], [])
+
+    def test_reader_behavior_comes_from_settings_only(self):
+        write_json(
+            self.data_dir / "settings.json",
+            {
+                "max_volume": 85,
+                "volume_step": 5,
+                "sleep_timer_step": 5,
+                "rfid_read_action": "queue_append",
+                "rfid_remove_action": "pause",
+            },
+        )
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {
+                    "type": "USB",
+                    "connection_hint": "",
+                    "read_behavior": "play",
+                    "remove_behavior": "stop",
+                },
+                "buttons": [],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        behavior = self.service.get_reader_behavior()
+
+        self.assertEqual(behavior["read"], "queue_append")
+        self.assertEqual(behavior["remove"], "pause")
 
     def test_reset_state_returns_clean_runtime(self):
         self.service.load_album_by_id("album-1", autoplay=True)

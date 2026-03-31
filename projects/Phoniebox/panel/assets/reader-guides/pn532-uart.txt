@@ -1,0 +1,26 @@
+Phoniebox Anschlussplan: PN532 ueber UART
+
+Wichtig:
+- Vor dem Anschluss den PN532 auf UART- oder HSU-Modus stellen.
+- TX und RX werden gekreuzt verbunden.
+
+Reader im Setup:
+- Reader-Typ: PN532 (UART)
+- Transport: UART
+- Treiber: pn532
+
+Verdrahtung PN532 -> Raspberry Pi:
+- VCC -> 3V3    / Pin 1
+- GND -> GND    / Pin 6
+- TX  -> GPIO15 / Pin 10
+- RX  -> GPIO14 / Pin 8
+
+Kurzablauf:
+1. Raspberry Pi ausschalten.
+2. PN532 auf UART- oder HSU-Modus stellen.
+3. Reader gemaess obiger Liste verdrahten.
+4. Serielle Schnittstelle am Raspberry Pi aktivieren.
+5. In Phoniebox den Reader-Typ "PN532 (UART)" waehlen.
+
+Reservierte Pins:
+- GPIO14, GPIO15

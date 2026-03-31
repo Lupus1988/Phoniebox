@@ -1,9 +1,7 @@
 {
   "reader": {
     "type": "USB",
-    "connection_hint": "USB-Reader anstecken oder RC522 per SPI verdrahten",
-    "read_behavior": "play",
-    "remove_behavior": "stop"
+    "connection_hint": "USB-Reader anstecken oder RC522 per SPI verdrahten"
   },
   "buttons": [
     {

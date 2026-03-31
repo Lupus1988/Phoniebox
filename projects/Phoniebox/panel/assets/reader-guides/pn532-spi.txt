@@ -1,0 +1,28 @@
+Phoniebox Anschlussplan: PN532 ueber SPI
+
+Wichtig:
+- Vor dem Anschluss den PN532 auf SPI-Modus stellen.
+- Raspberry-Pi-SPI arbeitet mit 3.3V-Logik.
+
+Reader im Setup:
+- Reader-Typ: PN532 (SPI)
+- Transport: SPI
+- Treiber: pn532
+
+Verdrahtung PN532 -> Raspberry Pi:
+- VCC  -> 3V3    / Pin 1
+- GND  -> GND    / Pin 6
+- SCK  -> GPIO11 / Pin 23
+- MOSI -> GPIO10 / Pin 19
+- MISO -> GPIO9  / Pin 21
+- NSS  -> GPIO8  / Pin 24
+
+Kurzablauf:
+1. Raspberry Pi ausschalten.
+2. PN532 auf SPI-Modus stellen.
+3. Reader gemaess obiger Liste verdrahten.
+4. SPI am Raspberry Pi aktivieren.
+5. In Phoniebox den Reader-Typ "PN532 (SPI)" waehlen.
+
+Reservierte Pins:
+- GPIO8, GPIO9, GPIO10, GPIO11

@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
+from flask import Flask, flash, jsonify, redirect, render_template, request, send_file, url_for
 from werkzeug.utils import secure_filename
 
 
@@ -29,6 +29,7 @@ APPLY_REPORT_FILE = DATA_DIR / "last_apply_report.json"
 RUNTIME_FILE = DATA_DIR / "runtime_state.json"
 LINK_SESSION_FILE = DATA_DIR / "rfid_link_session.json"
 AUDIO_PROFILE_DIR = DATA_DIR / "generated" / "audio"
+READER_GUIDE_DIR = BASE_DIR / "assets" / "reader-guides"
 HOTSPOT_SECURITY_CHOICES = {"open", "wpa-psk"}
 
 
@@ -404,8 +405,6 @@ def default_setup():
         "reader": {
             "type": "USB",
             "connection_hint": "USB-Reader anstecken oder RC522 per SPI verdrahten",
-            "read_behavior": "play",
-            "remove_behavior": "stop",
         },
         "buttons": [
             {"id": "btn-1", "name": "Play/Pause", "pin": "GPIO17", "press_type": "kurz"},
@@ -713,7 +712,12 @@ def pin_choices(reader_type, role):
 
 
 def reader_catalog():
-    return READER_OPTIONS
+    options = []
+    for option in READER_OPTIONS:
+        enriched = dict(option)
+        enriched["guide_available"] = reader_guide_path(option["id"]).exists()
+        options.append(enriched)
+    return options
 
 
 def collect_conflicts(setup_data):
@@ -792,6 +796,20 @@ def mapping_errors(setup_data):
 
 def current_reader_option(reader_type):
     return next((option for option in READER_OPTIONS if option["id"] == reader_type), READER_OPTIONS[0])
+
+
+def reader_guide_filename(reader_type):
+    return {
+        "USB": "usb-keyboard-reader.txt",
+        "RC522": "rc522-spi.txt",
+        "PN532_I2C": "pn532-i2c.txt",
+        "PN532_SPI": "pn532-spi.txt",
+        "PN532_UART": "pn532-uart.txt",
+    }.get(reader_type, "usb-keyboard-reader.txt")
+
+
+def reader_guide_path(reader_type):
+    return READER_GUIDE_DIR / reader_guide_filename(reader_type)
 
 
 def audio_output_choices():
@@ -956,6 +974,15 @@ def player():
 
     context = build_player_context(snapshot)
     return render_template("player.html", **context)
+
+
+@app.route("/setup/reader-guide/<reader_type>")
+def download_reader_guide(reader_type):
+    guide_path = reader_guide_path(reader_type)
+    if not guide_path.exists():
+        flash("Für diesen Reader ist noch kein Anschlussplan hinterlegt.", "error")
+        return redirect(url_for("setup"))
+    return send_file(guide_path, as_attachment=True, download_name=guide_path.name)
 
 
 @app.route("/library", methods=["GET", "POST"])
@@ -1179,10 +1206,6 @@ def setup():
             data["reader"]["type"] = request.form.get("reader_type", data["reader"]["type"]).strip() or "USB"
             data["reader"]["connection_hint"] = request.form.get(
                 "connection_hint", data["reader"]["connection_hint"]
-            ).strip()
-            data["reader"]["read_behavior"] = request.form.get("read_behavior", data["reader"]["read_behavior"]).strip()
-            data["reader"]["remove_behavior"] = request.form.get(
-                "remove_behavior", data["reader"]["remove_behavior"]
             ).strip()
             save_setup(data)
             flash("Reader-Setup gespeichert.", "success")

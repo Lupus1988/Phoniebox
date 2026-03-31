@@ -41,22 +41,6 @@
             {% endfor %}
           </select>
         </label>
-        <label>
-          <span>Lesen</span>
-          <select name="read_behavior">
-            {% for option in ["play", "album_load", "queue_append"] %}
-              <option value="{{ option }}" {% if setup_data.reader.read_behavior == option %}selected{% endif %}>{{ option }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label>
-          <span>Entfernen</span>
-          <select name="remove_behavior">
-            {% for option in ["stop", "pause", "nichts"] %}
-              <option value="{{ option }}" {% if setup_data.reader.remove_behavior == option %}selected{% endif %}>{{ option }}</option>
-            {% endfor %}
-          </select>
-        </label>
         <label class="full">
           <span>Anschluss-Hinweis</span>
           <textarea name="connection_hint" rows="4">{{ setup_data.reader.connection_hint }}</textarea>
@@ -71,7 +55,8 @@
         <span>Reader-Priorität</span>
       </div>
       <p class="page-copy">Treiber: {{ reader_option.driver }} · Transport: {{ reader_option.transport }}</p>
-      <p class="page-copy">Pins, die vom Reader gebraucht werden, verschwinden automatisch aus den Tasten- und LED-Dropdowns. Beim Reader-Wechsel hat der Reader immer Priorität.</p>
+      <p class="page-copy">Pins, die vom Reader gebraucht werden, verschwinden automatisch aus den Tasten- und LED-Dropdowns. Lesen und Entfernen eines Tags werden zentral in den Einstellungen festgelegt.</p>
+      <p class="page-copy"><a href="{{ url_for('download_reader_guide', reader_type=reader_option.id) }}">Anschlussplan für {{ reader_option.label }} herunterladen</a></p>
       <div class="info-grid">
         <div><span>Reader</span><strong>{{ hardware_profile.reader.configured_type }}</strong></div>
         <div><span>Buttons</span><strong>{{ hardware_profile.buttons.configured }}</strong></div>

@@ -144,12 +144,10 @@ class RuntimeService:
         return runtime_state
 
     def get_reader_behavior(self):
-        setup = self.load_setup()
         settings = self.load_settings()
-        reader = setup.get("reader", {})
         return {
-            "read": reader.get("read_behavior", settings.get("rfid_read_action", "play")),
-            "remove": reader.get("remove_behavior", settings.get("rfid_remove_action", "stop")),
+            "read": settings.get("rfid_read_action", "play"),
+            "remove": settings.get("rfid_remove_action", "stop"),
         }
 
     def update_hardware_profile(self, runtime_state):
