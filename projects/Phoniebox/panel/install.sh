@@ -9,7 +9,7 @@ SOURCE_DIR=$(cd "$(dirname "$0")" && pwd)
 BACKUP_DIR=$(mktemp -d)
 
 cleanup() {
-  rm -rf "$BACKUP_DIR"
+  sudo rm -rf "$BACKUP_DIR"
 }
 trap cleanup EXIT
 
@@ -31,16 +31,19 @@ sudo mkdir -p "$APP_DIR" "$BIN_DIR"
 sudo cp -a "$SOURCE_DIR"/. "$APP_DIR"/
 
 sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip network-manager avahi-daemon alsa-utils mpg123
+sudo apt-get install -y python3 python3-venv python3-pip python3-rpi.gpio python3-evdev python3-spidev python3-smbus2 python3-serial network-manager avahi-daemon alsa-utils mpg123
 
 sudo cp systemd/phoniebox-panel.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-audio-init.service "$SERVICE_DIR"/
+sudo cp systemd/phoniebox-gpio-poll.service "$SERVICE_DIR"/
+sudo cp systemd/phoniebox-leds.service "$SERVICE_DIR"/
+sudo cp systemd/phoniebox-rfid.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-hotspot-fallback.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-hotspot-fallback.timer "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-runtime-tick.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-runtime-tick.timer "$SERVICE_DIR"/
 
-sudo python3 -m venv "$VENV_DIR"
+sudo python3 -m venv --system-site-packages "$VENV_DIR"
 sudo "$VENV_DIR/bin/pip" install --upgrade pip
 sudo "$VENV_DIR/bin/pip" install -r "$APP_DIR/requirements.txt"
 sudo "$VENV_DIR/bin/python" -c "import sys; sys.path.insert(0, '$APP_DIR'); from app import ensure_data_files; ensure_data_files()"
@@ -68,9 +71,15 @@ fi
 sudo systemctl daemon-reload
 sudo systemctl enable phoniebox-panel.service
 sudo systemctl enable phoniebox-audio-init.service
+sudo systemctl enable phoniebox-gpio-poll.service
+sudo systemctl enable phoniebox-leds.service
+sudo systemctl enable phoniebox-rfid.service
 sudo systemctl enable phoniebox-hotspot-fallback.timer
 sudo systemctl enable phoniebox-runtime-tick.timer
 sudo systemctl restart phoniebox-panel.service
+sudo systemctl restart phoniebox-gpio-poll.service
+sudo systemctl restart phoniebox-leds.service
+sudo systemctl restart phoniebox-rfid.service
 sudo systemctl restart phoniebox-hotspot-fallback.timer
 sudo systemctl restart phoniebox-runtime-tick.timer
 

@@ -10,6 +10,31 @@ class AudioSystemTest(unittest.TestCase):
     @patch.object(audio_module, "list_playback_devices")
     @patch.object(audio_module, "parse_asound_cards")
     @patch.object(audio_module, "detect_device_model")
+    def test_detect_audio_environment_marks_headphones_as_internal_soundcard(
+        self,
+        mock_model,
+        mock_cards,
+        mock_devices,
+    ):
+        mock_model.return_value = "Raspberry Pi 4 Model B Rev 1.1"
+        mock_cards.return_value = [
+            {
+                "card_index": "0",
+                "card_id": "Headphones",
+                "name": "bcm2835 Headphones",
+                "description": "bcm2835 Headphones",
+            }
+        ]
+        mock_devices.return_value = []
+
+        snapshot = audio_module.detect_audio_environment()
+
+        self.assertTrue(snapshot["has_analog_audio"])
+        self.assertIn("Onboard-Analog-Audio erkannt.", snapshot["notes"])
+
+    @patch.object(audio_module, "list_playback_devices")
+    @patch.object(audio_module, "parse_asound_cards")
+    @patch.object(audio_module, "detect_device_model")
     def test_detect_audio_environment_marks_pi_zero_external_card_need(
         self,
         mock_model,
@@ -41,9 +66,7 @@ class AudioSystemTest(unittest.TestCase):
         result = audio_module.apply_audio_profile(
             {
                 "output_mode": "usb_dac",
-                "preferred_output": "auto",
-                "startup_volume": 55,
-                "mixer_control": "auto",
+                "use_startup_volume": False,
             }
         )
 
@@ -66,10 +89,8 @@ class AudioSystemTest(unittest.TestCase):
             result = audio_module.apply_audio_profile(
                 {
                     "output_mode": "usb_dac",
-                    "preferred_output": "hw:1,0",
+                    "use_startup_volume": True,
                     "startup_volume": 55,
-                    "mixer_control": "PCM",
-                    "mono_downmix": False,
                     "playback_backend": "mpg123",
                     "i2s_profile": "auto",
                 },

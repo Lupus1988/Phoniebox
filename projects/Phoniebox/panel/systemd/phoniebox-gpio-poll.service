@@ -1,0 +1,13 @@
+[Unit]
+Description=Phoniebox GPIO Polling
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/phoniebox-panel
+ExecStart=/usr/bin/python3 /opt/phoniebox-panel/scripts/gpio_poll.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -28,6 +28,15 @@
           <input type="number" name="sleep_timer_step" min="1" max="60" value="{{ settings.sleep_timer_step }}">
           <em>min.</em>
         </label>
+        <label class="inline-field">
+          <span>Startlautstärke</span>
+          <input type="number" name="startup_volume" min="0" max="100" value="{{ settings.startup_volume }}">
+          <em>%</em>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="use_startup_volume" {% if settings.use_startup_volume %}checked{% endif %}>
+          <span>Startlautstärke beim Einschalten verwenden</span>
+        </label>
       </div>
     </article>
 

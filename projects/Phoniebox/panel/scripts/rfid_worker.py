@@ -1,0 +1,323 @@
+#!/opt/phoniebox-panel/.venv/bin/python
+import json
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+from hardware.rfid import decode_keycode_to_char, discover_usb_keyboard_devices, evdev_available
+
+if evdev_available():
+    from evdev import InputDevice, categorize, ecodes
+else:
+    InputDevice = None
+    categorize = None
+    ecodes = None
+
+
+DATA_DIR = BASE_DIR / "data"
+SETUP_FILE = DATA_DIR / "setup.json"
+RUNTIME_RFID_URL = "http://127.0.0.1:5080/api/runtime/rfid"
+RUNTIME_RFID_REMOVE_URL = "http://127.0.0.1:5080/api/runtime/rfid/remove"
+
+
+def load_setup():
+    if not SETUP_FILE.exists():
+        return {}
+    try:
+        return json.loads(SETUP_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def post_json(url, payload=None):
+    raw = json.dumps(payload or {}).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=raw,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=3):
+            return True
+    except (urllib.error.URLError, TimeoutError):
+        return False
+
+
+def post_uid(uid):
+    return post_json(RUNTIME_RFID_URL, {"uid": uid})
+
+
+def post_remove():
+    return post_json(RUNTIME_RFID_REMOVE_URL, {})
+
+
+class BaseReader:
+    presence_reader = False
+
+    def poll(self):
+        return None
+
+    def cleanup(self):
+        return None
+
+
+class USBKeyboardReader(BaseReader):
+    def __init__(self):
+        self.devices = []
+        self.current_paths = []
+        self.buffer = ""
+        self.last_refresh = 0.0
+
+    def open_devices(self, paths):
+        devices = []
+        for path in paths:
+            try:
+                device = InputDevice(path)
+                device.grab()
+                devices.append(device)
+            except OSError:
+                continue
+        return devices
+
+    def close_devices(self, devices=None):
+        for device in list(devices or self.devices):
+            try:
+                device.ungrab()
+            except OSError:
+                pass
+            try:
+                device.close()
+            except OSError:
+                pass
+
+    def refresh_devices(self, now):
+        if not evdev_available():
+            return
+        if now - self.last_refresh < 3.0 and self.devices:
+            return
+        new_paths = discover_usb_keyboard_devices()
+        if new_paths != self.current_paths:
+            self.close_devices()
+            self.devices = self.open_devices(new_paths)
+            self.current_paths = new_paths
+        self.last_refresh = now
+
+    def poll(self):
+        now = time.monotonic()
+        self.refresh_devices(now)
+        if not self.devices:
+            time.sleep(0.2)
+            return None
+
+        had_event = False
+        for device in list(self.devices):
+            try:
+                event = device.read_one()
+            except OSError:
+                self.close_devices([device])
+                self.devices = [entry for entry in self.devices if entry is not device]
+                continue
+            if event is None:
+                continue
+            had_event = True
+            if event.type != ecodes.EV_KEY:
+                continue
+            key_event = categorize(event)
+            if key_event.keystate != key_event.key_down:
+                continue
+            keycode = key_event.keycode[0] if isinstance(key_event.keycode, list) else key_event.keycode
+            if keycode in {"KEY_ENTER", "KEY_KPENTER"}:
+                uid = self.buffer.strip()
+                self.buffer = ""
+                return uid or None
+            if keycode == "KEY_BACKSPACE":
+                self.buffer = self.buffer[:-1]
+                continue
+            char = decode_keycode_to_char(keycode)
+            if char:
+                self.buffer += char
+
+        if not had_event:
+            time.sleep(0.03)
+        return None
+
+    def cleanup(self):
+        self.close_devices()
+        self.devices = []
+        self.current_paths = []
+
+
+class RC522Reader(BaseReader):
+    presence_reader = True
+
+    def __init__(self):
+        self.reader = None
+        try:
+            from mfrc522 import SimpleMFRC522
+
+            self.reader = SimpleMFRC522()
+        except Exception:
+            self.reader = None
+
+    def poll(self):
+        if self.reader is None:
+            time.sleep(0.3)
+            return None
+        try:
+            uid = self.reader.read_id_no_block()
+        except Exception:
+            return None
+        return str(uid) if uid else None
+
+    def cleanup(self):
+        backend = getattr(self.reader, "READER", None)
+        for method_name in ["cleanup", "Close_MFRC522"]:
+            method = getattr(backend, method_name, None)
+            if callable(method):
+                try:
+                    method()
+                except Exception:
+                    pass
+
+
+class PN532Reader(BaseReader):
+    presence_reader = True
+
+    def __init__(self, transport):
+        self.transport = transport
+        self.pn532 = None
+        self.handles = []
+        try:
+            import board
+            import busio
+            import digitalio
+            from adafruit_pn532.i2c import PN532_I2C
+            from adafruit_pn532.spi import PN532_SPI
+            from adafruit_pn532.uart import PN532_UART
+        except Exception:
+            return
+
+        try:
+            if transport == "i2c":
+                i2c = busio.I2C(board.SCL, board.SDA)
+                self.handles.append(i2c)
+                self.pn532 = PN532_I2C(i2c, debug=False)
+            elif transport == "spi":
+                spi = busio.SPI(board.SCK, board.MOSI, board.MISO)
+                cs = digitalio.DigitalInOut(board.CE0)
+                self.handles.extend([spi, cs])
+                self.pn532 = PN532_SPI(spi, cs, debug=False)
+            elif transport == "uart":
+                uart = busio.UART(board.TX, board.RX, baudrate=115200, timeout=0.1)
+                self.handles.append(uart)
+                self.pn532 = PN532_UART(uart, debug=False)
+            if self.pn532 is not None:
+                self.pn532.SAM_configuration()
+        except Exception:
+            self.cleanup()
+            self.pn532 = None
+
+    def poll(self):
+        if self.pn532 is None:
+            time.sleep(0.3)
+            return None
+        try:
+            uid = self.pn532.read_passive_target(timeout=0.2)
+        except Exception:
+            return None
+        if not uid:
+            return None
+        if isinstance(uid, (bytes, bytearray)):
+            return uid.hex().upper()
+        return str(uid)
+
+    def cleanup(self):
+        while self.handles:
+            handle = self.handles.pop()
+            for method_name in ["deinit", "close"]:
+                method = getattr(handle, method_name, None)
+                if callable(method):
+                    try:
+                        method()
+                    except Exception:
+                        pass
+
+
+def build_reader(reader_type):
+    if reader_type == "USB":
+        return USBKeyboardReader()
+    if reader_type == "RC522":
+        return RC522Reader()
+    if reader_type == "PN532_I2C":
+        return PN532Reader("i2c")
+    if reader_type == "PN532_SPI":
+        return PN532Reader("spi")
+    if reader_type == "PN532_UART":
+        return PN532Reader("uart")
+    return BaseReader()
+
+
+def main():
+    reader = None
+    reader_type = None
+    active_uid = ""
+    active_seen_at = 0.0
+    last_uid = ""
+    last_uid_at = 0.0
+
+    try:
+        while True:
+            setup = load_setup()
+            configured_type = (((setup.get("reader") or {}).get("type")) or "USB").strip()
+            if configured_type != reader_type:
+                if reader is not None:
+                    reader.cleanup()
+                reader = build_reader(configured_type)
+                reader_type = configured_type
+                active_uid = ""
+                active_seen_at = 0.0
+
+            if reader is None:
+                time.sleep(0.5)
+                continue
+
+            uid = reader.poll()
+            now = time.monotonic()
+
+            if uid:
+                if uid == active_uid and getattr(reader, "presence_reader", False):
+                    active_seen_at = now
+                    continue
+                if uid == last_uid and (now - last_uid_at) < 1.5:
+                    active_uid = uid if getattr(reader, "presence_reader", False) else active_uid
+                    active_seen_at = now
+                    continue
+                if post_uid(uid):
+                    last_uid = uid
+                    last_uid_at = now
+                    if getattr(reader, "presence_reader", False):
+                        active_uid = uid
+                        active_seen_at = now
+                continue
+
+            if getattr(reader, "presence_reader", False) and active_uid and (now - active_seen_at) >= 0.8:
+                if post_remove():
+                    active_uid = ""
+                    active_seen_at = 0.0
+                else:
+                    time.sleep(0.2)
+    finally:
+        if reader is not None:
+            reader.cleanup()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

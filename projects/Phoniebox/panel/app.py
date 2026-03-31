@@ -1,19 +1,26 @@
+import io
 import json
 import os
 import secrets
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, send_file, url_for
 from werkzeug.utils import secure_filename
+try:
+    import gpiod
+except ImportError:
+    gpiod = None
 
 
 BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
+from hardware.gpio import GPIO_PINS, GPIO_TO_BOARD_PIN, gpio_display_label, sample_gpio_levels_sysfs
 from runtime.service import RuntimeService
 from system.audio import apply_audio_profile, deploy_audio_profile, detect_audio_environment, i2s_profile_catalog
 from system.networking import apply_wifi_profile, ensure_hostname, fallback_hotspot_cycle
@@ -28,10 +35,11 @@ SETUP_FILE = DATA_DIR / "setup.json"
 APPLY_REPORT_FILE = DATA_DIR / "last_apply_report.json"
 RUNTIME_FILE = DATA_DIR / "runtime_state.json"
 LINK_SESSION_FILE = DATA_DIR / "rfid_link_session.json"
+BUTTON_DETECT_FILE = DATA_DIR / "button_detect.json"
 AUDIO_PROFILE_DIR = DATA_DIR / "generated" / "audio"
 READER_GUIDE_DIR = BASE_DIR / "assets" / "reader-guides"
+AUDIO_GUIDE_DIR = BASE_DIR / "assets" / "audio-guides"
 HOTSPOT_SECURITY_CHOICES = {"open", "wpa-psk"}
-
 
 app = Flask(
     __name__,
@@ -40,39 +48,26 @@ app = Flask(
 )
 app.secret_key = "phoniebox-panel-dev-secret"
 runtime_service = RuntimeService()
-
-GPIO_PINS = [
-    "GPIO2", "GPIO3", "GPIO4", "GPIO5", "GPIO6", "GPIO7", "GPIO8", "GPIO9", "GPIO10",
-    "GPIO11", "GPIO12", "GPIO13", "GPIO16", "GPIO17", "GPIO18", "GPIO19", "GPIO20",
-    "GPIO21", "GPIO22", "GPIO23", "GPIO24", "GPIO25", "GPIO26", "GPIO27",
-]
 PWM_PINS = {"GPIO12", "GPIO13", "GPIO18", "GPIO19"}
 BUTTON_FUNCTIONS = [
-    "Play/Pause", "Vor", "Zurück", "Lautstärke +", "Lautstärke -", "Sleep/Power",
+    "Play/Pause",
+    "Stopp",
+    "Vor",
+    "Zurück",
+    "Lautstärke +",
+    "Lautstärke -",
+    "Sleep Timer +",
+    "Sleep Timer -",
+    "Power on/off",
 ]
 LED_FUNCTIONS = ["power_on", "standby", "sleep_1", "sleep_2", "sleep_3"]
 READER_OPTIONS = [
-    {"id": "USB", "label": "USB Keyboard Reader", "driver": "hid/keyboard-reader", "transport": "usb"},
+    {"id": "USB", "label": "USB-Reader", "driver": "hid/keyboard-reader", "transport": "usb"},
     {"id": "RC522", "label": "RC522", "driver": "mfrc522", "transport": "spi"},
     {"id": "PN532_I2C", "label": "PN532 (I2C)", "driver": "pn532", "transport": "i2c"},
     {"id": "PN532_SPI", "label": "PN532 (SPI)", "driver": "pn532", "transport": "spi"},
     {"id": "PN532_UART", "label": "PN532 (UART)", "driver": "pn532", "transport": "uart"},
 ]
-AUDIO_OUTPUT_OPTIONS = [
-    {"id": "auto", "label": "Automatisch erkennen"},
-    {"id": "usb_dac", "label": "USB-Soundkarte / USB-DAC"},
-    {"id": "i2s_dac", "label": "GPIO / I2S Audio-HAT"},
-    {"id": "analog_jack", "label": "Analoger Ausgang"},
-    {"id": "hdmi", "label": "HDMI-Audio"},
-    {"id": "bluetooth", "label": "Bluetooth-Lautsprecher"},
-]
-AUDIO_BACKEND_OPTIONS = [
-    {"id": "auto", "label": "Automatisch"},
-    {"id": "mpg123", "label": "mpg123"},
-    {"id": "cvlc", "label": "cvlc"},
-    {"id": "mock", "label": "Mock / Simulation"},
-]
-AUDIO_MIXER_OPTIONS = ["auto", "Master", "PCM", "Speaker", "Digital"]
 
 
 def load_json(path, default):
@@ -395,6 +390,8 @@ def default_settings():
         "max_volume": 85,
         "volume_step": 5,
         "sleep_timer_step": 5,
+        "use_startup_volume": False,
+        "startup_volume": 45,
         "rfid_read_action": "play",
         "rfid_remove_action": "stop",
     }
@@ -406,13 +403,17 @@ def default_setup():
             "type": "USB",
             "connection_hint": "USB-Reader anstecken oder RC522 per SPI verdrahten",
         },
+        "button_long_press_seconds": 2,
         "buttons": [
             {"id": "btn-1", "name": "Play/Pause", "pin": "GPIO17", "press_type": "kurz"},
-            {"id": "btn-2", "name": "Vor", "pin": "GPIO27", "press_type": "kurz"},
-            {"id": "btn-3", "name": "Zurück", "pin": "GPIO22", "press_type": "kurz"},
-            {"id": "btn-4", "name": "Lautstärke +", "pin": "GPIO23", "press_type": "kurz"},
-            {"id": "btn-5", "name": "Lautstärke -", "pin": "GPIO24", "press_type": "kurz"},
-            {"id": "btn-6", "name": "Sleep/Power", "pin": "GPIO25", "press_type": "lang"},
+            {"id": "btn-2", "name": "Stopp", "pin": "", "press_type": "kurz"},
+            {"id": "btn-3", "name": "Vor", "pin": "GPIO27", "press_type": "kurz"},
+            {"id": "btn-4", "name": "Zurück", "pin": "GPIO22", "press_type": "kurz"},
+            {"id": "btn-5", "name": "Lautstärke +", "pin": "GPIO23", "press_type": "kurz"},
+            {"id": "btn-6", "name": "Lautstärke -", "pin": "GPIO24", "press_type": "kurz"},
+            {"id": "btn-7", "name": "Sleep Timer +", "pin": "", "press_type": "kurz"},
+            {"id": "btn-8", "name": "Sleep Timer -", "pin": "", "press_type": "kurz"},
+            {"id": "btn-9", "name": "Power on/off", "pin": "GPIO25", "press_type": "lang"},
         ],
         "leds": [
             {"id": "led-1", "name": "Power", "pin": "GPIO12", "function": "power_on", "brightness": 50},
@@ -422,17 +423,9 @@ def default_setup():
             {"id": "led-5", "name": "Sleep 3/3", "pin": "GPIO20", "function": "sleep_3", "brightness": 90},
         ],
         "audio": {
-            "output_mode": "auto",
-            "preferred_output": "auto",
-            "playback_backend": "auto",
+            "output_mode": "usb_dac",
             "i2s_profile": "auto",
-            "mixer_control": "auto",
-            "startup_volume": 45,
-            "external_soundcard_required": False,
-            "mono_downmix": False,
-            "apply_boot_config": False,
-            "enable_audio_service": True,
-            "connection_hint": "Automatisch erkennen oder USB-/GPIO-Soundkarte auswählen",
+            "connection_hint": "USB- oder I2S-Soundkarte anschließen und auswählen",
         },
         "wifi": {
             "mode": "client_with_fallback_hotspot",
@@ -470,6 +463,20 @@ def default_apply_report():
     return {"ok": True, "summary": "Noch nicht angewendet.", "details": []}
 
 
+def default_button_detect():
+    return {
+        "active": False,
+        "started_at": 0.0,
+        "deadline_at": 0.0,
+        "status": "idle",
+        "message": "",
+        "detected_gpio": "",
+        "detected_pin": "",
+        "baseline": {},
+        "candidate_pins": [],
+    }
+
+
 def default_link_session():
     return {
         "active": False,
@@ -492,6 +499,7 @@ def ensure_data_files():
         APPLY_REPORT_FILE: default_apply_report(),
         RUNTIME_FILE: runtime_service.ensure_runtime(),
         LINK_SESSION_FILE: default_link_session(),
+        BUTTON_DETECT_FILE: default_button_detect(),
     }
     for path, default in defaults.items():
         if not path.exists():
@@ -530,6 +538,20 @@ def save_setup(data):
     save_json(SETUP_FILE, data)
 
 
+def build_audio_runtime_config(audio_setup, settings):
+    config = dict(audio_setup or {})
+    config["playback_backend"] = "mpg123"
+    config["mixer_control"] = "auto"
+    config["preferred_output"] = "auto"
+    config["mono_downmix"] = False
+    config["external_soundcard_required"] = False
+    config["apply_boot_config"] = config.get("output_mode") == "i2s_dac"
+    config["use_startup_volume"] = bool(settings.get("use_startup_volume", False))
+    config["enable_audio_service"] = config["use_startup_volume"]
+    config["startup_volume"] = to_int(settings.get("startup_volume"), 45, 0, 100)
+    return config
+
+
 def load_apply_report():
     return load_json(APPLY_REPORT_FILE, default_apply_report())
 
@@ -545,6 +567,122 @@ def load_link_session():
 def save_link_session(data):
     save_json(LINK_SESSION_FILE, data)
 
+
+def load_button_detect():
+    return merge_defaults(load_json(BUTTON_DETECT_FILE, default_button_detect()), default_button_detect())
+
+
+def save_button_detect(data):
+    save_json(BUTTON_DETECT_FILE, data)
+
+
+def sample_gpio_levels(gpio_names):
+    gpio_names = [name for name in gpio_names if name]
+    helper_script = BASE_DIR / "scripts" / "gpio_sample.py"
+    if helper_script.exists():
+        result = subprocess.run(
+            ["/usr/bin/python3", str(helper_script), *gpio_names],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            try:
+                payload = json.loads(result.stdout.strip() or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            if isinstance(payload, dict) and payload:
+                return {str(name): int(value) for name, value in payload.items()}
+    if shutil.which("gpioget") is not None:
+        result = subprocess.run(
+            ["gpioget", "--numeric", "--by-name", *gpio_names],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            values = result.stdout.strip().split()
+            if len(values) == len(gpio_names):
+                return {name: int(value == "1") for name, value in zip(gpio_names, values)}
+    sysfs_sample = sample_gpio_levels_sysfs(gpio_names)
+    if sysfs_sample:
+        return sysfs_sample
+    if gpiod is None:
+        return {}
+    chip_paths = sorted(Path("/dev").glob("gpiochip*"))
+    if not chip_paths:
+        return {}
+
+    sampled = {}
+    settings = gpiod.LineSettings(direction=gpiod.line.Direction.INPUT, bias=gpiod.line.Bias.AS_IS)
+    for chip_path in chip_paths:
+        if len(sampled) == len(gpio_names):
+            break
+        try:
+            chip = gpiod.Chip(str(chip_path))
+        except OSError:
+            continue
+        try:
+            pending = []
+            for gpio_name in gpio_names:
+                if gpio_name in sampled:
+                    continue
+                try:
+                    offset = chip.line_offset_from_id(gpio_name)
+                except OSError:
+                    continue
+                pending.append((gpio_name, offset))
+            if not pending:
+                chip.close()
+                continue
+            request = chip.request_lines({(offset,): settings for _, offset in pending}, consumer="phoniebox-button-detect")
+            try:
+                for gpio_name, offset in pending:
+                    sampled[gpio_name] = int(request.get_value(offset) == gpiod.line.Value.ACTIVE)
+            finally:
+                request.release()
+                chip.close()
+        except OSError:
+            chip.close()
+            continue
+    return sampled
+
+
+def button_detection_candidates(setup_data):
+    return pin_choices(setup_data, "button")
+
+
+def button_detect_status_payload(setup_data=None):
+    session = load_button_detect()
+    if not session.get("active"):
+        return session
+
+    now = time.time()
+    if now >= float(session.get("deadline_at", 0)):
+        session["active"] = False
+        session["status"] = "timeout"
+        session["message"] = "Keine Taste erkannt."
+        save_button_detect(session)
+        return session
+
+    setup_data = setup_data or load_setup()
+    candidates = session.get("candidate_pins") or button_detection_candidates(setup_data)
+    current_levels = sample_gpio_levels(candidates)
+    baseline = session.get("baseline", {})
+    for gpio_name in candidates:
+        if gpio_name not in current_levels or gpio_name not in baseline:
+            continue
+        if int(current_levels[gpio_name]) != int(baseline[gpio_name]):
+            session["active"] = False
+            session["status"] = "detected"
+            session["detected_gpio"] = gpio_name
+            session["detected_pin"] = str(GPIO_TO_BOARD_PIN.get(gpio_name, ""))
+            session["message"] = gpio_display_label(gpio_name)
+            save_button_detect(session)
+            return session
+
+    session["remaining_seconds"] = max(0, int(session["deadline_at"] - now + 0.999))
+    return session
 
 def start_link_session(album):
     session = {
@@ -596,6 +734,18 @@ def to_int(value, fallback, minimum=None, maximum=None):
         number = max(minimum, number)
     if maximum is not None:
         number = min(maximum, number)
+    return number
+
+
+def to_float(value, fallback, minimum=None, maximum=None):
+    try:
+        number = float(str(value).strip().replace(",", "."))
+    except (TypeError, ValueError):
+        number = float(fallback)
+    if minimum is not None:
+        number = max(float(minimum), number)
+    if maximum is not None:
+        number = min(float(maximum), number)
     return number
 
 
@@ -701,8 +851,20 @@ def reserved_reader_pins(reader_type):
     return set()
 
 
-def pin_choices(reader_type, role):
-    reserved = reserved_reader_pins(reader_type)
+def reserved_audio_pins(output_mode):
+    if (output_mode or "").strip() == "i2s_dac":
+        return {"GPIO18", "GPIO19", "GPIO20", "GPIO21"}
+    return set()
+
+
+def reserved_system_pins(setup_data):
+    reader_type = setup_data.get("reader", {}).get("type", "")
+    output_mode = setup_data.get("audio", {}).get("output_mode", "")
+    return reserved_reader_pins(reader_type) | reserved_audio_pins(output_mode)
+
+
+def pin_choices(setup_data, role):
+    reserved = reserved_system_pins(setup_data)
     pins = GPIO_PINS
     if role == "led":
         pins = [pin for pin in GPIO_PINS if pin in PWM_PINS or pin not in reserved]
@@ -724,25 +886,21 @@ def collect_conflicts(setup_data):
     warnings = []
     buttons = setup_data.get("buttons", [])
     leds = setup_data.get("leds", [])
-    reader = setup_data.get("reader", {})
 
     button_pins = {}
-    press_functions = {}
     for button in buttons:
         pin = button.get("pin", "").strip()
         press_type = button.get("press_type", "kurz").strip() or "kurz"
         function_name = button.get("name", "Taste").strip() or "Taste"
         if pin:
             button_pins.setdefault(pin, {}).setdefault(press_type, []).append(function_name)
-        press_functions.setdefault(press_type, {}).setdefault(function_name, []).append(pin or "-")
     for pin, by_press_type in button_pins.items():
+        total_assignments = sum(len(names) for names in by_press_type.values())
+        if total_assignments > 2:
+            warnings.append(f"Tasten an {pin} müssen neu zugeordnet werden. Ein Pin darf nur für kurz und lang verwendet werden.")
         for press_type, names in by_press_type.items():
             if len(names) > 1:
-                warnings.append(f"Tasten-PIN {pin} ist für {press_type} mehrfach belegt: {', '.join(names)}")
-    for press_type, functions in press_functions.items():
-        for function_name, pins in functions.items():
-            if len(pins) > 1:
-                warnings.append(f"Funktion {function_name} ist für {press_type} mehrfach vergeben: {', '.join(pins)}")
+                warnings.append(f"Tasten an {pin} müssen neu zugeordnet werden. {press_type} ist mehrfach belegt: {', '.join(names)}")
 
     led_pins = {}
     for led in leds:
@@ -755,15 +913,16 @@ def collect_conflicts(setup_data):
 
     overlap = set(button_pins) & set(led_pins)
     for pin in sorted(overlap):
-        warnings.append(f"PIN {pin} ist gleichzeitig für Taste und LED vergeben.")
+        warnings.append(f"PIN {pin} ist gleichzeitig für Taste und LED vergeben und muss neu zugeordnet werden.")
 
-    reserved = reserved_reader_pins(reader.get("type", ""))
+    reserved = reserved_system_pins(setup_data)
     for pin, by_press_type in button_pins.items():
         if pin in reserved:
-            warnings.append(f"Tasten-PIN {pin} kollidiert mit Reader-{reader.get('type', 'Unbekannt')}.")
+            button_names = [name for names in by_press_type.values() for name in names]
+            warnings.append(f"Taste {', '.join(button_names)} muss neu zugeordnet werden. {pin} wird jetzt von Reader oder Soundkarte benötigt.")
     for pin, names in led_pins.items():
         if pin in reserved:
-            warnings.append(f"LED-PIN {pin} kollidiert mit Reader-{reader.get('type', 'Unbekannt')}.")
+            warnings.append(f"LED {', '.join(names)} muss neu zugeordnet werden. {pin} wird jetzt von Reader oder Soundkarte benötigt.")
 
     wifi = setup_data.get("wifi", {})
     if normalize_hotspot_security(wifi.get("hotspot_security")) == "wpa-psk" and len(wifi.get("hotspot_password", "")) < 8:
@@ -775,22 +934,19 @@ def collect_conflicts(setup_data):
 def mapping_errors(setup_data):
     errors = []
     buttons = setup_data.get("buttons", [])
-    seen_pin_press = set()
-    seen_function_press = set()
+    pin_usage = {}
     for button in buttons:
         pin = button.get("pin", "").strip()
         press_type = button.get("press_type", "kurz").strip() or "kurz"
         function_name = button.get("name", "").strip()
         if not pin or not function_name:
             continue
-        key_pin = (pin, press_type)
-        if key_pin in seen_pin_press:
+        used_presses = pin_usage.setdefault(pin, set())
+        if press_type in used_presses:
             errors.append(f"GPIO {pin} ist für {press_type} mehrfach belegt.")
-        seen_pin_press.add(key_pin)
-        key_function = (function_name, press_type)
-        if key_function in seen_function_press:
-            errors.append(f"Funktion {function_name} ist für {press_type} mehrfach vergeben.")
-        seen_function_press.add(key_function)
+        used_presses.add(press_type)
+        if len(used_presses) > 2:
+            errors.append(f"GPIO {pin} ist zu oft belegt.")
     return errors
 
 
@@ -812,31 +968,30 @@ def reader_guide_path(reader_type):
     return READER_GUIDE_DIR / reader_guide_filename(reader_type)
 
 
-def audio_output_choices():
-    return AUDIO_OUTPUT_OPTIONS
+def audio_guide_filename(output_mode):
+    return {
+        "i2s_dac": "i2s-dac.txt",
+    }.get(output_mode, "")
 
 
-def audio_backend_choices():
-    return AUDIO_BACKEND_OPTIONS
+def audio_guide_path(output_mode):
+    filename = audio_guide_filename(output_mode)
+    return AUDIO_GUIDE_DIR / filename if filename else Path("")
+
+
+def audio_output_choices(environment=None):
+    environment = environment or detect_audio_environment()
+    choices = [
+        {"id": "usb_dac", "label": "USB-Soundkarte"},
+        {"id": "i2s_dac", "label": "I2S-Soundkarte"},
+    ]
+    if environment.get("has_analog_audio"):
+        choices.insert(1, {"id": "analog_jack", "label": "Interne Soundkarte"})
+    return choices
 
 
 def audio_i2s_profile_choices():
     return i2s_profile_catalog()
-
-
-def audio_output_device_choices():
-    environment = detect_audio_environment()
-    choices = [{"id": "auto", "label": "Automatisch / bestes Gerät"}]
-    for card in environment.get("playback_devices", []):
-        label = f"{card.get('name', 'Karte')} / {card.get('device_name', 'Ausgabe')} ({card.get('alsa_hw', '')})"
-        choices.append({"id": card.get("alsa_hw", "auto"), "label": label})
-    for card in environment.get("cards", []):
-        hw_id = f"hw:{card.get('card_index', '0')},0"
-        if any(choice["id"] == hw_id for choice in choices):
-            continue
-        label = f"{card.get('name', 'Karte')} ({hw_id})"
-        choices.append({"id": hw_id, "label": label})
-    return choices
 
 
 def network_targets(setup_data):
@@ -856,6 +1011,20 @@ def summarize_apply(ok):
     if ok:
         return "Systemprofil erfolgreich angewendet."
     return "Systemprofil konnte nicht vollständig angewendet werden."
+
+
+def apply_network_setup(wifi_config):
+    hostname_result = ensure_hostname(wifi_config.get("hostname", "phoniebox"))
+    network_result = apply_wifi_profile(wifi_config)
+    details = hostname_result.get("details", []) + network_result.get("details", [])
+    ok = hostname_result.get("ok", False) and network_result.get("ok", False)
+    report = {
+        "ok": ok,
+        "summary": summarize_apply(ok),
+        "details": details or ["Keine Detailausgabe vorhanden."],
+    }
+    save_apply_report(report)
+    return report
 
 
 def build_player_context(snapshot):
@@ -916,18 +1085,16 @@ ensure_data_files()
 @app.context_processor
 def inject_choices():
     setup_data = load_setup()
-    reader_type = setup_data.get("reader", {}).get("type", "USB")
+    audio_environment = detect_audio_environment()
     return {
         "reader_options": reader_catalog(),
         "button_functions": BUTTON_FUNCTIONS,
         "led_functions": LED_FUNCTIONS,
-        "button_pin_choices": pin_choices(reader_type, "button"),
-        "led_pin_choices": pin_choices(reader_type, "led"),
-        "audio_output_options": audio_output_choices(),
-        "audio_backend_options": audio_backend_choices(),
+        "button_pin_choices": pin_choices(setup_data, "button"),
+        "led_pin_choices": pin_choices(setup_data, "led"),
+        "audio_output_options": audio_output_choices(audio_environment),
         "audio_i2s_profile_options": audio_i2s_profile_choices(),
-        "audio_output_device_choices": audio_output_device_choices(),
-        "audio_mixer_options": AUDIO_MIXER_OPTIONS,
+        "audio_environment": audio_environment,
     }
 
 
@@ -983,6 +1150,30 @@ def download_reader_guide(reader_type):
         flash("Für diesen Reader ist noch kein Anschlussplan hinterlegt.", "error")
         return redirect(url_for("setup"))
     return send_file(guide_path, as_attachment=True, download_name=guide_path.name)
+
+
+@app.route("/setup/audio-guide/<output_mode>")
+def download_audio_guide(output_mode):
+    guide_path = audio_guide_path(output_mode)
+    if not guide_path or not guide_path.exists():
+        flash("Für diese Soundkarte ist noch kein Anschlussplan hinterlegt.", "error")
+        return redirect(url_for("setup"))
+    return send_file(guide_path, as_attachment=True, download_name=guide_path.name)
+
+
+@app.route("/setup/logs")
+def download_setup_logs():
+    snapshot = runtime_service.status()
+    payload = {
+        "setup": load_setup(),
+        "settings": load_settings(),
+        "apply_report": load_apply_report(),
+        "runtime": snapshot.get("runtime", {}),
+        "player": snapshot.get("player", {}),
+        "hardware": snapshot.get("hardware", {}),
+    }
+    content = io.BytesIO(json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8"))
+    return send_file(content, as_attachment=True, download_name="phoniebox-setup-logs.txt", mimetype="text/plain")
 
 
 @app.route("/library", methods=["GET", "POST"])
@@ -1139,6 +1330,8 @@ def apply_settings_form(data, source):
     data["max_volume"] = to_int(source.get("max_volume"), data["max_volume"], 10, 100)
     data["volume_step"] = to_int(source.get("volume_step"), data["volume_step"], 1, 25)
     data["sleep_timer_step"] = to_int(source.get("sleep_timer_step"), data["sleep_timer_step"], 1, 60)
+    data["use_startup_volume"] = source.get("use_startup_volume") == "on"
+    data["startup_volume"] = to_int(source.get("startup_volume"), data.get("startup_volume", 45), 0, 100)
     data["rfid_read_action"] = source.get("rfid_read_action", data["rfid_read_action"])
     data["rfid_remove_action"] = source.get("rfid_remove_action", data["rfid_remove_action"])
     return data
@@ -1172,24 +1365,56 @@ def collect_rows(prefix, columns):
 def default_button_rows():
     return [
         {"id": "btn-1", "name": "Play/Pause", "pin": "GPIO17", "press_type": "kurz"},
-        {"id": "btn-2", "name": "Vor", "pin": "GPIO27", "press_type": "kurz"},
-        {"id": "btn-3", "name": "Zurück", "pin": "GPIO22", "press_type": "kurz"},
-        {"id": "btn-4", "name": "Lautstärke +", "pin": "GPIO23", "press_type": "kurz"},
-        {"id": "btn-5", "name": "Lautstärke -", "pin": "GPIO24", "press_type": "kurz"},
-        {"id": "btn-6", "name": "Sleep/Power", "pin": "GPIO25", "press_type": "lang"},
+        {"id": "btn-2", "name": "Stopp", "pin": "", "press_type": "kurz"},
+        {"id": "btn-3", "name": "Vor", "pin": "GPIO27", "press_type": "kurz"},
+        {"id": "btn-4", "name": "Zurück", "pin": "GPIO22", "press_type": "kurz"},
+        {"id": "btn-5", "name": "Lautstärke +", "pin": "GPIO23", "press_type": "kurz"},
+        {"id": "btn-6", "name": "Lautstärke -", "pin": "GPIO24", "press_type": "kurz"},
+        {"id": "btn-7", "name": "Sleep Timer +", "pin": "", "press_type": "kurz"},
+        {"id": "btn-8", "name": "Sleep Timer -", "pin": "", "press_type": "kurz"},
+        {"id": "btn-9", "name": "Power on/off", "pin": "GPIO25", "press_type": "lang"},
     ]
+
+
+def available_press_types(rows, row_index):
+    current = rows[row_index] if row_index < len(rows) else {}
+    current_pin = current.get("pin", "").strip()
+    if not current_pin:
+        return ["kurz", "lang"]
+    used = set()
+    for index, button in enumerate(rows):
+        if index == row_index:
+            continue
+        if button.get("pin", "").strip() == current_pin:
+            used.add(button.get("press_type", "kurz").strip() or "kurz")
+    return [option for option in ["kurz", "lang"] if option not in used] or ["kurz", "lang"]
 
 
 def button_mapping_rows(setup_data):
     rows = []
     buttons = setup_data.get("buttons", []) or default_button_rows()
-    for index, button in enumerate(buttons):
+    assignments = {button.get("name", ""): button for button in buttons}
+    valid_pins = pin_choices(setup_data, "button")
+    base_rows = []
+    for function_name in BUTTON_FUNCTIONS:
+        button = assignments.get(function_name, {"name": function_name, "pin": "", "press_type": "kurz"})
+        base_rows.append(button)
+    for index, button in enumerate(base_rows):
+        function_name = button.get("name", "")
+        current_pin = button.get("pin", "")
+        pin_options = list(valid_pins)
+        current_pin_invalid = bool(current_pin and current_pin not in valid_pins)
+        if current_pin_invalid:
+            pin_options = [current_pin] + pin_options
         rows.append(
             {
                 "index": index,
-                "pin": button.get("pin", ""),
-                "short_function": button.get("name", "") if button.get("press_type", "kurz") == "kurz" else "",
-                "long_function": button.get("name", "") if button.get("press_type", "kurz") == "lang" else "",
+                "name": function_name,
+                "pin": current_pin,
+                "press_type": button.get("press_type", "kurz") or "kurz",
+                "pin_options": pin_options,
+                "press_type_options": available_press_types(base_rows, index),
+                "pin_invalid": current_pin_invalid,
             }
         )
     return rows
@@ -1204,9 +1429,6 @@ def setup():
 
         if section == "reader":
             data["reader"]["type"] = request.form.get("reader_type", data["reader"]["type"]).strip() or "USB"
-            data["reader"]["connection_hint"] = request.form.get(
-                "connection_hint", data["reader"]["connection_hint"]
-            ).strip()
             save_setup(data)
             flash("Reader-Setup gespeichert.", "success")
             return redirect(url_for("setup"))
@@ -1216,34 +1438,35 @@ def setup():
             row_count = to_int(request.form.get("button_count"), 0, 0, 50)
             for index in range(row_count):
                 pin = request.form.get(f"button_pin_{index}", "").strip()
-                short_function = request.form.get(f"button_short_function_{index}", "").strip()
-                long_function = request.form.get(f"button_long_function_{index}", "").strip()
-                if pin and short_function:
+                function_name = BUTTON_FUNCTIONS[index] if index < len(BUTTON_FUNCTIONS) else ""
+                press_type = request.form.get(f"button_press_type_{index}", "kurz").strip() or "kurz"
+                if pin and function_name:
                     new_buttons.append(
                         {
                             "id": f"btn-{len(new_buttons) + 1}",
-                            "name": short_function,
+                            "name": function_name,
                             "pin": pin,
-                            "press_type": "kurz",
-                        }
-                    )
-                if pin and long_function:
-                    new_buttons.append(
-                        {
-                            "id": f"btn-{len(new_buttons) + 1}",
-                            "name": long_function,
-                            "pin": pin,
-                            "press_type": "lang",
+                            "press_type": press_type,
                         }
                     )
             candidate = dict(data)
             candidate["buttons"] = new_buttons
+            candidate["button_long_press_seconds"] = round(
+                to_float(
+                request.form.get("button_long_press_seconds"),
+                data.get("button_long_press_seconds", 2),
+                1,
+                10,
+                ),
+                1,
+            )
             errors = mapping_errors(candidate)
             if errors:
                 for error in errors:
                     flash(error, "error")
                 return redirect(url_for("setup"))
             data["buttons"] = new_buttons
+            data["button_long_press_seconds"] = candidate["button_long_press_seconds"]
             save_setup(data)
             flash("Tastenbelegung gespeichert.", "success")
             return redirect(url_for("setup"))
@@ -1266,39 +1489,25 @@ def setup():
 
         if section == "audio":
             audio = data["audio"]
-            audio["output_mode"] = request.form.get("output_mode", audio.get("output_mode", "auto")).strip() or "auto"
-            audio["preferred_output"] = request.form.get(
-                "preferred_output",
-                audio.get("preferred_output", "auto"),
-            ).strip() or "auto"
-            audio["playback_backend"] = request.form.get(
-                "playback_backend",
-                audio.get("playback_backend", "auto"),
-            ).strip() or "auto"
-            audio["i2s_profile"] = request.form.get(
-                "i2s_profile",
-                audio.get("i2s_profile", "auto"),
-            ).strip() or "auto"
-            audio["mixer_control"] = request.form.get(
-                "mixer_control",
-                audio.get("mixer_control", "auto"),
-            ).strip() or "auto"
-            audio["startup_volume"] = to_int(
-                request.form.get("startup_volume"),
-                audio.get("startup_volume", 45),
-                0,
-                100,
-            )
-            audio["external_soundcard_required"] = request.form.get("external_soundcard_required") == "on"
-            audio["mono_downmix"] = request.form.get("mono_downmix") == "on"
-            audio["apply_boot_config"] = request.form.get("apply_boot_config") == "on"
-            audio["enable_audio_service"] = request.form.get("enable_audio_service") == "on"
-            audio["connection_hint"] = request.form.get(
-                "audio_connection_hint",
-                audio.get("connection_hint", ""),
-            ).strip()
+            audio["output_mode"] = request.form.get("output_mode", audio.get("output_mode", "usb_dac")).strip() or "usb_dac"
+            if audio["output_mode"] == "i2s_dac":
+                audio["i2s_profile"] = request.form.get(
+                    "i2s_profile",
+                    audio.get("i2s_profile", "auto"),
+                ).strip() or "auto"
+            else:
+                audio["i2s_profile"] = "auto"
             save_setup(data)
-            flash("Audio-Profil gespeichert.", "success")
+            audio_config = build_audio_runtime_config(audio, load_settings())
+            apply_audio_profile(audio_config, AUDIO_PROFILE_DIR)
+            result = deploy_audio_profile(audio_config, AUDIO_PROFILE_DIR)
+            report = {
+                "ok": result.get("ok", False),
+                "summary": "Soundkarte gespeichert und angewendet." if result.get("ok") else "Soundkarte gespeichert, Systemprofil aber nur teilweise angewendet.",
+                "details": result.get("details", []) or ["Keine Detailausgabe vorhanden."],
+            }
+            save_apply_report(report)
+            flash(report["summary"], "success" if report["ok"] else "error")
             return redirect(url_for("setup"))
 
         if section == "simulate_gpio":
@@ -1346,7 +1555,11 @@ def setup():
                 "browser_name", wifi.get("browser_name", f"{wifi['hostname']}.local")
             ).strip() or f"{wifi['hostname']}.local"
             save_setup(data)
-            flash("WLAN-/Hotspot-Profil gespeichert.", "success")
+            report = apply_network_setup(wifi)
+            flash(
+                "Hotspot gespeichert und angewendet." if report["ok"] else "Hotspot gespeichert, Systemprofil aber nur teilweise angewendet.",
+                "success" if report["ok"] else "error",
+            )
             return redirect(url_for("setup"))
 
         if section == "factory_wifi":
@@ -1367,40 +1580,7 @@ def setup():
             return redirect(url_for("setup"))
 
         if section == "apply_network":
-            wifi = data["wifi"]
-            hostname_result = ensure_hostname(wifi.get("hostname", "phoniebox"))
-            network_result = apply_wifi_profile(wifi)
-            details = hostname_result.get("details", []) + network_result.get("details", [])
-            ok = hostname_result.get("ok", False) and network_result.get("ok", False)
-            report = {
-                "ok": ok,
-                "summary": summarize_apply(ok),
-                "details": details or ["Keine Detailausgabe vorhanden."],
-            }
-            save_apply_report(report)
-            flash(report["summary"], "success" if ok else "error")
-            return redirect(url_for("setup"))
-
-        if section == "apply_audio":
-            result = apply_audio_profile(data.get("audio", {}), AUDIO_PROFILE_DIR)
-            report = {
-                "ok": result.get("ok", False),
-                "summary": "Audio-Profil erkannt und vorbereitet." if result.get("ok") else "Audio-Profil nur teilweise vorbereitet.",
-                "details": result.get("details", []) or ["Keine Detailausgabe vorhanden."],
-            }
-            save_apply_report(report)
-            flash(report["summary"], "success" if report["ok"] else "error")
-            return redirect(url_for("setup"))
-
-        if section == "deploy_audio":
-            apply_audio_profile(data.get("audio", {}), AUDIO_PROFILE_DIR)
-            result = deploy_audio_profile(data.get("audio", {}), AUDIO_PROFILE_DIR)
-            report = {
-                "ok": result.get("ok", False),
-                "summary": "Audio-Systemprofil installiert." if result.get("ok") else "Audio-Systemprofil konnte nicht vollständig installiert werden.",
-                "details": result.get("details", []) or ["Keine Detailausgabe vorhanden."],
-            }
-            save_apply_report(report)
+            report = apply_network_setup(data["wifi"])
             flash(report["summary"], "success" if report["ok"] else "error")
             return redirect(url_for("setup"))
 
@@ -1438,8 +1618,12 @@ def setup():
                         "priority": priority,
                     }
                 )
-                flash(f"Netzwerk {ssid} gespeichert.", "success")
             save_setup(data)
+            report = apply_network_setup(wifi)
+            flash(
+                f"Netzwerk {ssid} gespeichert und angewendet." if report["ok"] else f"Netzwerk {ssid} gespeichert, Systemprofil aber nur teilweise angewendet.",
+                "success" if report["ok"] else "error",
+            )
             return redirect(url_for("setup"))
 
         if section == "delete_wifi_network":
@@ -1449,7 +1633,11 @@ def setup():
                 network for network in wifi["saved_networks"] if network["id"] != network_id
             ]
             save_setup(data)
-            flash("Gespeichertes WLAN entfernt.", "success")
+            report = apply_network_setup(wifi)
+            flash(
+                "Gespeichertes WLAN entfernt und Systemprofil aktualisiert." if report["ok"] else "WLAN entfernt, Systemprofil aber nur teilweise aktualisiert.",
+                "success" if report["ok"] else "error",
+            )
             return redirect(url_for("setup"))
 
     wifi_snapshot = get_wifi_snapshot()
@@ -1483,6 +1671,41 @@ def api_hardware():
 @app.route("/api/audio")
 def api_audio():
     return jsonify(detect_audio_environment())
+
+
+@app.route("/api/setup/button-detect/start", methods=["POST"])
+def api_setup_button_detect_start():
+    setup_data = load_setup()
+    candidates = button_detection_candidates(setup_data)
+    baseline = sample_gpio_levels(candidates)
+    if not baseline:
+        session = default_button_detect()
+        session["status"] = "unavailable"
+        session["message"] = "Keine GPIO-Tasterkennung verfügbar."
+        save_button_detect(session)
+        return jsonify({"ok": False, **session}), 503
+
+    now = time.time()
+    session = {
+        "active": True,
+        "started_at": now,
+        "deadline_at": now + 15,
+        "status": "listening",
+        "message": "Warte auf Tastendruck.",
+        "detected_gpio": "",
+        "detected_pin": "",
+        "baseline": baseline,
+        "candidate_pins": candidates,
+        "remaining_seconds": 15,
+    }
+    save_button_detect(session)
+    return jsonify({"ok": True, **session})
+
+
+@app.route("/api/setup/button-detect/status")
+def api_setup_button_detect_status():
+    session = button_detect_status_payload(load_setup())
+    return jsonify({"ok": True, **session})
 
 
 @app.route("/api/runtime/tick", methods=["POST"])
@@ -1570,7 +1793,9 @@ def api_runtime_button():
     payload = request.get_json(silent=True) or {}
     name = str(payload.get("name", request.form.get("name", ""))).strip()
     press_type = str(payload.get("press_type", request.form.get("press_type", "kurz"))).strip()
-    return jsonify(runtime_service.trigger_button(name, press_type))
+    held_seconds = payload.get("held_seconds", request.form.get("held_seconds"))
+    resolved_press_type = runtime_service.classify_press_type(held_seconds, press_type)
+    return jsonify(runtime_service.trigger_button(name, resolved_press_type))
 
 
 @app.route("/api/runtime/seek", methods=["POST"])

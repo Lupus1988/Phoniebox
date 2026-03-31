@@ -1,0 +1,13 @@
+[Unit]
+Description=Phoniebox RFID Worker
+After=network.target phoniebox-panel.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/phoniebox-panel
+ExecStart=/opt/phoniebox-panel/.venv/bin/python /opt/phoniebox-panel/scripts/rfid_worker.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

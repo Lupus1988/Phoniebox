@@ -3,18 +3,12 @@
   <section class="page-head">
     <div>
     </div>
-    <div class="status-cluster">
-      <span class="status-pill neutral">{{ runtime_state.playback_state }}</span>
-      <span class="status-pill {% if hardware_profile.ready_for_integration %}ok{% else %}idle{% endif %}">
-        {% if hardware_profile.ready_for_integration %}vorbereitet{% else %}offen{% endif %}
-      </span>
-    </div>
   </section>
 
   {% if setup_warnings %}
     <article class="panel-box warning-box">
       <div class="panel-box-head">
-        <h3>Konflikte</h3>
+        <h3>Hinweise</h3>
         <span>{{ setup_warnings|length }} Hinweise</span>
       </div>
       <ul class="plain-list">
@@ -26,7 +20,7 @@
   {% endif %}
 
   <section class="setup-hero-grid">
-    <form method="post" class="panel-box">
+    <form method="post" class="panel-box setup-save-card">
       <input type="hidden" name="section" value="reader">
       <div class="panel-box-head">
         <h3>RFID-Reader</h3>
@@ -41,230 +35,36 @@
             {% endfor %}
           </select>
         </label>
+        {% if reader_option.id != "USB" %}
         <label class="full">
           <span>Anschluss-Hinweis</span>
-          <textarea name="connection_hint" rows="4">{{ setup_data.reader.connection_hint }}</textarea>
+          <a href="{{ url_for('download_reader_guide', reader_type=reader_option.id) }}">Anschlussplan für {{ reader_option.label }} herunterladen</a>
         </label>
-      </div>
-      <button class="primary full" type="submit">Reader speichern</button>
-    </form>
-
-    <article class="panel-box">
-      <div class="panel-box-head">
-        <h3>Anschluss-Hinweis</h3>
-        <span>Reader-Priorität</span>
+        {% endif %}
       </div>
       <p class="page-copy">Treiber: {{ reader_option.driver }} · Transport: {{ reader_option.transport }}</p>
-      <p class="page-copy">Pins, die vom Reader gebraucht werden, verschwinden automatisch aus den Tasten- und LED-Dropdowns. Lesen und Entfernen eines Tags werden zentral in den Einstellungen festgelegt.</p>
-      <p class="page-copy"><a href="{{ url_for('download_reader_guide', reader_type=reader_option.id) }}">Anschlussplan für {{ reader_option.label }} herunterladen</a></p>
-      <div class="info-grid">
-        <div><span>Reader</span><strong>{{ hardware_profile.reader.configured_type }}</strong></div>
-        <div><span>Buttons</span><strong>{{ hardware_profile.buttons.configured }}</strong></div>
-        <div><span>LEDs</span><strong>{{ hardware_profile.leds.configured }}</strong></div>
-        <div><span>Audio</span><strong>{{ hardware_profile.audio.albums_with_playlist }} Playlists</strong></div>
-      </div>
-    </article>
-  </section>
-
-  <section class="setup-core-grid">
-    <form method="post" class="panel-box">
-      <input type="hidden" name="section" value="buttons">
-      <input type="hidden" name="button_count" value="{{ button_mapping_rows|length }}">
-      <div class="panel-box-head">
-        <h3>Tastenzuweisung</h3>
-        <span>kurz und lang getrennt</span>
-      </div>
-      <div class="mapping-table-head">
-        <div>Funktion</div>
-        <div>PIN</div>
-        <div>Kurz</div>
-        <div>Lang</div>
-      </div>
-      <div class="mapping-table">
-        {% for row in button_mapping_rows %}
-          <div class="mapping-row">
-            <div class="mapping-name">Taste {{ loop.index }}</div>
-            <div>
-              <select name="button_pin_{{ row.index }}">
-                {% for pin in button_pin_choices %}
-                  <option value="{{ pin }}" {% if row.pin == pin %}selected{% endif %}>{{ pin }}</option>
-                {% endfor %}
-              </select>
-            </div>
-            <div class="drop-slot" data-drop-slot data-empty-label="Kurzfunktion wählen">
-              <strong data-drop-label>{{ row.short_function or "Kurzfunktion wählen" }}</strong>
-              <input type="hidden" name="button_short_function_{{ row.index }}" value="{{ row.short_function }}">
-            </div>
-            <div class="drop-slot" data-drop-slot data-empty-label="Langfunktion wählen">
-              <strong data-drop-label>{{ row.long_function or "Langfunktion wählen" }}</strong>
-              <input type="hidden" name="button_long_function_{{ row.index }}" value="{{ row.long_function }}">
-            </div>
-          </div>
-        {% endfor %}
-      </div>
-      <div class="chip-stack palette-strip">
-        {% for option in button_functions %}
-          <button class="soft-chip" type="button" draggable="true" data-function-chip="{{ option }}">{{ option }}</button>
-        {% endfor %}
-      </div>
-      <p class="table-note">Desktop: Drag-and-Drop. Touch-Geräte: Funktion antippen und anschließend Kurz oder Lang antippen.</p>
-      <button class="primary full" type="submit">Tasten speichern</button>
-      <div class="setup-note">
-        <p>Sleeptimer in 3 Stufen: 1/3, 2/3, 3/3. Gleiche Pins sind nur dann sinnvoll, wenn kurzer und langer Druck unterschiedliche Funktionen haben.</p>
-      </div>
+      <p class="page-copy">Pins, die vom Reader gebraucht werden, verschwinden automatisch aus den Tasten- und LED-Dropdowns.</p>
+      <button class="primary setup-save-button" type="submit">Reader speichern</button>
     </form>
 
-    <article class="panel-box">
-      <div class="panel-box-head">
-        <h3>Tastenerkennung</h3>
-        <span>ohne echte Hardware testbar</span>
-      </div>
-      <p class="page-copy">Zeigt aktuell gedrückte Taste und erlaubt GPIO-Simulation für den universellen Installpfad ohne angeschlossene Buttons.</p>
-      <form method="post" class="form-grid compact">
-        <input type="hidden" name="section" value="simulate_gpio">
-        <label>
-          <span>Erkannter GPIO</span>
-          <select name="sim_pin">
-            {% for pin in button_pin_choices %}
-              <option value="{{ pin }}">{{ pin }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label>
-          <span>Tastendruck</span>
-          <select name="sim_press_type">
-            {% for option in ["kurz", "lang"] %}
-              <option value="{{ option }}">{{ option }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <button class="primary full" type="submit">GPIO-Ereignis simulieren</button>
-      </form>
-      <ul class="plain-list">
-        <li>Letztes Ereignis: {{ runtime_state.last_event }}</li>
-        <li>Letzte Taste: {{ runtime_state.hardware.last_button or "-" }} · {{ runtime_state.hardware.last_button_press_type or "-" }}</li>
-        <li>Aktive GPIOs: {{ runtime_state.hardware.pressed_buttons|join(", ") if runtime_state.hardware.pressed_buttons else "-" }}</li>
-      </ul>
-      <div class="setup-note">
-        <p>Einschaltroutine über 3 Sekunden und LED-Countdown bleiben als Logik vorbereitet, selbst wenn auf dem Zielsystem noch keine Hardware angeschlossen ist.</p>
-      </div>
-    </article>
-  </section>
-
-  <section class="setup-led-grid">
-    <form method="post" class="panel-box">
-      <input type="hidden" name="section" value="leds">
-      <input type="hidden" name="led_count" value="{{ setup_data.leds|length }}">
-      <div class="panel-box-head">
-        <h3>LED-Zuweisung</h3>
-        <span>nur geeignete Pins</span>
-      </div>
-      <div class="led-table-head">
-        <div>LED</div>
-        <div>PIN</div>
-        <div>Funktion</div>
-        <div>Helligkeit</div>
-      </div>
-      <div class="led-table">
-        {% for led in setup_data.leds %}
-          <div class="led-row">
-            <input name="led_name_{{ loop.index0 }}" value="{{ led.name }}">
-            <select name="led_pin_{{ loop.index0 }}">
-              {% for pin in led_pin_choices %}
-                <option value="{{ pin }}" {% if led.pin == pin %}selected{% endif %}>{{ pin }}</option>
-              {% endfor %}
-            </select>
-            <select name="led_function_{{ loop.index0 }}">
-              {% for option in led_functions %}
-                <option value="{{ option }}" {% if led.function == option %}selected{% endif %}>{{ option }}</option>
-              {% endfor %}
-            </select>
-            <input type="number" name="led_brightness_{{ loop.index0 }}" min="0" max="100" value="{{ led.brightness }}">
-          </div>
-        {% endfor %}
-      </div>
-      <button class="primary full" type="submit">LEDs speichern</button>
-    </form>
-
-    <article class="panel-box">
-      <div class="panel-box-head">
-        <h3>Runtime Diagnose</h3>
-        <span>{{ runtime_state.playback_state }}</span>
-      </div>
-      <div class="split-column">
-        <form method="post" class="form-grid compact">
-          <input type="hidden" name="section" value="simulate_rfid">
-          <label>
-            <span>Simulierter Tag</span>
-            <input name="sim_rfid_uid" placeholder="1234567890">
-          </label>
-          <button class="primary full" type="submit">RFID-Scan simulieren</button>
-        </form>
-        <form method="post" class="inline-form">
-          <input type="hidden" name="section" value="simulate_tag_remove">
-          <button type="submit">Tag entfernen simulieren</button>
-        </form>
-        <form method="post" class="form-grid compact">
-          <input type="hidden" name="section" value="simulate_tick">
-          <label>
-            <span>Fortschritt in Sekunden</span>
-            <input type="number" name="elapsed" min="1" max="120" value="5">
-          </label>
-          <button class="primary full" type="submit">Tick simulieren</button>
-        </form>
-        <form method="post" class="inline-form">
-          <input type="hidden" name="section" value="reset_runtime">
-          <button class="danger" type="submit">Runtime zurücksetzen</button>
-        </form>
-      </div>
-      <ul class="plain-list">
-        <li>Aktiver Tag: {{ runtime_state.active_rfid_uid or "-" }}</li>
-        <li>Sleeptimer: {{ runtime_state.sleep_timer.remaining_seconds }}s · Stufe {{ runtime_state.sleep_timer.level }}</li>
-        <li>Playback: {{ runtime_state.playback_session.backend or hardware_profile.audio.playback_backend or "mock" }} · {{ runtime_state.playback_session.state or "idle" }}</li>
-      </ul>
-      <h4>Ereignisprotokoll</h4>
-      <ul class="plain-list compact-log">
-        {% for event in runtime_state.event_log %}
-          <li>{{ event.message }} · {{ event.level }} · {{ event.at }}</li>
-        {% else %}
-          <li>Noch keine Ereignisse protokolliert.</li>
-        {% endfor %}
-      </ul>
-    </article>
-  </section>
-
-  <section class="system-grid">
-    <article class="panel-box">
+    <form method="post" class="panel-box setup-save-card">
+      <input type="hidden" name="section" value="audio">
       <div class="panel-box-head">
         <h3>Audio-Ausgabe</h3>
-        <span>{{ setup_data.audio.output_mode }}</span>
+        <span>
+          {% if setup_data.audio.output_mode == "analog_jack" %}Interne Soundkarte{% elif setup_data.audio.output_mode == "i2s_dac" %}I2S-Soundkarte{% else %}USB-Soundkarte{% endif %}
+        </span>
       </div>
-      <form method="post" class="form-grid compact">
-        <input type="hidden" name="section" value="audio">
+      <div class="form-grid compact">
         <label>
-          <span>Ausgabemodus</span>
+          <span>Verwendete Soundkarte</span>
           <select name="output_mode">
             {% for option in audio_output_options %}
               <option value="{{ option.id }}" {% if setup_data.audio.output_mode == option.id %}selected{% endif %}>{{ option.label }}</option>
             {% endfor %}
           </select>
         </label>
-        <label>
-          <span>Bevorzugtes Zielgerät</span>
-          <select name="preferred_output">
-            {% for option in audio_output_device_choices %}
-              <option value="{{ option.id }}" {% if setup_data.audio.preferred_output == option.id %}selected{% endif %}>{{ option.label }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label>
-          <span>Playback-Backend</span>
-          <select name="playback_backend">
-            {% for option in audio_backend_options %}
-              <option value="{{ option.id }}" {% if setup_data.audio.playback_backend == option.id %}selected{% endif %}>{{ option.label }}</option>
-            {% endfor %}
-          </select>
-        </label>
+        {% if setup_data.audio.output_mode == "i2s_dac" %}
         <label>
           <span>I2S-Profil</span>
           <select name="i2s_profile">
@@ -273,50 +73,15 @@
             {% endfor %}
           </select>
         </label>
-        <label>
-          <span>Mixer-Control</span>
-          <select name="mixer_control">
-            {% for option in audio_mixer_options %}
-              <option value="{{ option }}" {% if setup_data.audio.mixer_control == option %}selected{% endif %}>{{ option }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label>
-          <span>Startlautstärke</span>
-          <input type="number" name="startup_volume" min="0" max="100" value="{{ setup_data.audio.startup_volume }}">
-        </label>
-        <label class="checkbox-row">
-          <input type="checkbox" name="external_soundcard_required" {% if setup_data.audio.external_soundcard_required %}checked{% endif %}>
-          <span>Externe Soundkarte bewusst erzwingen</span>
-        </label>
-        <label class="checkbox-row">
-          <input type="checkbox" name="mono_downmix" {% if setup_data.audio.mono_downmix %}checked{% endif %}>
-          <span>Mono-Downmix vorbereiten</span>
-        </label>
-        <label class="checkbox-row">
-          <input type="checkbox" name="apply_boot_config" {% if setup_data.audio.apply_boot_config %}checked{% endif %}>
-          <span>Boot-Konfiguration mitverwalten</span>
-        </label>
-        <label class="checkbox-row">
-          <input type="checkbox" name="enable_audio_service" {% if setup_data.audio.enable_audio_service %}checked{% endif %}>
-          <span>Startlautstärke-Service aktiv halten</span>
-        </label>
+        {% endif %}
+        {% if setup_data.audio.output_mode == "i2s_dac" %}
         <label class="full">
           <span>Anschluss-Hinweis</span>
-          <textarea name="audio_connection_hint" rows="3">{{ setup_data.audio.connection_hint }}</textarea>
+          <a href="{{ url_for('download_audio_guide', output_mode=setup_data.audio.output_mode) }}">Anschlussplan für I2S-Soundkarte herunterladen</a>
         </label>
-        <button class="primary full" type="submit">Audio-Profil speichern</button>
-      </form>
-      <div class="button-row">
-        <form method="post">
-          <input type="hidden" name="section" value="apply_audio">
-          <button type="submit">Audio-Profil erzeugen</button>
-        </form>
-        <form method="post">
-          <input type="hidden" name="section" value="deploy_audio">
-          <button class="primary" type="submit">Audio aufs System anwenden</button>
-        </form>
+        {% endif %}
       </div>
+      <p class="page-copy">Pins, die von der Soundkarte gebraucht werden, verschwinden automatisch aus den Tasten- und LED-Dropdowns.</p>
       <ul class="plain-list">
         {% if audio_environment.recommended_external_card %}
           <li>Pi Zero 2 W erkannt: USB-DAC oder I2S-HAT als Standardpfad einplanen.</li>
@@ -327,115 +92,201 @@
           <li>Keine zusätzlichen Audio-Hinweise.</li>
         {% endfor %}
       </ul>
-    </article>
+      <button class="primary setup-save-button" type="submit">Soundkarte speichern</button>
+    </form>
+  </section>
 
-    <article class="panel-box">
+  <section class="setup-core-grid">
+    <form method="post" class="panel-box" data-button-mapping>
+      <input type="hidden" name="section" value="buttons">
+      <input type="hidden" name="button_count" value="{{ button_mapping_rows|length }}">
       <div class="panel-box-head">
-        <h3>WLAN & Hotspot</h3>
-        <span>{{ wifi_snapshot.active_ssid or "kein WLAN" }}</span>
+        <h3>Tastenzuordnung</h3>
       </div>
+      <div class="mapping-table-head">
+        <div>Funktion</div>
+        <div>PIN</div>
+        <div>Tastendruck</div>
+      </div>
+      <div class="mapping-table">
+        {% for row in button_mapping_rows %}
+          <div class="mapping-row">
+            <div class="mapping-name">{{ row.name }}</div>
+            <div>
+              <select name="button_pin_{{ row.index }}" data-button-pin>
+                <option value="" {% if not row.pin %}selected{% endif %}>-</option>
+                {% if row.pin_invalid %}
+                  <option value="{{ row.pin }}" selected>{{ row.pin }} · neu zuordnen</option>
+                {% endif %}
+                {% for pin in row.pin_options %}
+                  <option value="{{ pin }}" {% if row.pin == pin %}selected{% endif %}>{{ pin }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <select name="button_press_type_{{ row.index }}" data-button-press-type>
+                {% for option in row.press_type_options %}
+                  <option value="{{ option }}" {% if row.press_type == option %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+      <div class="mapping-actions">
+        <button class="primary setup-save-button" type="submit">Tasten speichern</button>
+        <div class="inline-field long-press-field">
+          <span>Langer Tastendruck ab</span>
+          <input type="number" name="button_long_press_seconds" min="1" max="10" step="0.1" value="{{ setup_data.button_long_press_seconds or 2 }}" inputmode="decimal">
+          <em>s</em>
+        </div>
+      </div>
+      <div class="setup-note">
+        <p>Ein PIN kann für kurzen und langen Tastendruck getrennt verwendet werden. Reader- und Soundkarten-Pins haben Vorrang.</p>
+      </div>
+    </form>
+
+    <div class="setup-side-stack">
+      <article class="panel-box" data-button-detect>
+        <div class="panel-box-head">
+          <h3>Tastenerkennung</h3>
+          <span class="detect-head-timer" data-detect-timer hidden></span>
+        </div>
+        <p class="page-copy">aktiviere die tastenerkennung um zu überprüfen an welchem Pin deine Hardware-Tasten angeschlossen sind.</p>
+        <div class="button-detect-grid">
+          <div class="detect-display">
+            <span>Erkannter GPIO/PIN</span>
+            <strong data-detect-result>-</strong>
+          </div>
+          <button class="primary" type="button" data-detect-start>Taste erkennen</button>
+        </div>
+      </article>
+
+      <form method="post" class="panel-box">
+        <input type="hidden" name="section" value="leds">
+        <input type="hidden" name="led_count" value="{{ setup_data.leds|length }}">
+        <div class="panel-box-head">
+          <h3>LED-Zuordnung</h3>
+          <span>nur geeignete Pins</span>
+        </div>
+        <div class="led-table-head">
+          <div>LED</div>
+          <div>PIN</div>
+          <div>Funktion</div>
+          <div>Helligkeit</div>
+        </div>
+        <div class="led-table">
+          {% for led in setup_data.leds %}
+            <div class="led-row">
+              <input name="led_name_{{ loop.index0 }}" value="{{ led.name }}">
+              <select name="led_pin_{{ loop.index0 }}">
+                {% for pin in led_pin_choices %}
+                  <option value="{{ pin }}" {% if led.pin == pin %}selected{% endif %}>{{ pin }}</option>
+                {% endfor %}
+              </select>
+              <select name="led_function_{{ loop.index0 }}">
+                {% for option in led_functions %}
+                  <option value="{{ option }}" {% if led.function == option %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+              </select>
+              <input type="number" name="led_brightness_{{ loop.index0 }}" min="0" max="100" value="{{ led.brightness }}">
+            </div>
+          {% endfor %}
+        </div>
+        <button class="primary full" type="submit">LEDs speichern</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="system-grid">
+    <article class="panel-box setup-save-card">
+      <div class="panel-box-head">
+        <h3>WLAN</h3>
+      </div>
+      <p class="page-copy">
+        {% if wifi_snapshot.active_ssid and wifi_snapshot.active_ssid != "nicht verbunden" %}
+          Verbunden mit: {{ wifi_snapshot.active_ssid }}
+        {% else %}
+          Nicht mit einem WLAN verbunden.
+        {% endif %}
+      </p>
       <form method="post" class="form-grid compact">
-        <input type="hidden" name="section" value="wifi">
+        <input type="hidden" name="section" value="add_wifi_network">
         <label>
-          <span>Modus</span>
-          <select name="mode">
-            {% for option in ["client_only", "client_with_fallback_hotspot", "hotspot_only"] %}
-              <option value="{{ option }}" {% if setup_data.wifi.mode == option %}selected{% endif %}>{{ option }}</option>
-            {% endfor %}
+          <span>Verfügbares WLAN</span>
+          <select name="ssid">
+            {% if wifi_snapshot.scanned_networks %}
+              {% for network in wifi_snapshot.scanned_networks %}
+                <option value="{{ network.ssid }}">
+                  {{ network.ssid }}{% if network.in_use %} (verbunden){% endif %}
+                </option>
+              {% endfor %}
+            {% else %}
+              <option value="">Keine Netzwerke gefunden</option>
+            {% endif %}
           </select>
         </label>
         <label>
-          <span>Land</span>
-          <input name="country" value="{{ setup_data.wifi.country }}">
+          <span>Passwort</span>
+          <input name="password" type="password" placeholder="WLAN-Passwort">
         </label>
+        <input type="hidden" name="priority" value="10">
+        <button class="primary full" type="submit">WLAN speichern</button>
+      </form>
+      <form method="post" class="form-grid compact wifi-known-networks-form">
+        <input type="hidden" name="section" value="delete_wifi_network">
+        <label>
+          <span>Bekannte WLAN-Netzwerke</span>
+          <select name="network_id">
+            {% if setup_data.wifi.saved_networks %}
+              {% for network in setup_data.wifi.saved_networks %}
+                <option value="{{ network.id }}">{{ network.ssid }}</option>
+              {% endfor %}
+            {% else %}
+              <option value="">Keine gespeicherten WLANs</option>
+            {% endif %}
+          </select>
+        </label>
+        <button class="danger full" type="submit" {% if not setup_data.wifi.saved_networks %}disabled{% endif %}>WLAN löschen</button>
+      </form>
+    </article>
+
+    <article class="panel-box setup-save-card">
+      <div class="panel-box-head">
+        <h3>Hotspot</h3>
+      </div>
+      <form method="post" class="form-grid compact">
+        <input type="hidden" name="section" value="wifi">
+        <input type="hidden" name="mode" value="{{ setup_data.wifi.mode }}">
+        <input type="hidden" name="country" value="{{ setup_data.wifi.country }}">
+        <input type="hidden" name="hostname" value="{{ setup_data.wifi.hostname }}">
+        <input type="hidden" name="browser_name" value="{{ setup_data.wifi.browser_name }}">
+        <input type="hidden" name="hotspot_channel" value="{{ setup_data.wifi.hotspot_channel }}">
+        <input type="hidden" name="fallback_hotspot" value="on">
         <label>
           <span>Hotspot SSID</span>
           <input name="hotspot_ssid" value="{{ setup_data.wifi.hotspot_ssid }}">
         </label>
         <label>
           <span>Hotspot Sicherheit</span>
-          <select name="hotspot_security">
+          <select name="hotspot_security" data-hotspot-security>
             {% for option in ["open", "wpa-psk"] %}
               <option value="{{ option }}" {% if setup_data.wifi.hotspot_security == option %}selected{% endif %}>{{ option }}</option>
             {% endfor %}
           </select>
         </label>
-        <label>
+        <label data-hotspot-password-field>
           <span>Hotspot Passwort</span>
-          <input name="hotspot_password" value="{{ setup_data.wifi.hotspot_password }}">
+          <input name="hotspot_password" value="{{ setup_data.wifi.hotspot_password }}" {% if setup_data.wifi.hotspot_security != "wpa-psk" %}disabled{% endif %}>
         </label>
-        <label>
-          <span>Hotspot Kanal</span>
-          <input type="number" name="hotspot_channel" min="1" max="13" value="{{ setup_data.wifi.hotspot_channel }}">
-        </label>
-        <label>
-          <span>Hostname</span>
-          <input name="hostname" value="{{ setup_data.wifi.hostname }}">
-        </label>
-        <label>
-          <span>Browser-Name</span>
-          <input name="browser_name" value="{{ setup_data.wifi.browser_name }}">
-        </label>
-        <label class="checkbox-row full">
-          <input type="checkbox" name="fallback_hotspot" {% if setup_data.wifi.fallback_hotspot %}checked{% endif %}>
-          <span>Fallback-Hotspot aktivieren, wenn kein Client-WLAN erreichbar ist</span>
-        </label>
-        <button class="primary full" type="submit">WLAN-Profil speichern</button>
+        <button class="primary full" type="submit">Hotspot speichern</button>
       </form>
-      <div class="button-row">
-        <form method="post">
-          <input type="hidden" name="section" value="apply_network">
-          <button class="primary" type="submit">Auf System anwenden</button>
-        </form>
-        <form method="post">
-          <input type="hidden" name="section" value="run_fallback_cycle">
-          <button type="submit">Fallback-Zyklus testen</button>
-        </form>
-        <form method="post">
-          <input type="hidden" name="section" value="factory_wifi">
-          <button class="danger" type="submit">Factory-Hotspot laden</button>
-        </form>
-      </div>
-      <div class="info-grid">
-        <div><span>WLAN</span><strong>{{ wifi_snapshot.wifi_enabled }}</strong></div>
-        <div><span>Konnektivität</span><strong>{{ wifi_snapshot.connectivity }}</strong></div>
-        <div><span>Gerät</span><strong>{{ wifi_snapshot.device }}</strong></div>
-        <div><span>Name</span><strong>{{ network_info.browser_name }}</strong></div>
-      </div>
-      <h4>Gespeicherte Netzwerke</h4>
-      <ul class="plain-list">
-        {% for network in setup_data.wifi.saved_networks %}
-          <li class="inline-list-row">
-            <span>{{ network.ssid }} · Priorität {{ network.priority }}</span>
-            <form method="post">
-              <input type="hidden" name="section" value="delete_wifi_network">
-              <input type="hidden" name="network_id" value="{{ network.id }}">
-              <button class="danger" type="submit">Löschen</button>
-            </form>
-          </li>
-        {% else %}
-          <li>Noch keine gespeicherten WLANs.</li>
-        {% endfor %}
-      </ul>
-      <form method="post" class="form-grid compact">
-        <input type="hidden" name="section" value="add_wifi_network">
-        <label>
-          <span>SSID</span>
-          <input name="ssid" placeholder="Kinderzimmer-WLAN">
-        </label>
-        <label>
-          <span>Passwort</span>
-          <input name="password" placeholder="optional">
-        </label>
-        <label>
-          <span>Priorität</span>
-          <input type="number" name="priority" min="1" max="100" value="10">
-        </label>
-        <button class="primary full" type="submit">Netzwerk speichern</button>
-      </form>
-      <p class="table-note"><strong>{{ apply_report.summary }}</strong></p>
     </article>
   </section>
+
+  <footer class="page-footer">
+    <a class="button-like" href="{{ url_for('download_setup_logs') }}">Logs herunterladen</a>
+  </footer>
 
   <script src="{{ url_for('static', filename='setup-dnd.js', v=asset_version) }}"></script>
 {% endblock %}

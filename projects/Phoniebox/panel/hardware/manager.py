@@ -1,6 +1,7 @@
 import shutil
 from pathlib import Path
 
+from hardware.gpio import sysfs_gpio_available
 from system.audio import detect_audio_environment
 
 
@@ -9,7 +10,7 @@ def command_exists(name):
 
 
 def gpio_backend_available():
-    return any(Path("/dev").glob("gpiochip*"))
+    return any(Path("/dev").glob("gpiochip*")) or sysfs_gpio_available()
 
 
 def detect_reader(setup_data):

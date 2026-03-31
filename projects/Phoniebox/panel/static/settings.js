@@ -3,10 +3,19 @@ document.addEventListener("DOMContentLoaded", () => {
   if (!form) {
     return;
   }
+  const startupToggle = form.elements.namedItem("use_startup_volume");
+  const startupInput = form.elements.namedItem("startup_volume");
 
   let saveTimer = null;
   let inFlight = false;
   let pending = false;
+
+  function syncStartupVolumeState() {
+    if (!(startupToggle instanceof HTMLInputElement) || !(startupInput instanceof HTMLInputElement)) {
+      return;
+    }
+    startupInput.disabled = !startupToggle.checked;
+  }
 
   function collectPayload() {
     const formData = new FormData(form);
@@ -59,5 +68,9 @@ document.addEventListener("DOMContentLoaded", () => {
     event.preventDefault();
   });
 
+  syncStartupVolumeState();
+  if (startupToggle instanceof HTMLInputElement) {
+    startupToggle.addEventListener("change", syncStartupVolumeState);
+  }
   form.addEventListener("change", scheduleSave);
 });

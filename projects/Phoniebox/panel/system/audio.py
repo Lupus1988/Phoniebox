@@ -122,9 +122,19 @@ def detect_audio_environment():
     cards = parse_asound_cards()
     playback_devices = list_playback_devices()
     card_ids = {entry.get("card_id", "").lower() for entry in cards}
+    card_texts = [
+        " ".join(
+            [
+                entry.get("card_id", ""),
+                entry.get("name", ""),
+                entry.get("description", ""),
+            ]
+        ).lower()
+        for entry in cards
+    ]
     lower_model = model.lower()
     is_pi_zero_2w = "raspberry pi zero 2" in lower_model
-    has_analog = any("bcm2835" in item for item in card_ids)
+    has_analog = any(("bcm2835" in item or "headphones" in item or "analog" in item) for item in card_texts)
     has_hdmi = any("vc4hdmi" in item or "hdmi" in item for item in card_ids)
     has_usb = any("usb" in item or "audio" in item for item in card_ids)
     has_i2s_hat = any(
@@ -141,8 +151,6 @@ def detect_audio_environment():
         notes.append("USB-Audio erkannt.")
     if has_i2s_hat:
         notes.append("I2S-/GPIO-Audio-HAT erkannt.")
-    if has_hdmi:
-        notes.append("HDMI-Audio erkannt.")
     if has_analog:
         notes.append("Onboard-Analog-Audio erkannt.")
     return {
@@ -163,14 +171,41 @@ def i2s_profile_catalog():
     return [{"id": key, "label": value["label"]} for key, value in I2S_PROFILE_OPTIONS.items()]
 
 
+def _card_tokens(card):
+    return " ".join(
+        [
+            str(card.get("card_id", "")),
+            str(card.get("name", "")),
+            str(card.get("description", "")),
+        ]
+    ).lower()
+
+
+def _card_matches_mode(card, mode):
+    tokens = _card_tokens(card)
+    if mode == "usb_dac":
+        return "usb" in tokens or "audio" in tokens
+    if mode == "analog_jack":
+        return "bcm2835" in tokens or "analog" in tokens
+    if mode == "i2s_dac":
+        return any(token in tokens for token in {"hifiberry", "seeed", "iqaudio", "sndrpihifiberry", "googlevoicehat", "adau", "wm8960"})
+    return False
+
+
 def resolve_output_device(snapshot, config):
-    preferred_output = (config.get("preferred_output") or "auto").strip()
-    if preferred_output and preferred_output != "auto":
-        return preferred_output
+    mode = config.get("output_mode", "usb_dac")
+    cards = snapshot.get("cards", [])
     playback_devices = snapshot.get("playback_devices", [])
+    for device in playback_devices:
+        card_index = str(device.get("card_index", ""))
+        matching_card = next((card for card in cards if str(card.get("card_index", "")) == card_index), None)
+        if matching_card and _card_matches_mode(matching_card, mode):
+            return device.get("alsa_hw", "default")
+    for card in cards:
+        if _card_matches_mode(card, mode):
+            return f"hw:{card.get('card_index', '0')},0"
     if playback_devices:
         return playback_devices[0].get("alsa_hw", "default")
-    cards = snapshot.get("cards", [])
     if cards:
         return f"hw:{cards[0].get('card_index', '0')},0"
     return "default"
@@ -232,6 +267,11 @@ def build_boot_config(config):
 
 
 def build_startup_volume_script(config):
+    if not config.get("use_startup_volume"):
+        return """#!/usr/bin/env bash
+set -euo pipefail
+exit 0
+"""
     volume = max(0, min(100, int(config.get("startup_volume", 45))))
     mixer = (config.get("mixer_control") or "auto").strip()
     mixer_target = "Master" if mixer == "auto" else mixer
@@ -248,11 +288,13 @@ def build_summary(snapshot, config):
     lines = [
         "Phoniebox Audio-Profil",
         f"Gerät: {snapshot.get('device_model', 'Unbekannt')}",
-        f"Ausgabemodus: {config.get('output_mode', 'auto')}",
-        f"Bevorzugtes Ziel: {config.get('preferred_output', 'auto')}",
+        f"Verwendete Soundkarte: {config.get('output_mode', 'usb_dac')}",
         f"Playback-Backend: {config.get('playback_backend', 'auto')}",
-        f"Startlautstärke: {config.get('startup_volume', 45)}%",
     ]
+    if config.get("use_startup_volume"):
+        lines.append(f"Startlautstärke: {config.get('startup_volume', 45)}%")
+    else:
+        lines.append("Startlautstärke: letzte Lautstärke übernehmen")
     if config.get("output_mode") == "i2s_dac":
         profile = I2S_PROFILE_OPTIONS.get(config.get("i2s_profile", "auto"), I2S_PROFILE_OPTIONS["auto"])
         lines.append(f"I2S-Profil: {profile['label']}")
@@ -396,10 +438,13 @@ WantedBy=multi-user.target
 def apply_audio_profile(config, output_dir=None):
     snapshot = detect_audio_environment()
     details = [f"Gerätemodell: {snapshot['device_model']}"]
-    mode = config.get("output_mode", "auto")
-    details.append(f"Ausgabemodus: {mode}")
-    details.append(f"Bevorzugtes ALSA-Gerät: {config.get('preferred_output', 'auto')}")
-    details.append(f"Startlautstärke: {config.get('startup_volume', 45)}%")
+    mode = config.get("output_mode", "usb_dac")
+    details.append(f"Verwendete Soundkarte: {mode}")
+    details.append(
+        f"Startlautstärke: {config.get('startup_volume', 45)}%"
+        if config.get("use_startup_volume")
+        else "Startlautstärke: letzte Lautstärke bleibt erhalten"
+    )
 
     artifacts = None
     if output_dir:
@@ -411,10 +456,10 @@ def apply_audio_profile(config, output_dir=None):
         details.append("Noch keine Soundkarte erkannt. Profil wird als Soll-Konfiguration gespeichert.")
         return {"ok": False, "details": details, "snapshot": snapshot, "artifacts": artifacts}
 
-    if command_exists("amixer"):
+    if config.get("use_startup_volume") and command_exists("amixer"):
         target = config.get("mixer_control", "auto")
         details.append(f"Mixer-Steuerung verfügbar ({target}).")
-    else:
+    elif config.get("use_startup_volume"):
         details.append("amixer nicht verfügbar. Lautstärke muss ggf. später manuell oder per Dienst gesetzt werden.")
 
     details.extend(snapshot["notes"])

@@ -5,11 +5,17 @@ import sys
 import time
 from pathlib import Path
 
+try:
+    import RPi.GPIO as GPIO
+except ImportError:
+    GPIO = None
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
+from hardware.gpio import GPIO_TO_BOARD_PIN, SysfsGPIOInput, gpio_display_label, sysfs_gpio_available
 from hardware.manager import detect_hardware
 from runtime.audio import build_track_queue, load_playlist_entries, pick_track_duration, track_title_from_entry
 from runtime.playback import PlaybackController
@@ -20,6 +26,7 @@ LIBRARY_FILE = DATA_DIR / "library.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 SETUP_FILE = DATA_DIR / "setup.json"
 RUNTIME_FILE = DATA_DIR / "runtime_state.json"
+BUTTON_DETECT_FILE = DATA_DIR / "button_detect.json"
 
 
 def load_json(path, default):
@@ -104,10 +111,24 @@ def default_runtime_state():
     }
 
 
+def default_button_detect():
+    return {
+        "active": False,
+        "status": "idle",
+        "deadline_at": 0.0,
+    }
+
+
 class RuntimeService:
     def __init__(self):
         self.runtime_path = RUNTIME_FILE
         self.playback = PlaybackController()
+        self._gpio_ready = False
+        self._gpio_backend = None
+        self._configured_gpio_pins = set()
+        self._button_poll_state = {}
+        self._last_pressed_pins = []
+        self._sysfs_gpio = SysfsGPIOInput()
 
     def load_runtime(self):
         return load_json(self.runtime_path, default_runtime_state())
@@ -129,6 +150,203 @@ class RuntimeService:
 
     def load_setup(self):
         return load_json(SETUP_FILE, {})
+
+    def load_button_detect(self):
+        return merge_defaults(load_json(BUTTON_DETECT_FILE, default_button_detect()), default_button_detect())
+
+    def button_long_press_seconds(self):
+        setup = self.load_setup()
+        try:
+            value = float(str(setup.get("button_long_press_seconds", 2)).strip().replace(",", "."))
+        except (TypeError, ValueError):
+            value = 2.0
+        return max(1.0, min(10.0, value))
+
+    def classify_press_type(self, held_seconds=None, fallback="kurz"):
+        if held_seconds is None:
+            return fallback
+        try:
+            duration = float(held_seconds)
+        except (TypeError, ValueError):
+            return fallback
+        return "lang" if duration >= float(self.button_long_press_seconds()) else "kurz"
+
+    def _gpio_name_to_bcm(self, gpio_name):
+        if not gpio_name or not str(gpio_name).startswith("GPIO"):
+            return None
+        try:
+            return int(str(gpio_name).replace("GPIO", "", 1))
+        except ValueError:
+            return None
+
+    def gpio_polling_available(self):
+        return GPIO is not None or sysfs_gpio_available()
+
+    def _ensure_gpio_inputs(self, gpio_names):
+        gpio_names = {name for name in gpio_names if name}
+        if not gpio_names or not self.gpio_polling_available():
+            return False
+        if self._gpio_backend in {None, "rpi"} and GPIO is not None:
+            try:
+                if not self._gpio_ready:
+                    GPIO.setwarnings(False)
+                    GPIO.setmode(GPIO.BCM)
+                    self._gpio_ready = True
+                    self._gpio_backend = "rpi"
+
+                target_bcm = set()
+                for gpio_name in gpio_names:
+                    bcm = self._gpio_name_to_bcm(gpio_name)
+                    if bcm is None:
+                        continue
+                    target_bcm.add(bcm)
+                    if bcm not in self._configured_gpio_pins:
+                        GPIO.setup(bcm, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+                for bcm in sorted(self._configured_gpio_pins - target_bcm):
+                    try:
+                        GPIO.cleanup(bcm)
+                    except RuntimeError:
+                        continue
+
+                self._configured_gpio_pins = target_bcm
+                return bool(self._configured_gpio_pins)
+            except Exception:
+                self._gpio_ready = False
+                self._gpio_backend = "sysfs"
+                self._configured_gpio_pins = set()
+
+        if self._gpio_backend in {None, "sysfs"} and sysfs_gpio_available():
+            self._gpio_backend = "sysfs"
+            ready = False
+            for gpio_name in gpio_names:
+                ready = self._sysfs_gpio.ensure_input(gpio_name) or ready
+            return ready
+
+        return False
+
+    def _read_gpio_levels(self, gpio_names):
+        if not self._ensure_gpio_inputs(gpio_names):
+            return {}
+        if self._gpio_backend == "sysfs":
+            return self._sysfs_gpio.sample(gpio_names)
+        levels = {}
+        for gpio_name in gpio_names:
+            bcm = self._gpio_name_to_bcm(gpio_name)
+            if bcm is None:
+                continue
+            try:
+                levels[gpio_name] = int(GPIO.input(bcm))
+            except RuntimeError:
+                continue
+        return levels
+
+    def _set_pressed_buttons(self, pins):
+        pins = sorted([pin for pin in pins if pin])
+        if pins == self._last_pressed_pins:
+            return
+        runtime_state = self.ensure_runtime()
+        runtime_state["hardware"]["pressed_buttons"] = pins
+        self.save_runtime(runtime_state)
+        self._last_pressed_pins = pins
+
+    def _button_mapping_for_pin(self, setup, pin, press_type):
+        for button in setup.get("buttons", []):
+            if button.get("pin", "").strip() != pin:
+                continue
+            if button.get("press_type", "kurz") != press_type:
+                continue
+            return button.get("name", "")
+        return ""
+
+    def _poll_button_detection(self, session, now):
+        candidates = [pin for pin in session.get("candidate_pins", []) if pin]
+        levels = self._read_gpio_levels(candidates)
+        if not levels:
+            session["active"] = False
+            session["status"] = "unavailable"
+            session["message"] = "Keine GPIO-Tasterkennung verfügbar."
+            save_json(BUTTON_DETECT_FILE, session)
+            self._set_pressed_buttons([])
+            return
+
+        baseline = session.get("baseline", {})
+        pressed_now = [pin for pin, value in levels.items() if int(value) == 0]
+        self._set_pressed_buttons(pressed_now)
+
+        if now >= float(session.get("deadline_at", 0)):
+            session["active"] = False
+            session["status"] = "timeout"
+            session["message"] = "Keine Taste erkannt."
+            session["remaining_seconds"] = 0
+            save_json(BUTTON_DETECT_FILE, session)
+            self._set_pressed_buttons([])
+            return
+
+        for gpio_name in candidates:
+            if gpio_name not in levels or gpio_name not in baseline:
+                continue
+            if int(levels[gpio_name]) != int(baseline[gpio_name]):
+                session["active"] = False
+                session["status"] = "detected"
+                session["detected_gpio"] = gpio_name
+                session["detected_pin"] = str(GPIO_TO_BOARD_PIN.get(gpio_name, ""))
+                session["message"] = gpio_display_label(gpio_name)
+                session["remaining_seconds"] = 0
+                save_json(BUTTON_DETECT_FILE, session)
+                self._set_pressed_buttons([gpio_name] if int(levels[gpio_name]) == 0 else [])
+                return
+
+    def poll_buttons_once(self, now=None):
+        now = float(now if now is not None else time.monotonic())
+        detect_state = self.load_button_detect()
+        if detect_state.get("active"):
+            self._poll_button_detection(detect_state, now)
+            return
+
+        setup = self.load_setup()
+        configured_pins = sorted({button.get("pin", "").strip() for button in setup.get("buttons", []) if button.get("pin", "").strip()})
+        levels = self._read_gpio_levels(configured_pins)
+        if not configured_pins or not levels:
+            self._set_pressed_buttons([])
+            return
+
+        pressed_now = [pin for pin, value in levels.items() if int(value) == 0]
+        self._set_pressed_buttons(pressed_now)
+
+        for pin in configured_pins:
+            level = levels.get(pin)
+            if level is None:
+                continue
+            state = self._button_poll_state.setdefault(pin, {"pressed": False, "pressed_at": 0.0})
+            is_pressed = int(level) == 0
+            if is_pressed and not state["pressed"]:
+                state["pressed"] = True
+                state["pressed_at"] = now
+                continue
+            if is_pressed:
+                continue
+            if not state["pressed"]:
+                continue
+
+            held_seconds = max(0.0, now - float(state.get("pressed_at", now)))
+            state["pressed"] = False
+            state["pressed_at"] = 0.0
+            if held_seconds < 0.03:
+                continue
+            press_type = self.classify_press_type(held_seconds, "kurz")
+            if not self._button_mapping_for_pin(setup, pin, press_type):
+                continue
+            self.trigger_gpio_pin(pin, press_type=press_type, held_seconds=held_seconds)
+
+    def poll_buttons_forever(self, interval_seconds=0.05):
+        while True:
+            try:
+                self.poll_buttons_once()
+            except Exception:
+                time.sleep(max(0.1, interval_seconds))
+                continue
+            time.sleep(max(0.02, interval_seconds))
 
     def ensure_runtime(self):
         if not self.runtime_path.exists():
@@ -670,6 +888,11 @@ class RuntimeService:
 
     def trigger_button(self, name, press_type="kurz"):
         runtime_state = self.ensure_runtime()
+        detect_state = self.load_button_detect()
+        if detect_state.get("active"):
+            runtime_state = self.add_event(runtime_state, "Tastenerkennung aktiv: Tastenfunktion ausgesetzt.", "warning")
+            self.save_runtime(runtime_state)
+            return {"runtime": runtime_state, "player": self.load_player()}
         last_button = name
         last_press_type = press_type
         runtime_state["hardware"]["last_button"] = last_button
@@ -678,6 +901,12 @@ class RuntimeService:
         normalized = name.strip().lower()
         if normalized == "play/pause":
             result = self.toggle_playback()
+            result["runtime"]["hardware"]["last_button"] = last_button
+            result["runtime"]["hardware"]["last_button_press_type"] = last_press_type
+            self.save_runtime(result["runtime"])
+            return result
+        if normalized == "stopp":
+            result = self.stop()
             result["runtime"]["hardware"]["last_button"] = last_button
             result["runtime"]["hardware"]["last_button_press_type"] = last_press_type
             self.save_runtime(result["runtime"])
@@ -706,36 +935,49 @@ class RuntimeService:
             result["runtime"]["hardware"]["last_button_press_type"] = last_press_type
             self.save_runtime(result["runtime"])
             return result
-        if normalized == "sleep/power":
-            if press_type == "lang":
-                runtime_state["powered_on"] = not runtime_state.get("powered_on", True)
-                runtime_state["playback_state"] = "paused" if runtime_state["powered_on"] else "stopped"
-                runtime_state = self.add_event(runtime_state, "Power an" if runtime_state["powered_on"] else "Power aus")
-            else:
-                current_level = int(runtime_state.get("sleep_timer", {}).get("level", 0))
-                next_level = 0 if current_level >= 3 else current_level + 1
-                runtime_state = self.set_sleep_level(next_level)
-                runtime_state["hardware"]["last_button"] = last_button
-                runtime_state["hardware"]["last_button_press_type"] = last_press_type
-                self.save_runtime(runtime_state)
-                return {"runtime": runtime_state, "player": self.load_player()}
+        if normalized == "sleep timer +":
+            current_level = int(runtime_state.get("sleep_timer", {}).get("level", 0))
+            runtime_state = self.set_sleep_level(min(3, current_level + 1))
+            runtime_state["hardware"]["last_button"] = last_button
+            runtime_state["hardware"]["last_button_press_type"] = last_press_type
+            self.save_runtime(runtime_state)
+            return {"runtime": runtime_state, "player": self.load_player()}
+        if normalized == "sleep timer -":
+            current_level = int(runtime_state.get("sleep_timer", {}).get("level", 0))
+            runtime_state = self.set_sleep_level(max(0, current_level - 1))
+            runtime_state["hardware"]["last_button"] = last_button
+            runtime_state["hardware"]["last_button_press_type"] = last_press_type
+            self.save_runtime(runtime_state)
+            return {"runtime": runtime_state, "player": self.load_player()}
+        if normalized in {"power on/off", "sleep/power"}:
+            runtime_state["powered_on"] = not runtime_state.get("powered_on", True)
+            runtime_state["playback_state"] = "paused" if runtime_state["powered_on"] else "stopped"
+            runtime_state = self.add_event(runtime_state, "Power an" if runtime_state["powered_on"] else "Power aus")
 
         runtime_state = self.update_led_status(runtime_state)
         runtime_state = self.update_hardware_profile(runtime_state)
         self.save_runtime(runtime_state)
         return {"runtime": runtime_state, "player": self.load_player()}
 
-    def trigger_gpio_pin(self, pin, press_type="kurz"):
+    def trigger_gpio_pin(self, pin, press_type="kurz", held_seconds=None):
         setup = self.load_setup()
         runtime_state = self.ensure_runtime()
         runtime_state["hardware"]["pressed_buttons"] = [pin] if pin else []
+        press_type = self.classify_press_type(held_seconds, press_type)
+        detect_state = self.load_button_detect()
+        if detect_state.get("active"):
+            runtime_state = self.add_event(runtime_state, f"GPIO erkannt für Tastenerkennung: {pin}")
+            self.save_runtime(runtime_state)
+            return {"runtime": runtime_state, "player": self.load_player()}
         for button in setup.get("buttons", []):
             if button.get("pin", "").strip() == pin:
+                if button.get("press_type", "kurz") != press_type:
+                    continue
                 runtime_state = self.add_event(runtime_state, f"GPIO erkannt: {pin} -> {button.get('name', '')}")
                 self.save_runtime(runtime_state)
                 return self.trigger_button(button.get("name", ""), press_type)
 
-        runtime_state = self.add_event(runtime_state, f"GPIO erkannt ohne Zuordnung: {pin}", "warning")
+        runtime_state = self.add_event(runtime_state, f"GPIO erkannt ohne Zuordnung: {pin} ({press_type})", "warning")
         self.save_runtime(runtime_state)
         return {"runtime": runtime_state, "player": self.load_player()}
 
