@@ -1,115 +1,125 @@
 {% extends "base.html" %}
 {% block content %}
-  <section class="hero">
+  <section class="page-head">
     <div>
-      <p class="eyebrow">Player</p>
-      <h2>{{ player_state.current_album }}</h2>
-      <p class="subtle">Aktueller Titel mit Cover, Lautstärke, Sleeptimer und Warteschlange.</p>
-    </div>
-    <div class="status-pill {% if player_state.is_playing %}ok{% else %}idle{% endif %}">
-      {% if player_state.is_playing %}Läuft{% else %}Pausiert{% endif %}
+      <h2 id="player-album">{{ player_state.current_album }}</h2>
     </div>
   </section>
 
-  <div class="grid two-up">
-    <article class="card player-card">
-      <div class="cover">
-        <div class="cover-placeholder">Cover</div>
-      </div>
-      <div class="player-meta">
-        <p class="track">{{ player_state.current_track }}</p>
-        <p class="subtle">von {{ player_state.current_album }}</p>
-      </div>
-      <div class="meter-group">
-        <div class="meter-label">
-          <span>{{ position_label }}</span>
-          <span>{{ duration_label }}</span>
+  <section class="player-layout">
+    <article class="panel-box player-display">
+      <div class="now-playing-grid">
+        <div id="player-cover-shell" class="cover-shell" style="--cover-progress: {{ progress_percent }}%;">
+          <div class="cover-stage cover-stage-round">
+            {% if player_state.cover_url %}
+              <img id="player-cover-image" src="{{ player_state.cover_url }}" alt="Cover von {{ player_state.current_album }}">
+            {% else %}
+              <div id="player-cover-placeholder" class="cover-art-placeholder">
+                <span>{{ player_state.current_album[:1] if player_state.current_album else "P" }}</span>
+              </div>
+            {% endif %}
+          </div>
         </div>
-        <div class="progress-bar">
-          <div class="progress-fill" style="width: {{ progress_percent }}%"></div>
+        <div class="title-stage">
+          <p class="overline">Aktueller Titel</p>
+          <h3 id="player-track">{{ player_state.current_track }}</h3>
+          <p id="player-album-secondary">{{ player_state.current_album }}</p>
+          <div class="timeline-box">
+            <div class="timeline-labels">
+              <span id="player-position-label">{{ position_label }}</span>
+              <span id="player-duration-label">{{ duration_label }}</span>
+            </div>
+            <div class="timeline-slider-wrap">
+              <div id="player-seek-bubble" class="timeline-bubble">{{ position_label }}</div>
+              <input
+                id="player-seek-slider"
+                class="timeline-slider"
+                type="range"
+                min="0"
+                max="{{ player_state.duration_seconds or 0 }}"
+                value="{{ player_state.position_seconds }}"
+                style="--timeline-progress: {{ progress_percent }}%;"
+              >
+            </div>
+          </div>
+
+          <form class="transport-strip" method="post" data-player-form>
+            <button
+              name="action"
+              value="prev"
+              class="transport-button"
+              aria-label="Vorheriger Titel"
+              title="Vorheriger Titel"
+            >
+              <span class="transport-symbol">⏮</span>
+            </button>
+            <button
+              id="player-toggle-button"
+              name="action"
+              value="toggle_play"
+              class="transport-button transport-button-main primary"
+              aria-label="{% if player_state.is_playing %}Pause{% else %}Wiedergabe{% endif %}"
+              title="{% if player_state.is_playing %}Pause{% else %}Wiedergabe{% endif %}"
+            >
+              <span id="player-toggle-symbol" class="transport-symbol transport-symbol-main">{% if player_state.is_playing %}⏸{% else %}▶{% endif %}</span>
+            </button>
+            <button
+              name="action"
+              value="next"
+              class="transport-button"
+              aria-label="Nächster Titel"
+              title="Nächster Titel"
+            >
+              <span class="transport-symbol">⏭</span>
+            </button>
+          </form>
         </div>
       </div>
-      <form class="inline-actions" method="post">
-        <button name="action" value="volume_down">Lautstärke -</button>
-        <span class="value">{{ volume_percent }}%</span>
-        <button name="action" value="volume_up">Lautstärke +</button>
-      </form>
-      <form class="inline-actions" method="post">
-        <button name="action" value="sleep_down">Sleeptimer -</button>
-        <span class="value">{{ player_state.sleep_timer_minutes }} min</span>
-        <button name="action" value="sleep_up">Sleeptimer +</button>
-      </form>
-      <form class="inline-actions" method="post">
-        <input type="hidden" name="action" value="seek">
-        <input type="number" name="seek_position" min="0" max="{{ player_state.duration_seconds or 0 }}" value="{{ player_state.position_seconds }}">
-        <button type="submit">Position setzen</button>
-      </form>
-      <form class="transport" method="post">
-        <button name="action" value="prev">Zurück</button>
-        <button name="action" value="toggle_play" class="primary">
-          {% if player_state.is_playing %}Pause{% else %}Play{% endif %}
-        </button>
-        <button name="action" value="stop">Stop</button>
-        <button name="action" value="next">Vor</button>
+    </article>
+  </section>
+
+  <section class="player-utility-row">
+    <article class="panel-box compact-box utility-box">
+      <div class="panel-box-head utility-head">
+        <h3>Lautstärke</h3>
+        <span id="player-volume-value" class="{% if volume_muted %}muted{% endif %}">{{ volume_percent }}%</span>
+      </div>
+      <form class="mini-controls utility-controls utility-controls-three" method="post" data-player-form>
+        <button name="action" value="volume_down">-{{ volume_step }}%</button>
+        <button name="action" value="mute">Stumm</button>
+        <button name="action" value="volume_up">+{{ volume_step }}%</button>
       </form>
     </article>
 
-    <article class="card queue-card">
-    <div class="section-header">
-      <h3>Warteschlange</h3>
-      <span class="badge">{{ player_state.queue|length }} Titel</span>
-    </div>
-    <form method="post" class="inline-actions">
-      <button name="action" value="clear_queue">Warteschlange leeren</button>
-    </form>
-    <ul class="list">
-      {% for item in player_state.queue %}
-        <li>{{ item }}</li>
-      {% else %}
-        <li>Keine weiteren Titel geplant.</li>
+    <article class="panel-box compact-box utility-box">
+      <div class="panel-box-head utility-head">
+        <h3>Sleeptimer</h3>
+        <span id="player-sleep-value">Stufe {{ sleep_level }} · {{ player_state.sleep_timer_minutes }} min</span>
+      </div>
+      <form class="mini-controls utility-controls utility-controls-three" method="post" data-player-form>
+        <button name="action" value="stop">Aus</button>
+        <button name="action" value="sleep_down">-{{ sleep_step_minutes }} min</button>
+        <button name="action" value="sleep_up">+{{ sleep_step_minutes }} min</button>
+      </form>
+    </article>
+  </section>
+
+  <section class="player-bottom-grid solo">
+    <article class="panel-box queue-box full-bleed">
+      <div class="panel-box-head">
+        <h3>Warteschlange</h3>
+        <form method="post" data-player-form>
+          <button name="action" value="clear_queue">Leeren</button>
+        </form>
+      </div>
+      <ul id="player-queue" class="queue-list">
+        {% for item in player_state.queue %}
+          <li>{{ item }}</li>
+        {% else %}
+          <li>Keine weiteren Titel</li>
         {% endfor %}
       </ul>
     </article>
-  </div>
-
-  <article class="card runtime-card">
-    <div class="section-header">
-      <h3>Runtime</h3>
-      <span class="badge">{{ runtime_state.playback_state }}</span>
-    </div>
-    <div class="status-grid">
-      <div><span>Power</span><strong>{% if runtime_state.powered_on %}an{% else %}aus{% endif %}</strong></div>
-      <div><span>Sleeptimer</span><strong>Stufe {{ runtime_state.sleep_timer.level }}</strong></div>
-      <div><span>Letztes Event</span><strong>{{ runtime_state.last_event }}</strong></div>
-      <div><span>RFID</span><strong>{{ runtime_state.hardware.last_scanned_uid or "-" }}</strong></div>
-      <div><span>Playback</span><strong>{{ runtime_state.playback_session.backend or "mock" }}</strong></div>
-      <div><span>Backend-Status</span><strong>{{ runtime_state.playback_session.state or "idle" }}</strong></div>
-    </div>
-    <div class="split-list">
-      <div>
-        <h4>LED-Status</h4>
-        <ul class="list">
-          {% for led in runtime_state.led_status %}
-            <li>
-              <strong>{{ led.name }}</strong>
-              <span>{{ led.pin }} • {% if led.is_on %}an{% else %}aus{% endif %} • {{ led.brightness }}%</span>
-            </li>
-          {% else %}
-            <li>Noch keine LED-Daten.</li>
-          {% endfor %}
-        </ul>
-      </div>
-      <div>
-        <h4>API Schnelltest</h4>
-        <ul class="list">
-          <li><strong>GET</strong><span>/api/runtime</span></li>
-          <li><strong>POST</strong><span>/api/runtime/tick</span></li>
-          <li><strong>POST</strong><span>/api/runtime/rfid</span></li>
-          <li><strong>POST</strong><span>/api/runtime/button</span></li>
-          <li><strong>POST</strong><span>/api/runtime/seek</span></li>
-          <li><strong>POST</strong><span>/api/runtime/load-album</span></li>
-        </ul>
-      </div>
-    </div>
-  </article>
+  </section>
+  <script src="{{ url_for('static', filename='player.js', v=asset_version) }}"></script>
 {% endblock %}

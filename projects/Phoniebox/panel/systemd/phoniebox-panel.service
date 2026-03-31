@@ -6,7 +6,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/phoniebox-panel
-ExecStart=/usr/bin/python3 /opt/phoniebox-panel/app.py
+Environment=PYTHONUNBUFFERED=1
+Environment=PHONIEBOX_HOST=0.0.0.0
+Environment=PHONIEBOX_PORT=5080
+ExecStart=/opt/phoniebox-panel/.venv/bin/gunicorn --workers 2 --bind 0.0.0.0:5080 wsgi:app
 Restart=always
 RestartSec=3
 

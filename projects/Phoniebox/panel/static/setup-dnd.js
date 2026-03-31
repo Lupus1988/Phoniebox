@@ -1,10 +1,45 @@
 document.addEventListener("DOMContentLoaded", () => {
   let draggedFunction = "";
+  let selectedChip = null;
+
+  function emptyLabel(slot) {
+    return slot.dataset.emptyLabel || "Funktion hierhin ziehen";
+  }
+
+  function applyToSlot(slot, value) {
+    const hidden = slot.querySelector("input[type='hidden']");
+    const label = slot.querySelector("[data-drop-label]");
+    if (hidden) {
+      hidden.value = value;
+    }
+    if (label) {
+      label.textContent = value || emptyLabel(slot);
+    }
+  }
+
+  function clearSelectedChip() {
+    if (selectedChip) {
+      selectedChip.classList.remove("selected");
+      selectedChip = null;
+    }
+  }
 
   for (const chip of document.querySelectorAll("[data-function-chip]")) {
     chip.addEventListener("dragstart", (event) => {
       draggedFunction = chip.dataset.functionChip || "";
       event.dataTransfer?.setData("text/plain", draggedFunction);
+    });
+
+    chip.addEventListener("click", () => {
+      if (selectedChip === chip) {
+        clearSelectedChip();
+        draggedFunction = "";
+        return;
+      }
+      clearSelectedChip();
+      selectedChip = chip;
+      draggedFunction = chip.dataset.functionChip || "";
+      chip.classList.add("selected");
     });
   }
 
@@ -21,26 +56,22 @@ document.addEventListener("DOMContentLoaded", () => {
     slot.addEventListener("drop", (event) => {
       event.preventDefault();
       const dropped = event.dataTransfer?.getData("text/plain") || draggedFunction;
-      const hidden = slot.querySelector("input[type='hidden']");
-      const label = slot.querySelector("[data-drop-label]");
-      if (hidden) {
-        hidden.value = dropped;
-      }
-      if (label) {
-        label.textContent = dropped || "Funktion hierhin ziehen";
-      }
+      applyToSlot(slot, dropped);
       slot.classList.remove("drag-over");
+      clearSelectedChip();
+    });
+
+    slot.addEventListener("click", () => {
+      if (!draggedFunction) {
+        return;
+      }
+      applyToSlot(slot, draggedFunction);
+      clearSelectedChip();
+      draggedFunction = "";
     });
 
     slot.addEventListener("dblclick", () => {
-      const hidden = slot.querySelector("input[type='hidden']");
-      const label = slot.querySelector("[data-drop-label]");
-      if (hidden) {
-        hidden.value = "";
-      }
-      if (label) {
-        label.textContent = "Funktion hierhin ziehen";
-      }
+      applyToSlot(slot, "");
     });
   }
 });

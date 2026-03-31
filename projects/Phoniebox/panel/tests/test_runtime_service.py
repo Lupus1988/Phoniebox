@@ -108,6 +108,7 @@ class RuntimeServiceTest(unittest.TestCase):
             patch.object(service_module, "RUNTIME_FILE", self.data_dir / "runtime_state.json"),
             patch.object(audio_module, "BASE_DIR", self.base_dir),
             patch.object(playback_module, "BASE_DIR", self.base_dir),
+            patch.object(playback_module.shutil, "which", return_value=None),
         ]
         for patcher in self.patchers:
             patcher.start()

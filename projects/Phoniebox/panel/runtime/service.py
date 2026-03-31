@@ -1,4 +1,5 @@
 import json
+import os
 import secrets
 import sys
 import time
@@ -30,10 +31,43 @@ def load_json(path, default):
 
 def save_json(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
+    tmp = path.with_name(f"{path.stem}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
     with tmp.open("w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2, ensure_ascii=False)
     tmp.replace(path)
+
+
+def merge_defaults(data, defaults):
+    if not isinstance(defaults, dict):
+        return data if data is not None else defaults
+    result = dict(defaults)
+    if not isinstance(data, dict):
+        return result
+    for key, value in data.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = merge_defaults(value, result[key])
+        else:
+            result[key] = value
+    return result
+
+
+def default_player():
+    return {
+        "current_album": "Lieblingsgeschichten",
+        "current_track": "Lieblingsgeschichten",
+        "cover_url": "",
+        "volume": 45,
+        "muted": False,
+        "volume_before_mute": 45,
+        "position_seconds": 0,
+        "duration_seconds": 278,
+        "sleep_timer_minutes": 0,
+        "is_playing": True,
+        "playlist": "media/albums/lieblingsgeschichten/playlist.m3u",
+        "playlist_entries": [],
+        "current_track_index": 0,
+        "queue": [],
+    }
 
 
 def default_runtime_state():
@@ -82,7 +116,7 @@ class RuntimeService:
         save_json(self.runtime_path, state)
 
     def load_player(self):
-        return load_json(PLAYER_FILE, {})
+        return merge_defaults(load_json(PLAYER_FILE, default_player()), default_player())
 
     def save_player(self, state):
         save_json(PLAYER_FILE, state)
@@ -519,6 +553,9 @@ class RuntimeService:
         volume = int(player.get("volume", 0))
         max_volume = int(settings.get("max_volume", 100))
         player["volume"] = max(0, min(max_volume, volume + int(delta)))
+        player["muted"] = False
+        if player["volume"] > 0:
+            player["volume_before_mute"] = player["volume"]
         runtime_state = self.ensure_runtime()
         runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
         if runtime_state.get("playback_session"):
@@ -527,6 +564,35 @@ class RuntimeService:
                 player["volume"],
             )
         runtime_state = self.add_event(runtime_state, f"Lautstärke {player['volume']}%")
+        runtime_state = self.update_hardware_profile(runtime_state)
+        self.save_runtime(runtime_state)
+        self.save_player(player)
+        return {"runtime": runtime_state, "player": player}
+
+    def toggle_mute(self):
+        settings = self.load_settings()
+        player = self.load_player()
+        max_volume = int(settings.get("max_volume", 100))
+        runtime_state = self.ensure_runtime()
+
+        if player.get("muted"):
+            restore = int(player.get("volume_before_mute", 45) or 45)
+            player["volume"] = max(0, min(max_volume, restore))
+            player["muted"] = False
+        else:
+            current_volume = int(player.get("volume", 0))
+            if current_volume > 0:
+                player["volume_before_mute"] = current_volume
+            player["volume"] = 0
+            player["muted"] = True
+
+        runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
+        if runtime_state.get("playback_session"):
+            runtime_state["playback_session"] = self.playback.set_volume(
+                runtime_state["playback_session"],
+                player["volume"],
+            )
+        runtime_state = self.add_event(runtime_state, "Stumm" if player.get("muted") else f"Lautstärke {player['volume']}%")
         runtime_state = self.update_hardware_profile(runtime_state)
         self.save_runtime(runtime_state)
         self.save_player(player)
@@ -678,6 +744,7 @@ class RuntimeService:
     def status(self):
         runtime_state = self.ensure_runtime()
         player = self.load_player()
+        runtime_state = self._refresh_sleep_step(runtime_state)
         runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
         runtime_state = self.update_hardware_profile(runtime_state)
         runtime_state = self.update_led_status(runtime_state)

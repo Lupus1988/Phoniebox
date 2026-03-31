@@ -2,11 +2,11 @@
 Description=Phoniebox Audio Init
 After=sound.target
 Wants=sound.target
+ConditionPathExists=/usr/local/bin/phoniebox-set-startup-volume.sh
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/phoniebox-panel
-ExecStart=/opt/phoniebox-panel/data/generated/audio/set-startup-volume.sh
+ExecStart=/usr/local/bin/phoniebox-set-startup-volume.sh
 RemainAfterExit=yes
 
 [Install]

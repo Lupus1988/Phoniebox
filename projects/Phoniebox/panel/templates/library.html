@@ -1,120 +1,259 @@
 {% extends "base.html" %}
 {% block content %}
-  <section class="hero">
-    <div>
-      <p class="eyebrow">Bibliothek</p>
-      <h2>Alben und RFID-Zuordnung</h2>
-      <p class="subtle">Dein PDF als editierbare Tabelle: Album, Ordner, Tag und Kollisionsprüfung.</p>
-    </div>
+  <section class="library-toolbar">
+    <button type="button" class="primary library-add-button" id="open-album-create">+ Neues Album</button>
+    <span class="status-pill neutral">{{ library_data.albums|length }} Alben</span>
   </section>
 
-  <article class="card">
-    <div class="section-header">
-      <h3>Albumordner importieren</h3>
-      <span class="badge">Ordner -> Playlist</span>
-    </div>
-    <form method="post" class="grid form-grid" enctype="multipart/form-data">
-      <input type="hidden" name="action" value="import_album">
-      <label>
-        <span>Name</span>
-        <input name="name" placeholder="Albumname">
-      </label>
-      <label>
-        <span>RFID-UID optional</span>
-        <input name="rfid_uid" placeholder="1234567890">
-      </label>
-      <label class="full">
-        <span>Albumordner</span>
-        <input type="file" name="album_files" webkitdirectory directory multiple>
-      </label>
-      <p class="subtle full">Der Upload erwartet einen kompletten Ordner. Danach wird automatisch `playlist.m3u` erzeugt und im Album gespeichert.</p>
-      <button class="primary wide" type="submit">Album importieren</button>
-    </form>
-  </article>
-
-  <article class="card">
-    <div class="section-header">
-      <h3>RFID-Verlinkung</h3>
-      <span class="badge">Link hinzufügen</span>
-    </div>
-    <p class="subtle">Beim Klick auf „Link hinzufügen“ öffnet sich ein Popup. Der nächste gescannte Tag wird automatisch verknüpft. Falls der Tag bereits belegt ist, wird kein Link erstellt.</p>
-    <div class="chip-stack">
+  <article class="panel-box library-overview-box">
+    <div class="library-table">
       {% for album in library_data.albums %}
-        <button
-          type="button"
-          class="drag-chip js-open-link-modal"
-          data-album-id="{{ album.id }}"
-          data-album-name="{{ album.name }}"
-        >
-          {{ album.name }}: Link hinzufügen
-        </button>
-      {% endfor %}
-    </div>
-  </article>
-
-  <article class="card">
-    <div class="section-header">
-      <h3>Bestehende Alben</h3>
-      <span class="badge">{{ library_data.albums|length }} Einträge</span>
-    </div>
-    <div class="album-list">
-      {% for album in library_data.albums %}
-        <form method="post" class="album-row">
-          <input type="hidden" name="action" value="save_album">
+        <form method="post" class="library-table-row">
           <input type="hidden" name="album_id" value="{{ album.id }}">
-          <label>
-            <span>Album</span>
-            <input name="name" value="{{ album.name }}">
-          </label>
-          <label>
-            <span>Ordner</span>
-            <input name="folder" value="{{ album.folder }}">
-          </label>
-          <label>
-            <span>Playlist</span>
-            <input name="playlist" value="{{ album.playlist }}">
-          </label>
-          <label>
-            <span>Titel</span>
-            <input name="track_count" value="{{ album.track_count or 0 }}">
-          </label>
-          <label>
-            <span>RFID-Status</span>
-            <input name="rfid_uid" value="{{ album.rfid_uid }}" placeholder="unverlinkt">
-          </label>
-          <label>
-            <span>Cover</span>
-            <input name="cover_url" value="{{ album.cover_url }}">
-          </label>
-          <div class="row-actions">
-            <button formaction="{{ url_for('library') }}" name="action" value="play_album" class="primary">Jetzt abspielen</button>
-            <button formaction="{{ url_for('library') }}" name="action" value="load_album">Nur laden</button>
-            <button formaction="{{ url_for('library') }}" name="action" value="queue_album">Zur Warteschlange</button>
-            <button class="primary" type="submit">Speichern</button>
-            <button type="button" class="js-open-link-modal" data-album-id="{{ album.id }}" data-album-name="{{ album.name }}">Link hinzufügen</button>
-            <button formaction="{{ url_for('library') }}" name="action" value="unlink_rfid">RFID löschen</button>
-            <button formaction="{{ url_for('library') }}" name="action" value="delete_album" class="danger">Entfernen</button>
+          <div class="library-cell library-album-cell">
+            <div class="library-album-name">{{ album.name }}</div>
+            <div class="library-cover-tile">
+              {% if album.cover_url %}
+                <img src="{{ album.cover_url }}" alt="Cover von {{ album.name }}">
+              {% else %}
+                <span>Cover</span>
+              {% endif %}
+            </div>
+          </div>
+          <div class="library-cell library-status-cell">
+            <div class="library-cell-title">Status</div>
+            <button
+              type="button"
+              class="rfid-status-badge js-rfid-status-button {% if album.rfid_uid %}linked{% else %}unlinked{% endif %}"
+              data-album-id="{{ album.id }}"
+              data-album-name="{{ album.name }}"
+              data-rfid-uid="{{ album.rfid_uid }}"
+              data-linked="{% if album.rfid_uid %}true{% else %}false{% endif %}"
+              aria-label="{% if album.rfid_uid %}Verlinkung entfernen{% else %}Link hinzufügen{% endif %}"
+              title="{% if album.rfid_uid %}Verlinkung entfernen{% else %}Link hinzufügen{% endif %}"
+            >
+              <span class="rfid-status-icon" aria-hidden="true">
+                {% if album.rfid_uid %}
+                  <svg viewBox="0 0 220 124" role="presentation">
+                    <path d="M72 34H46a28 28 0 0 0 0 56h34" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M148 34h26a28 28 0 0 1 0 56h-34" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M86 62h48" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round"/>
+                  </svg>
+                {% else %}
+                  <svg viewBox="0 0 220 124" role="presentation">
+                    <path d="M72 34H46a28 28 0 0 0 0 56h28" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M148 34h26a28 28 0 0 1 0 56h-28" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M100 34 120 90" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round"/>
+                  </svg>
+                {% endif %}
+              </span>
+            </button>
+          </div>
+          <div class="library-cell library-tag-cell">
+            <div class="library-cell-title">Tag-ID</div>
+            <div class="library-value-box mono">{{ album.rfid_uid or "" }}</div>
+          </div>
+          <div class="library-action-cell">
+            <div class="library-cell-title">Play</div>
+            <button
+              formaction="{{ url_for('library') }}"
+              name="action"
+              value="play_album"
+              class="primary library-icon-button"
+              data-library-runtime-action="play"
+              data-album-id="{{ album.id }}"
+              title="Jetzt abspielen"
+              aria-label="Jetzt abspielen"
+            >
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <path d="M22 16 50 32 22 48Z" fill="currentColor"/>
+              </svg>
+            </button>
+          </div>
+          <div class="library-action-cell">
+            <div class="library-cell-title">in Warteschlange</div>
+            <button
+              formaction="{{ url_for('library') }}"
+              name="action"
+              value="queue_album"
+              class="library-icon-button"
+              data-library-runtime-action="queue"
+              data-album-id="{{ album.id }}"
+              title="In die Warteschlange"
+              aria-label="In die Warteschlange"
+            >
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <path d="M20 10h24v8L36 30l8 12v12H20V42l8-12-8-12Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+                <path d="M50 14v16M42 22h16" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+              </svg>
+            </button>
+          </div>
+          <div class="library-action-cell">
+            <div class="library-cell-title">Bearbeiten</div>
+            <button
+              type="button"
+              class="js-open-edit-modal library-icon-button library-edit-button"
+              data-album-id="{{ album.id }}"
+              data-album-name="{{ album.name }}"
+              title="Bearbeiten"
+              aria-label="Bearbeiten"
+            >
+              <img src="{{ url_for('static', filename='edit-05-icon.png', v=asset_version) }}" alt="" aria-hidden="true">
+            </button>
+          </div>
+          <div class="library-action-cell">
+            <div class="library-cell-title">Löschen</div>
+            <button
+              type="button"
+              class="danger library-icon-button"
+              data-delete-album-button
+              data-album-id="{{ album.id }}"
+              data-album-name="{{ album.name }}"
+              title="Album löschen"
+              aria-label="Album löschen"
+            >
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <path d="M20 20h24l-2 30H22L20 20Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+                <path d="M16 20h32M26 20v-4h12v4M28 28v14M36 28v14" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+              </svg>
+            </button>
           </div>
         </form>
       {% endfor %}
     </div>
+
   </article>
 
-  <dialog class="modal" id="rfid-link-modal">
-    <div class="modal-body">
-      <div class="section-header">
-        <h3>Jetzt Tag scannen</h3>
-        <button type="button" class="modal-close" data-close-modal>Schließen</button>
+  <dialog class="modal" id="album-create-modal">
+    <div class="modal-body compact-modal-body create-modal-body" id="album-create-modal-body">
+      <div class="panel-box-head">
+        <h3>Neues Album</h3>
       </div>
-      <p id="rfid-link-album" class="subtle"></p>
-      <div class="info-box">
-        <p id="rfid-link-message"><strong>Warte auf den nächsten Scan.</strong></p>
-        <p class="subtle">Der nächste gescannte RFID-Tag wird für dieses Album verwendet.</p>
+      <form method="post" enctype="multipart/form-data" class="form-grid" id="album-create-form">
+        <input type="hidden" name="action" value="import_album">
+        <label class="full">
+          <span>Albumname</span>
+          <input name="name" id="album-create-name" placeholder="Albumname" required>
+        </label>
+        <label class="full hidden-input-wrap">
+          <input type="file" name="album_files" id="album-folder-input" webkitdirectory directory multiple>
+        </label>
+        <div id="album-create-warning" class="create-warning-box full" hidden>Albumname bereits vorhanden.</div>
+        <div class="button-row compact-button-row create-button-stack full">
+          <button type="button" id="album-folder-trigger">Ordner auswählen</button>
+          <button type="submit" class="primary">Album anlegen</button>
+          <button type="button" data-close-create>Zurück</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
+  <dialog class="modal" id="album-edit-modal">
+    <div class="modal-body compact-modal-body edit-modal-body">
+      <div class="panel-box-head">
+        <div class="panel-box-head-stack">
+          <h3 id="album-edit-title">Bearbeiten</h3>
+          <span id="album-edit-current-name" class="edit-album-subtitle"></span>
+        </div>
       </div>
-      <div class="inline-actions stacked-actions">
-        <button type="button" class="danger" id="rfid-link-cancel">Abbrechen</button>
+
+      <div id="album-edit-home" class="dialog-stack">
+        <button type="button" id="open-rename-album">Name ändern</button>
+        <button type="button" id="open-remove-tracks">Titel entfernen</button>
+        <button type="button" id="open-add-tracks">Titel hinzufügen</button>
+        <button type="button" data-close-edit>Zurück</button>
+      </div>
+
+      <div id="album-edit-rename" class="dialog-stack" hidden>
+        <form method="post" id="album-rename-form">
+          <input type="hidden" name="action" value="save_album">
+          <input type="hidden" name="album_id" id="album-rename-id" value="">
+          <input type="hidden" name="folder" id="album-rename-folder" value="">
+          <input type="hidden" name="playlist" id="album-rename-playlist" value="">
+          <input type="hidden" name="track_count" id="album-rename-track-count" value="">
+          <input type="hidden" name="rfid_uid" id="album-rename-rfid" value="">
+          <input type="hidden" name="cover_url" id="album-rename-cover" value="">
+          <label>
+            <span>Albumname</span>
+            <input name="name" id="album-rename-name" required>
+          </label>
+          <div id="album-rename-warning" class="create-warning-box" hidden>Albumname bereits vorhanden.</div>
+          <div class="button-row compact-button-row">
+            <button type="submit" class="primary">Speichern</button>
+            <button type="button" data-edit-back>Zurück</button>
+          </div>
+        </form>
+      </div>
+
+      <div id="album-edit-remove" class="dialog-stack" hidden>
+        <div id="album-track-list" class="track-remove-list"></div>
+        <button type="button" class="secondary-back" data-edit-back>Zurück</button>
+      </div>
+
+      <div id="album-edit-add" class="dialog-stack" hidden>
+        <form method="post" enctype="multipart/form-data" id="album-add-tracks-form">
+          <input type="hidden" name="action" value="add_tracks">
+          <input type="hidden" name="album_id" id="album-add-id" value="">
+          <label class="full hidden-input-wrap">
+            <input type="file" name="track_files" id="album-track-input" multiple accept=".mp3,.m4a,.wav,.flac,.ogg,.aac,audio/*">
+          </label>
+          <div class="button-row compact-button-row">
+            <button type="button" id="album-track-trigger">Dateien auswählen</button>
+            <button type="submit" class="primary">Titel hinzufügen</button>
+          </div>
+        </form>
+        <button type="button" class="secondary-back" data-edit-back>Zurück</button>
       </div>
     </div>
   </dialog>
-  <script src="{{ url_for('static', filename='library-link.js') }}"></script>
+
+  <dialog class="modal" id="rfid-link-modal">
+    <div class="modal-body compact-modal-body link-modal-body">
+      <div id="rfid-link-confirm-view" class="dialog-stack link-confirm-view">
+        <p id="rfid-link-album" class="page-copy link-album-copy"></p>
+        <p id="rfid-link-message" class="link-message-copy"></p>
+        <div class="button-row compact-button-row centered-button-row">
+          <button type="button" id="rfid-link-confirm" class="primary link-choice-button confirm">Ja</button>
+          <button type="button" id="rfid-link-cancel" class="link-choice-button cancel">Nein</button>
+        </div>
+        <label id="rfid-link-input-wrap" class="link-input-wrap" hidden>
+          <span>Tag-ID</span>
+          <input id="rfid-link-input" type="text" placeholder="Tag-scannen oder ID eingeben">
+        </label>
+        <div id="rfid-unlink-info-wrap" class="link-display-wrap" hidden>
+          <span>Link mit</span>
+          <div id="rfid-unlink-value" class="link-display-value mono"></div>
+        </div>
+      </div>
+      <div id="rfid-unlink-final-view" class="dialog-stack link-confirm-view link-warning-surface" hidden>
+        <p class="link-message-copy">Link wirklich entfernen?</p>
+        <div class="button-row compact-button-row centered-button-row">
+          <button type="button" id="rfid-unlink-final-confirm" class="primary link-choice-button confirm">Ja</button>
+          <button type="button" id="rfid-unlink-final-cancel" class="link-choice-button cancel">Nein</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+  <form id="rfid-unlink-form" method="post" class="hidden-form">
+    <input type="hidden" name="action" value="unlink_rfid">
+    <input type="hidden" name="album_id" id="rfid-unlink-album-id" value="">
+  </form>
+  <dialog class="modal" id="album-delete-modal">
+    <div class="modal-body compact-modal-body link-modal-body">
+      <div class="dialog-stack link-confirm-view link-warning-surface">
+        <p id="album-delete-name" class="page-copy link-album-copy"></p>
+        <p class="link-message-copy">Album wirklich löschen?</p>
+        <div class="button-row compact-button-row centered-button-row">
+          <button type="button" id="album-delete-confirm" class="primary link-choice-button confirm">Ja</button>
+          <button type="button" id="album-delete-cancel" class="link-choice-button cancel">Nein</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+  <form id="album-delete-form" method="post" class="hidden-form">
+    <input type="hidden" name="action" value="delete_album">
+    <input type="hidden" name="album_id" id="album-delete-album-id" value="">
+  </form>
+  <script id="library-albums-json" type="application/json">{{ library_data.albums | tojson }}</script>
+  <script src="{{ url_for('static', filename='library-link.js', v=asset_version) }}"></script>
 {% endblock %}

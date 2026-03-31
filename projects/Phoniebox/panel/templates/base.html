@@ -4,28 +4,28 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Phoniebox Panel</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v=asset_version) }}">
   </head>
   <body>
-    <div class="shell">
-      <aside class="sidebar">
-        <div class="brand">
-          <span class="brand-kicker">Phoniebox</span>
-          <h1>Panel</h1>
-          <p>Kinderbox-Steuerung mit Hardware-Setup und WLAN-Fallback.</p>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="topbar-brand">
+          <h1>Phoniebox</h1>
+          <span class="brand-overline">Universal Panel</span>
         </div>
-        <nav class="nav">
+        <nav class="topnav" aria-label="Hauptnavigation">
           {% for item in nav_items %}
             <a
-              class="nav-link {% if active_path == url_for(item.endpoint) %}active{% endif %}"
+              class="topnav-link {% if active_path == url_for(item.endpoint) %}active{% endif %}"
               href="{{ url_for(item.endpoint) }}"
             >
               {{ item.label }}
             </a>
           {% endfor %}
         </nav>
-      </aside>
-      <main class="content">
+      </header>
+
+      <main class="page">
         {% with messages = get_flashed_messages(with_categories=true) %}
           {% if messages %}
             <div class="flash-stack">
@@ -36,6 +36,7 @@
           {% endif %}
         {% endwith %}
         {% block content %}{% endblock %}
+        <footer class="page-footer">Phoniebox Panel v1.0 · by Lupus1988</footer>
       </main>
     </div>
   </body>

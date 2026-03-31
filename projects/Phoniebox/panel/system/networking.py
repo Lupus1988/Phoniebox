@@ -12,6 +12,15 @@ def run_command(command):
     return {"ok": result.returncode == 0, "output": output}
 
 
+def normalize_hotspot_security(value):
+    security = (value or "open").strip().lower()
+    if security == "wpa2":
+        return "wpa-psk"
+    if security not in {"open", "wpa-psk"}:
+        return "open"
+    return security
+
+
 def ensure_hostname(hostname):
     hostname = (hostname or "phoniebox").strip()
     details = [f"Ziel-Hostname: {hostname}"]
@@ -140,7 +149,7 @@ def recreate_hotspot_profile(config):
             "no",
         ]
     ]
-    if config.get("hotspot_security") == "wpa2":
+    if normalize_hotspot_security(config.get("hotspot_security")) == "wpa-psk":
         commands.append(
             [
                 "sudo",

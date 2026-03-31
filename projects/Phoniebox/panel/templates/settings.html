@@ -1,52 +1,59 @@
 {% extends "base.html" %}
 {% block content %}
-  <section class="hero">
+  <section class="page-head">
     <div>
-      <p class="eyebrow">Einstellungen</p>
-      <h2>Globale Player- und RFID-Optionen</h2>
-      <p class="subtle">Lautstärkegrenzen, Steps und Reader-Verhalten zentral verwalten.</p>
+      <p class="kicker">Einstellungen</p>
     </div>
   </section>
 
-  <article class="card">
-    <form method="post" class="grid form-grid">
-      <label>
-        <span>Maximallautstärke in %</span>
-        <input type="number" name="max_volume" min="10" max="100" value="{{ settings.max_volume }}">
-      </label>
-      <label>
-        <span>Lautstärke-Step in %</span>
-        <input type="number" name="volume_step" min="1" max="25" value="{{ settings.volume_step }}">
-      </label>
-      <label>
-        <span>Sleeptimer-Step in Minuten</span>
-        <input type="number" name="sleep_timer_step" min="1" max="60" value="{{ settings.sleep_timer_step }}">
-      </label>
-      <label>
-        <span>Beim Lesen eines verlinkten Tags</span>
-        <select name="rfid_read_action">
-          {% for option in ["play", "album_load", "queue_append"] %}
-            <option value="{{ option }}" {% if settings.rfid_read_action == option %}selected{% endif %}>{{ option }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label>
-        <span>Beim Entfernen eines verlinkten Tags</span>
-        <select name="rfid_remove_action">
-          {% for option in ["stop", "pause", "nichts"] %}
-            <option value="{{ option }}" {% if settings.rfid_remove_action == option %}selected{% endif %}>{{ option }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label>
-        <span>Reader-Modus</span>
-        <select name="reader_mode">
-          {% for option in ["album_load", "play", "queue_append"] %}
-            <option value="{{ option }}" {% if settings.reader_mode == option %}selected{% endif %}>{{ option }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <button class="primary wide" type="submit">Einstellungen speichern</button>
-    </form>
-  </article>
+  <form method="post" class="settings-board" id="settings-form">
+    <article class="panel-box">
+      <div class="panel-box-head">
+        <h3>Player</h3>
+        <span>Grundwerte</span>
+      </div>
+      <div class="settings-list player-settings-list">
+        <label class="inline-field">
+          <span>Maximallautstärke</span>
+          <input type="number" name="max_volume" min="10" max="100" value="{{ settings.max_volume }}">
+          <em>%</em>
+        </label>
+        <label class="inline-field">
+          <span>Lautstärke steps</span>
+          <input type="number" name="volume_step" min="1" max="25" value="{{ settings.volume_step }}">
+          <em>%</em>
+        </label>
+        <label class="inline-field">
+          <span>Sleeptimer steps</span>
+          <input type="number" name="sleep_timer_step" min="1" max="60" value="{{ settings.sleep_timer_step }}">
+          <em>min.</em>
+        </label>
+      </div>
+    </article>
+
+    <article class="panel-box">
+      <div class="panel-box-head">
+        <h3>RFID-Readers</h3>
+        <span>Verhalten</span>
+      </div>
+      <div class="settings-list wide-copy">
+        <label>
+          <span>Beim Lesen eines verlinkten Tags</span>
+          <select name="rfid_read_action">
+            <option value="play" {% if settings.rfid_read_action == "play" %}selected{% endif %}>Album laden und Abspielen</option>
+            <option value="album_load" {% if settings.rfid_read_action == "album_load" %}selected{% endif %}>Album nur Laden</option>
+          </select>
+        </label>
+        <label>
+          <span>Beim Entfernen eines verlinkten Tags</span>
+          <select name="rfid_remove_action">
+            <option value="stop" {% if settings.rfid_remove_action == "stop" %}selected{% endif %}>Wiedergabe stoppen</option>
+            <option value="pause" {% if settings.rfid_remove_action == "pause" %}selected{% endif %}>Wiedergabe pausieren</option>
+            <option value="nichts" {% if settings.rfid_remove_action == "nichts" %}selected{% endif %}>Nichts</option>
+          </select>
+        </label>
+      </div>
+    </article>
+  </form>
+  <script src="{{ url_for('static', filename='settings.js', v=asset_version) }}"></script>
 {% endblock %}

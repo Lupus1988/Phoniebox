@@ -31,6 +31,20 @@ Danach erreichbar unter:
 
 `http://SERVER-IP:5080`
 
+System-Installation:
+
+```bash
+cd /home/wolf/ccmem/projects/Phoniebox/panel
+./install.sh
+```
+
+Der Installer:
+- kopiert das Panel nach `/opt/phoniebox-panel`
+- legt dort eine Python-Virtualenv an und installiert `requirements.txt`
+- initialisiert fehlende JSON-Daten
+- erhält bestehende Inhalte aus `data/` und `media/`
+- installiert und aktiviert die systemd-Dienste und Timer
+
 Hinweis:
 - Das Panel speichert aktuell Soll-Konfigurationen.
 - Netzwerk- und Hostname-Aenderungen koennen aus dem Setup auf das System angewendet werden.
