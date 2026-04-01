@@ -20,7 +20,7 @@ Aktueller Stand:
 Start lokal:
 
 ```bash
-cd /home/wolf/ccmem/projects/Phoniebox/panel
+cd /home/wolf/Phoniebox/projects/Phoniebox/panel
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
@@ -34,8 +34,8 @@ Danach erreichbar unter:
 System-Installation:
 
 ```bash
-cd /home/wolf/ccmem/projects/Phoniebox/panel
-./install.sh
+cd /home/wolf/Phoniebox/projects/Phoniebox/panel
+sudo bash ./install.sh
 ```
 
 Der Installer:
