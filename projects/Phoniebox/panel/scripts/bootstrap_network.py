@@ -13,7 +13,7 @@ WPA_SUPPLICANT_FILE = Path("/etc/wpa_supplicant/wpa_supplicant.conf")
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from system.networking import apply_wifi_profile, recreate_hotspot_profile
+from system.networking import apply_wifi_profile, recreate_hotspot_profile, recreate_wifi_client
 
 
 def load_setup():
@@ -92,34 +92,91 @@ def find_current_wifi_password(ssid):
     return find_password_in_nmconnections(ssid) or find_password_in_wpa_supplicant(ssid)
 
 
+def normalize_saved_networks(saved_networks):
+    normalized = []
+    seen = set()
+    for entry in saved_networks or []:
+        ssid = (entry.get("ssid") or "").strip()
+        if not ssid or ssid in seen:
+            continue
+        seen.add(ssid)
+        normalized.append(
+            {
+                "id": entry.get("id") or f"wifi-{ssid}",
+                "ssid": ssid,
+                "password": (entry.get("password") or "").strip(),
+                "priority": int(entry.get("priority", 10) or 10),
+            }
+        )
+    return normalized
+
+
 def ensure_current_network_saved(config):
     wifi = config.setdefault("wifi", {})
-    saved_networks = wifi.setdefault("saved_networks", [])
-    if saved_networks:
-        return False, "Vorhandene WLAN-Profile bleiben unverändert."
+    saved_networks = normalize_saved_networks(wifi.setdefault("saved_networks", []))
+    wifi["saved_networks"] = saved_networks
 
     ssid = detect_active_ssid()
     if not ssid:
-        return False, "Kein aktives WLAN zum Import gefunden."
+        changed = False
+        if not saved_networks and wifi.get("mode") != "hotspot_only":
+            wifi["mode"] = "hotspot_only"
+            changed = True
+        wifi["fallback_hotspot"] = True
+        return changed, "Kein aktives WLAN zum Import gefunden."
 
     password = find_current_wifi_password(ssid) or ""
-    saved_networks.append(
-        {
-            "id": "wifi-bootstrap",
-            "ssid": ssid,
-            "password": password,
-            "priority": 100,
-        }
-    )
-    if wifi.get("mode") == "hotspot_only":
+    existing = next((entry for entry in saved_networks if entry["ssid"] == ssid), None)
+    changed = False
+    if existing is None:
+        saved_networks.append(
+            {
+                "id": "wifi-bootstrap",
+                "ssid": ssid,
+                "password": password,
+                "priority": 100,
+            }
+        )
+        changed = True
+    elif password and existing.get("password") != password:
+        existing["password"] = password
+        changed = True
+
+    if wifi.get("mode") != "client_with_fallback_hotspot":
         wifi["mode"] = "client_with_fallback_hotspot"
+        changed = True
+    if not wifi.get("fallback_hotspot", True):
         wifi["fallback_hotspot"] = True
-        return True, f"Aktives WLAN {ssid} importiert und Modus auf client_with_fallback_hotspot gesetzt."
-    return True, f"Aktives WLAN {ssid} importiert."
+        changed = True
+    return changed, f"Aktives WLAN {ssid} importiert."
+
+
+def prepare_network_profiles(config):
+    wifi = config.get("wifi", {})
+    details = []
+
+    ok, output = run_command(["sudo", "nmcli", "radio", "wifi", "on"])
+    if not ok:
+        return {"ok": False, "details": [f"WLAN-Funk konnte nicht aktiviert werden: {output}"]}
+    details.append("WLAN-Funk aktiviert.")
+
+    for network in wifi.get("saved_networks", []):
+        result = recreate_wifi_client(
+            network.get("ssid", "").strip(),
+            network.get("password", "").strip(),
+            network.get("priority", 10),
+        )
+        details.extend(result["details"])
+        if not result["ok"]:
+            return {"ok": False, "details": details}
+
+    hotspot = recreate_hotspot_profile(wifi)
+    details.extend(hotspot["details"])
+    return {"ok": hotspot["ok"], "details": details}
 
 
 def seed_only(config):
-    return recreate_hotspot_profile(config.get("wifi", {}))
+    return prepare_network_profiles(config)
 
 
 def main():

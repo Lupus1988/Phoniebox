@@ -29,3 +29,9 @@ class AppRoutesTest(unittest.TestCase):
         warnings = collect_conflicts(setup)
 
         self.assertTrue(any("mindestens 8 Zeichen" in warning for warning in warnings))
+
+    def test_default_setup_has_no_placeholder_wifi_networks(self):
+        setup = default_setup()
+
+        self.assertEqual(setup["wifi"]["mode"], "hotspot_only")
+        self.assertEqual(setup["wifi"]["saved_networks"], [])

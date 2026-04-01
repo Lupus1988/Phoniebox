@@ -501,7 +501,7 @@ def default_setup():
             "connection_hint": "USB- oder I2S-Soundkarte anschließen und auswählen",
         },
         "wifi": {
-            "mode": "client_with_fallback_hotspot",
+            "mode": "hotspot_only",
             "allow_button_toggle": False,
             "country": "DE",
             "fallback_hotspot": True,
@@ -511,9 +511,7 @@ def default_setup():
             "hotspot_channel": 6,
             "hostname": "phoniebox",
             "browser_name": "phoniebox.local",
-            "saved_networks": [
-                {"id": "wifi-1", "ssid": "Wohnzimmer", "password": "", "priority": 10},
-            ],
+            "saved_networks": [],
         },
     }
 
