@@ -1,4 +1,4 @@
-Phoniebox Anschlussplan: PN532 ueber SPI
+Phoniebox Anschlussplan: PN532 über SPI
 
 Wichtig:
 - Vor dem Anschluss den PN532 auf SPI-Modus stellen.
@@ -20,7 +20,7 @@ Verdrahtung PN532 -> Raspberry Pi:
 Kurzablauf:
 1. Raspberry Pi ausschalten.
 2. PN532 auf SPI-Modus stellen.
-3. Reader gemaess obiger Liste verdrahten.
+3. Reader gemäß obiger Liste verdrahten.
 4. SPI am Raspberry Pi aktivieren.
 5. In Phoniebox den Reader-Typ "PN532 (SPI)" waehlen.
 

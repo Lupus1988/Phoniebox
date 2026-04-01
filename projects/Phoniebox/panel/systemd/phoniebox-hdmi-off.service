@@ -1,0 +1,11 @@
+[Unit]
+Description=Disable HDMI output for Phoniebox
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'if command -v vcgencmd >/dev/null 2>&1; then vcgencmd display_power 0 || true; fi'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

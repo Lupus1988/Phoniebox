@@ -107,6 +107,9 @@ class RuntimeServiceTest(unittest.TestCase):
             patch.object(audio_module, "BASE_DIR", self.base_dir),
             patch.object(playback_module, "BASE_DIR", self.base_dir),
             patch.object(playback_module.shutil, "which", return_value=None),
+            patch.object(service_module, "set_wifi_radio", return_value={"ok": True, "details": ["ok"]}),
+            patch.object(service_module, "wifi_radio_enabled", return_value=True),
+            patch.object(service_module.subprocess, "run"),
         ]
         for patcher in self.patchers:
             patcher.start()
@@ -181,6 +184,94 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(reset["player"]["current_album"], "")
         self.assertEqual(reset["player"]["queue"], [])
         self.assertEqual(reset["runtime"]["last_event"], "Runtime zurückgesetzt")
+
+    def test_power_toggle_stops_playback_and_clears_sleep_timer(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        self.service.set_sleep_level(3)
+
+        powered_off = self.service.trigger_button("Power on/off", press_type="lang")
+        powered_on = self.service.trigger_button("Power on/off", press_type="lang")
+
+        self.assertFalse(powered_off["runtime"]["powered_on"])
+        self.assertEqual(powered_off["runtime"]["playback_state"], "stopped")
+        self.assertEqual(powered_off["runtime"]["sleep_timer"]["remaining_seconds"], 0)
+        self.assertEqual(powered_off["runtime"]["sleep_timer"]["level"], 0)
+        self.assertFalse(powered_off["player"]["is_playing"])
+        self.assertEqual(powered_off["player"]["position_seconds"], 0)
+        self.assertEqual(powered_off["runtime"]["last_event"], "Standby aktiv")
+
+        self.assertTrue(powered_on["runtime"]["powered_on"])
+        self.assertEqual(powered_on["runtime"]["playback_state"], "paused")
+        self.assertFalse(powered_on["player"]["is_playing"])
+        self.assertEqual(powered_on["runtime"]["last_event"], "Power an")
+
+    def test_hardware_profile_detection_is_cached_within_ttl(self):
+        with patch.object(service_module, "detect_hardware", return_value=service_module.detect_hardware({}, {"albums": []})) as detect:
+            runtime_state = self.service.ensure_runtime()
+
+            self.service.update_hardware_profile(runtime_state)
+            self.service.update_hardware_profile(runtime_state)
+
+        self.assertEqual(detect.call_count, 1)
+
+    @patch.object(service_module.time, "sleep", return_value=None)
+    def test_sleep_timer_expiry_fades_out_and_enters_standby(self, _sleep):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        self.service.set_sleep_level(1)
+
+        result = self.service.tick(elapsed_seconds=300)
+
+        self.assertFalse(result["runtime"]["powered_on"])
+        self.assertEqual(result["runtime"]["playback_state"], "stopped")
+        self.assertEqual(result["runtime"]["sleep_timer"]["level"], 0)
+        self.assertEqual(result["runtime"]["last_event"], "Sleeptimer abgelaufen, Standby aktiv")
+
+    def test_standby_led_only_lights_in_standby(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "buttons": [],
+                "leds": [
+                    {"id": "led-1", "name": "Power", "pin": "GPIO12", "function": "power_on", "brightness": 50},
+                    {"id": "led-2", "name": "Standby", "pin": "GPIO13", "function": "standby", "brightness": 30},
+                ],
+                "power_routines": {"power_on": "sleep_count_up_5", "power_off": "sleep_count_down_5"},
+                "audio": {"output_mode": "usb_dac", "i2s_profile": "auto"},
+                "wifi": {},
+            },
+        )
+        runtime_state = self.service.ensure_runtime()
+        runtime_state["powered_on"] = True
+        runtime_state["playback_state"] = "paused"
+        runtime_state = self.service.update_led_status(runtime_state)
+        led_map = {entry["name"]: entry["is_on"] for entry in runtime_state["led_status"]}
+        self.assertFalse(led_map["Standby"])
+
+        standby_state = self.service.power_off()["runtime"]
+        led_map = {entry["name"]: entry["is_on"] for entry in standby_state["led_status"]}
+        self.assertTrue(led_map["Standby"])
+
+    def test_wifi_toggle_button_controls_wifi_when_enabled_in_setup(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "buttons": [{"id": "btn-1", "name": "Wifi on/off", "pin": "GPIO17", "press_type": "kurz"}],
+                "leds": [{"id": "led-1", "name": "Wifi", "pin": "GPIO12", "function": "wifi_on", "brightness": 55}],
+                "power_routines": {"power_on": "sleep_count_up_5", "power_off": "sleep_count_down_5"},
+                "audio": {"output_mode": "usb_dac", "i2s_profile": "auto"},
+                "wifi": {"allow_button_toggle": True},
+            },
+        )
+
+        first = self.service.trigger_button("Wifi on/off", press_type="kurz")
+        second = self.service.trigger_button("Wifi on/off", press_type="kurz")
+
+        self.assertFalse(first["runtime"]["wifi_enabled"])
+        self.assertEqual(first["runtime"]["last_event"], "Wifi aus")
+        self.assertTrue(second["runtime"]["wifi_enabled"])
+        self.assertEqual(second["runtime"]["last_event"], "Wifi an")
 
 
 if __name__ == "__main__":

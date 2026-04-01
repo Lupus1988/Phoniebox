@@ -1,4 +1,4 @@
-Phoniebox Anschlussplan: PN532 ueber I2C
+Phoniebox Anschlussplan: PN532 über I2C
 
 Wichtig:
 - Vor dem Anschluss den PN532 auf I2C-Modus stellen.
@@ -18,7 +18,7 @@ Verdrahtung PN532 -> Raspberry Pi:
 Kurzablauf:
 1. Raspberry Pi ausschalten.
 2. PN532 auf I2C-Modus stellen.
-3. Vier Leitungen gemaess obiger Liste verbinden.
+3. Vier Leitungen gemäß obiger Liste verbinden.
 4. I2C am Raspberry Pi aktivieren.
 5. In Phoniebox den Reader-Typ "PN532 (I2C)" waehlen.
 

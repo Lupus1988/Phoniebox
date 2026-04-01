@@ -193,7 +193,51 @@
             </div>
           {% endfor %}
         </div>
-        <button class="primary full" type="submit">LEDs speichern</button>
+        <button class="primary full setup-save-button" type="submit">LEDs speichern</button>
+      </form>
+
+      <form method="post" class="panel-box setup-save-card">
+        <input type="hidden" name="section" value="power_routines">
+        <div class="panel-box-head">
+          <h3>Ein-/Ausschaltroutine</h3>
+        </div>
+        <div class="form-grid compact power-routine-grid">
+          <label>
+            <span>Einschaltroutine</span>
+            <div class="power-routine-field">
+              <select name="power_on_routine">
+                {% for option in power_on_routine_options %}
+                  <option value="{{ option.id }}" {% if setup_data.power_routines.power_on == option.id %}selected{% endif %}>{{ option.label }}</option>
+                {% endfor %}
+              </select>
+              <button
+                type="button"
+                class="button-like routine-info-button"
+                data-power-routine-info
+                data-power-routine-title="Einschaltroutinen"
+                data-power-routine-rows='{{ power_on_routine_options|tojson }}'
+              >i</button>
+            </div>
+          </label>
+          <label>
+            <span>Ausschaltroutine</span>
+            <div class="power-routine-field">
+              <select name="power_off_routine">
+                {% for option in power_off_routine_options %}
+                  <option value="{{ option.id }}" {% if setup_data.power_routines.power_off == option.id %}selected{% endif %}>{{ option.label }}</option>
+                {% endfor %}
+              </select>
+              <button
+                type="button"
+                class="button-like routine-info-button"
+                data-power-routine-info
+                data-power-routine-title="Ausschaltroutinen"
+                data-power-routine-rows='{{ power_off_routine_options|tojson }}'
+              >i</button>
+            </div>
+          </label>
+        </div>
+        <button class="primary full setup-save-button" type="submit">Routinen speichern</button>
       </form>
     </div>
   </section>
@@ -231,7 +275,7 @@
           <input name="password" type="password" placeholder="WLAN-Passwort">
         </label>
         <input type="hidden" name="priority" value="10">
-        <button class="primary full" type="submit">WLAN speichern</button>
+        <button class="primary full setup-save-button" type="submit">WLAN speichern</button>
       </form>
       <form method="post" class="form-grid compact wifi-known-networks-form">
         <input type="hidden" name="section" value="delete_wifi_network">
@@ -247,7 +291,7 @@
             {% endif %}
           </select>
         </label>
-        <button class="danger full" type="submit" {% if not setup_data.wifi.saved_networks %}disabled{% endif %}>WLAN löschen</button>
+        <button class="danger full setup-save-button" type="submit" {% if not setup_data.wifi.saved_networks %}disabled{% endif %}>WLAN löschen</button>
       </form>
     </article>
 
@@ -279,7 +323,11 @@
           <span>Hotspot Passwort</span>
           <input name="hotspot_password" value="{{ setup_data.wifi.hotspot_password }}" {% if setup_data.wifi.hotspot_security != "wpa-psk" %}disabled{% endif %}>
         </label>
-        <button class="primary full" type="submit">Hotspot speichern</button>
+        <label class="checkbox-row full">
+          <input type="checkbox" name="allow_button_toggle" {% if setup_data.wifi.allow_button_toggle %}checked{% endif %}>
+          <span>Wifi über Taste zuschalten</span>
+        </label>
+        <button class="primary full setup-save-button" type="submit">Hotspot speichern</button>
       </form>
     </article>
   </section>
@@ -288,5 +336,64 @@
     <a class="button-like" href="{{ url_for('download_setup_logs') }}">Logs herunterladen</a>
   </footer>
 
+  <dialog data-power-routine-dialog>
+    <article class="panel-box">
+      <div class="panel-box-head">
+        <h3 data-power-routine-dialog-title>Routine</h3>
+      </div>
+      <div data-power-routine-dialog-body></div>
+      <form method="dialog">
+        <button class="primary" type="submit">Schließen</button>
+      </form>
+    </article>
+  </dialog>
+
   <script src="{{ url_for('static', filename='setup-dnd.js', v=asset_version) }}"></script>
+  <script>
+    (() => {
+      const dialog = document.querySelector("[data-power-routine-dialog]");
+      const title = document.querySelector("[data-power-routine-dialog-title]");
+      const body = document.querySelector("[data-power-routine-dialog-body]");
+      if (!dialog || !title || !body) return;
+      const describeRoutine = (row) => {
+        const duration = row.duration_seconds === 3 ? "⏱ 3 Sekunden halten." : "⏱ 5 Sekunden halten.";
+        const animationMap = {
+          sleep_count_up: "💡 Die drei Timer-LEDs gehen nacheinander an: aus -> 1 -> 1+2 -> 1+2+3. Danach ist die Box an.",
+          sleep_count_down: "💡 Die drei Timer-LEDs gehen nacheinander aus: 1+2+3 -> 1+2 -> 1 -> aus. Danach ist die Box im Standby.",
+          power_flicker_up: "⚡ Die Power-LED blinkt erst langsam und dann immer schneller. Am Ende leuchtet sie dauerhaft. Danach ist die Box an.",
+          power_flicker_down: "⚡ Die Power-LED blinkt erst schnell und dann immer langsamer. Am Ende ist sie aus. Danach ist die Box im Standby.",
+        };
+        return [duration, animationMap[row.animation] || row.description, "↩ Wenn vorher losgelassen wird, springen die LEDs zurück in ihren normalen Zustand."].join(" ");
+      };
+      document.querySelectorAll("[data-power-routine-info]").forEach((button) => {
+        button.addEventListener("click", () => {
+          title.textContent = button.dataset.powerRoutineTitle || "Routine";
+          const rows = JSON.parse(button.dataset.powerRoutineRows || "[]");
+          const table = document.createElement("table");
+          table.className = "routine-info-table";
+          table.innerHTML = `
+            <thead>
+              <tr>
+                <th>Routine</th>
+                <th>Ablauf</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          `;
+          const tbody = table.querySelector("tbody");
+          rows.forEach((row) => {
+            const tr = document.createElement("tr");
+            const name = document.createElement("td");
+            const flow = document.createElement("td");
+            name.textContent = row.label;
+            flow.textContent = describeRoutine(row);
+            tr.append(name, flow);
+            tbody.appendChild(tr);
+          });
+          body.replaceChildren(table);
+          dialog.showModal();
+        });
+      });
+    })();
+  </script>
 {% endblock %}

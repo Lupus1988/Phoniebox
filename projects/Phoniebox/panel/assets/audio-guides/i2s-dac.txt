@@ -1,12 +1,12 @@
 Phoniebox Anschlussplan: I2S-Soundkarte
 
-Geeignet fuer:
-- I2S-DACs und Audio-HATs, die ueber die GPIO-Leiste verbunden werden
-- typische Modelle wie HiFiBerry DAC, WM8960 oder aehnliche I2S-Audio-Boards
+Geeignet für:
+- I2S-DACs und Audio-HATs, die über die GPIO-Leiste verbunden werden
+- typische Modelle wie HiFiBerry DAC, WM8960 oder ähnliche I2S-Audio-Boards
 
 Wichtig:
 - Raspberry Pi vorher ausschalten.
-- GPIO-Audio und Tasten/LEDs duerfen keine bereits belegten Pins doppelt verwenden.
+- GPIO-Audio und Tasten/LEDs dürfen keine bereits belegten Pins doppelt verwenden.
 
 Typische I2S-Belegung:
 - 3.3V
@@ -17,11 +17,11 @@ Typische I2S-Belegung:
 - GPIO21 / PCM_DOUT
 
 Kurzablauf:
-1. I2S-Soundkarte gemaess Herstellerplan aufstecken oder verdrahten.
+1. I2S-Soundkarte gemäß Herstellerplan aufstecken oder verdrahten.
 2. In Phoniebox unter Setup die verwendete Soundkarte auf "I2S-Soundkarte" stellen.
-3. Falls noetig das passende I2S-Profil waehlen.
+3. Falls nötig das passende I2S-Profil wählen.
 4. Danach die Soundkarte speichern.
 
 Hinweis:
-- Je nach HAT koennen zusaetzliche Pins oder andere Overlays noetig sein.
-- Fuer die exakte Verdrahtung immer auch den Herstellerplan der verwendeten Soundkarte beachten.
+- Je nach HAT können zusätzliche Pins oder andere Overlays nötig sein.
+- Für die exakte Verdrahtung immer auch den Herstellerplan der verwendeten Soundkarte beachten.

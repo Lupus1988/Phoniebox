@@ -5,6 +5,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   const startupToggle = form.elements.namedItem("use_startup_volume");
   const startupInput = form.elements.namedItem("startup_volume");
+  const startupRow = form.querySelector("[data-startup-volume-row]");
 
   let saveTimer = null;
   let inFlight = false;
@@ -15,6 +16,9 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     startupInput.disabled = !startupToggle.checked;
+    if (startupRow instanceof HTMLElement) {
+      startupRow.classList.toggle("is-disabled", !startupToggle.checked);
+    }
   }
 
   function collectPayload() {
@@ -50,6 +54,7 @@ document.addEventListener("DOMContentLoaded", () => {
           field.disabled = false;
         }
       }
+      syncStartupVolumeState();
       inFlight = false;
       if (pending) {
         window.setTimeout(saveSettings, 0);

@@ -33,6 +33,13 @@ sudo cp -a "$SOURCE_DIR"/. "$APP_DIR"/
 sudo apt-get update
 sudo apt-get install -y python3 python3-venv python3-pip python3-rpi.gpio python3-evdev python3-spidev python3-smbus2 python3-serial network-manager avahi-daemon alsa-utils mpg123
 
+if command -v raspi-config >/dev/null 2>&1; then
+  sudo raspi-config nonint do_i2c 0 || true
+  sudo raspi-config nonint do_spi 0 || true
+  sudo raspi-config nonint do_serial_cons 1 || true
+  sudo raspi-config nonint do_serial_hw 0 || true
+fi
+
 sudo cp systemd/phoniebox-panel.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-audio-init.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-gpio-poll.service "$SERVICE_DIR"/
@@ -42,6 +49,7 @@ sudo cp systemd/phoniebox-hotspot-fallback.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-hotspot-fallback.timer "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-runtime-tick.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-runtime-tick.timer "$SERVICE_DIR"/
+sudo cp systemd/phoniebox-hdmi-off.service "$SERVICE_DIR"/
 
 sudo python3 -m venv --system-site-packages "$VENV_DIR"
 sudo "$VENV_DIR/bin/pip" install --upgrade pip
@@ -69,17 +77,24 @@ EOF
 fi
 
 sudo systemctl daemon-reload
+sudo systemctl disable --now bluetooth.service 2>/dev/null || true
+sudo systemctl disable --now hciuart.service 2>/dev/null || true
+if command -v rfkill >/dev/null 2>&1; then
+  sudo rfkill block bluetooth || true
+fi
 sudo systemctl enable phoniebox-panel.service
 sudo systemctl enable phoniebox-audio-init.service
 sudo systemctl enable phoniebox-gpio-poll.service
 sudo systemctl enable phoniebox-leds.service
 sudo systemctl enable phoniebox-rfid.service
+sudo systemctl enable phoniebox-hdmi-off.service
 sudo systemctl enable phoniebox-hotspot-fallback.timer
 sudo systemctl enable phoniebox-runtime-tick.timer
 sudo systemctl restart phoniebox-panel.service
 sudo systemctl restart phoniebox-gpio-poll.service
 sudo systemctl restart phoniebox-leds.service
 sudo systemctl restart phoniebox-rfid.service
+sudo systemctl restart phoniebox-hdmi-off.service
 sudo systemctl restart phoniebox-hotspot-fallback.timer
 sudo systemctl restart phoniebox-runtime-tick.timer
 

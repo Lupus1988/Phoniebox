@@ -12,6 +12,27 @@ def run_command(command):
     return {"ok": result.returncode == 0, "output": output}
 
 
+def wifi_radio_enabled():
+    if not command_exists("nmcli"):
+        return True
+    result = run_command(["nmcli", "-t", "-f", "WIFI", "radio"])
+    if not result["ok"]:
+        return True
+    value = (result["output"] or "").strip().lower()
+    return value in {"enabled", "ein"}
+
+
+def set_wifi_radio(enabled):
+    if not command_exists("nmcli"):
+        return {"ok": False, "details": ["nmcli ist nicht installiert."]}
+    command = ["nmcli", "radio", "wifi", "on" if enabled else "off"]
+    result = run_command(command)
+    details = [f"WLAN {'aktiviert' if enabled else 'deaktiviert'}."]
+    if not result["ok"]:
+        details = [f"WLAN konnte nicht {'aktiviert' if enabled else 'deaktiviert'} werden: {result['output']}"]
+    return {"ok": result["ok"], "details": details}
+
+
 def normalize_hotspot_security(value):
     security = (value or "open").strip().lower()
     if security == "wpa2":

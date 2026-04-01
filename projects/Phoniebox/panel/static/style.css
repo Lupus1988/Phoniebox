@@ -1025,6 +1025,71 @@ label {
   display: none !important;
 }
 
+dialog[data-power-routine-dialog] {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+dialog[data-power-routine-dialog]::backdrop {
+  background: rgba(5, 7, 10, 0.62);
+}
+
+.routine-info-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 0.9rem;
+}
+
+.routine-info-table th,
+.routine-info-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.72rem 0.78rem;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.routine-info-table th {
+  color: var(--ink);
+  font-size: 0.84rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.routine-info-table td {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.routine-info-table td:first-child {
+  width: 15.5rem;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.power-routine-field {
+  display: inline-grid;
+  grid-template-columns: minmax(0, 13rem) auto;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.power-routine-grid {
+  margin-bottom: 1rem;
+}
+
+.power-routine-field select {
+  min-width: 0;
+}
+
+.routine-info-button {
+  width: 2.5rem;
+  min-width: 2.5rem;
+  padding: 0.64rem 0;
+  justify-self: start;
+}
+
 .link-confirm-view {
   gap: 0.55rem;
 }
@@ -1260,6 +1325,10 @@ label {
 .inline-field em {
   font-style: normal;
   font-weight: 700;
+}
+
+.startup-volume-row.is-disabled {
+  opacity: 0.5;
 }
 
 .wide-copy label {

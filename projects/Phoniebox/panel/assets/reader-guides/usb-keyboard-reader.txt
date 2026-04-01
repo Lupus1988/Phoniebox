@@ -1,6 +1,6 @@
 Phoniebox Anschlussplan: USB-Reader
 
-Geeignet fuer:
+Geeignet für:
 - USB-RFID-Reader, die sich wie eine USB-Tastatur verhalten
 - typische USB-Desktopreader mit fertigem USB-Kabel
 
@@ -8,9 +8,9 @@ Anschluss:
 1. Raspberry Pi herunterfahren oder Reader sauber abziehen.
 2. Reader in einen freien USB-Port stecken.
 3. Raspberry Pi starten.
-4. In Phoniebox unter Setup den Reader-Typ "USB-Reader" auswaehlen.
+4. In Phoniebox unter Setup den Reader-Typ "USB-Reader" auswählen.
 
-Es ist keine GPIO-Verdrahtung noetig.
+Es ist keine GPIO-Verdrahtung nötig.
 
 Hinweise:
 - USB-Reader belegen keine GPIO-Pins.

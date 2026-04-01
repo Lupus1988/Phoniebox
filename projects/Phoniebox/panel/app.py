@@ -58,9 +58,76 @@ BUTTON_FUNCTIONS = [
     "Lautstärke -",
     "Sleep Timer +",
     "Sleep Timer -",
+    "Wifi on/off",
     "Power on/off",
 ]
-LED_FUNCTIONS = ["power_on", "standby", "sleep_1", "sleep_2", "sleep_3"]
+LED_FUNCTIONS = ["power_on", "standby", "sleep_1", "sleep_2", "sleep_3", "wifi_on"]
+POWER_ROUTINE_OPTIONS = [
+    {
+        "id": "sleep_count_up_5",
+        "label": "5s LEDs hoch",
+        "type": "power_on",
+        "duration_seconds": 5.0,
+        "animation": "sleep_count_up",
+        "description": "5 Sekunden halten. Die drei Sleeptimer-LEDs laufen von aus über 1, 1+2 bis 1+2+3 hoch. Danach geht die Box aus dem Standby an.",
+    },
+    {
+        "id": "sleep_count_up_3",
+        "label": "3s LEDs hoch",
+        "type": "power_on",
+        "duration_seconds": 3.0,
+        "animation": "sleep_count_up",
+        "description": "3 Sekunden halten. Die drei Sleeptimer-LEDs laufen von aus über 1, 1+2 bis 1+2+3 hoch. Danach geht die Box aus dem Standby an.",
+    },
+    {
+        "id": "power_flicker_up_5",
+        "label": "5s Power schnell",
+        "type": "power_on",
+        "duration_seconds": 5.0,
+        "animation": "power_flicker_up",
+        "description": "5 Sekunden halten. Die Power-LED blinkt erst langsam und dann immer schneller, bis sie dauerhaft leuchtet. Danach ist die Box an.",
+    },
+    {
+        "id": "power_flicker_up_3",
+        "label": "3s Power schnell",
+        "type": "power_on",
+        "duration_seconds": 3.0,
+        "animation": "power_flicker_up",
+        "description": "3 Sekunden halten. Die Power-LED blinkt erst langsam und dann immer schneller, bis sie dauerhaft leuchtet. Danach ist die Box an.",
+    },
+    {
+        "id": "sleep_count_down_5",
+        "label": "5s LEDs runter",
+        "type": "power_off",
+        "duration_seconds": 5.0,
+        "animation": "sleep_count_down",
+        "description": "5 Sekunden halten. Die drei Sleeptimer-LEDs laufen von 1+2+3 über 1+2 und 1 herunter, danach geht die Box in den Standby.",
+    },
+    {
+        "id": "sleep_count_down_3",
+        "label": "3s LEDs runter",
+        "type": "power_off",
+        "duration_seconds": 3.0,
+        "animation": "sleep_count_down",
+        "description": "3 Sekunden halten. Die drei Sleeptimer-LEDs laufen von 1+2+3 über 1+2 und 1 herunter, danach geht die Box in den Standby.",
+    },
+    {
+        "id": "power_flicker_down_5",
+        "label": "5s Power langsam",
+        "type": "power_off",
+        "duration_seconds": 5.0,
+        "animation": "power_flicker_down",
+        "description": "5 Sekunden halten. Die Power-LED blinkt erst schnell und dann immer langsamer, bis sie ausgeht. Danach geht die Box in den Standby.",
+    },
+    {
+        "id": "power_flicker_down_3",
+        "label": "3s Power langsam",
+        "type": "power_off",
+        "duration_seconds": 3.0,
+        "animation": "power_flicker_down",
+        "description": "3 Sekunden halten. Die Power-LED blinkt erst schnell und dann immer langsamer, bis sie ausgeht. Danach geht die Box in den Standby.",
+    },
+]
 READER_OPTIONS = [
     {"id": "USB", "label": "USB-Reader", "driver": "hid/keyboard-reader", "transport": "usb"},
     {"id": "RC522", "label": "RC522", "driver": "mfrc522", "transport": "spi"},
@@ -413,7 +480,8 @@ def default_setup():
             {"id": "btn-6", "name": "Lautstärke -", "pin": "GPIO24", "press_type": "kurz"},
             {"id": "btn-7", "name": "Sleep Timer +", "pin": "", "press_type": "kurz"},
             {"id": "btn-8", "name": "Sleep Timer -", "pin": "", "press_type": "kurz"},
-            {"id": "btn-9", "name": "Power on/off", "pin": "GPIO25", "press_type": "lang"},
+            {"id": "btn-9", "name": "Wifi on/off", "pin": "", "press_type": "kurz"},
+            {"id": "btn-10", "name": "Power on/off", "pin": "GPIO25", "press_type": "lang"},
         ],
         "leds": [
             {"id": "led-1", "name": "Power", "pin": "GPIO12", "function": "power_on", "brightness": 50},
@@ -421,7 +489,12 @@ def default_setup():
             {"id": "led-3", "name": "Sleep 1/3", "pin": "GPIO18", "function": "sleep_1", "brightness": 50},
             {"id": "led-4", "name": "Sleep 2/3", "pin": "GPIO19", "function": "sleep_2", "brightness": 70},
             {"id": "led-5", "name": "Sleep 3/3", "pin": "GPIO20", "function": "sleep_3", "brightness": 90},
+            {"id": "led-6", "name": "Wifi", "pin": "GPIO21", "function": "wifi_on", "brightness": 55},
         ],
+        "power_routines": {
+            "power_on": "sleep_count_up_5",
+            "power_off": "sleep_count_down_5",
+        },
         "audio": {
             "output_mode": "usb_dac",
             "i2s_profile": "auto",
@@ -429,6 +502,7 @@ def default_setup():
         },
         "wifi": {
             "mode": "client_with_fallback_hotspot",
+            "allow_button_toggle": False,
             "country": "DE",
             "fallback_hotspot": True,
             "hotspot_security": "open",
@@ -882,6 +956,22 @@ def reader_catalog():
     return options
 
 
+def power_routine_catalog():
+    return [dict(option) for option in POWER_ROUTINE_OPTIONS]
+
+
+def power_routine_options(kind):
+    return [option for option in power_routine_catalog() if option["type"] == kind]
+
+
+def normalize_power_routine_id(kind, routine_id):
+    options = power_routine_options(kind)
+    valid_ids = {option["id"] for option in options}
+    if routine_id in valid_ids:
+        return routine_id
+    return options[0]["id"] if options else ""
+
+
 def collect_conflicts(setup_data):
     warnings = []
     buttons = setup_data.get("buttons", [])
@@ -1092,6 +1182,9 @@ def inject_choices():
         "led_functions": LED_FUNCTIONS,
         "button_pin_choices": pin_choices(setup_data, "button"),
         "led_pin_choices": pin_choices(setup_data, "led"),
+        "power_on_routine_options": power_routine_options("power_on"),
+        "power_off_routine_options": power_routine_options("power_off"),
+        "power_routine_options": power_routine_catalog(),
         "audio_output_options": audio_output_choices(audio_environment),
         "audio_i2s_profile_options": audio_i2s_profile_choices(),
         "audio_environment": audio_environment,
@@ -1372,7 +1465,8 @@ def default_button_rows():
         {"id": "btn-6", "name": "Lautstärke -", "pin": "GPIO24", "press_type": "kurz"},
         {"id": "btn-7", "name": "Sleep Timer +", "pin": "", "press_type": "kurz"},
         {"id": "btn-8", "name": "Sleep Timer -", "pin": "", "press_type": "kurz"},
-        {"id": "btn-9", "name": "Power on/off", "pin": "GPIO25", "press_type": "lang"},
+        {"id": "btn-9", "name": "Wifi on/off", "pin": "", "press_type": "kurz"},
+        {"id": "btn-10", "name": "Power on/off", "pin": "GPIO25", "press_type": "lang"},
     ]
 
 
@@ -1487,6 +1581,20 @@ def setup():
             flash("LED-Zuweisungen gespeichert.", "success")
             return redirect(url_for("setup"))
 
+        if section == "power_routines":
+            routines = data.setdefault("power_routines", {})
+            routines["power_on"] = normalize_power_routine_id(
+                "power_on",
+                request.form.get("power_on_routine", routines.get("power_on", "")),
+            )
+            routines["power_off"] = normalize_power_routine_id(
+                "power_off",
+                request.form.get("power_off_routine", routines.get("power_off", "")),
+            )
+            save_setup(data)
+            flash("Ein-/Ausschaltroutine gespeichert.", "success")
+            return redirect(url_for("setup"))
+
         if section == "audio":
             audio = data["audio"]
             audio["output_mode"] = request.form.get("output_mode", audio.get("output_mode", "usb_dac")).strip() or "usb_dac"
@@ -1542,6 +1650,7 @@ def setup():
         if section == "wifi":
             wifi = data["wifi"]
             wifi["mode"] = request.form.get("mode", wifi["mode"]).strip()
+            wifi["allow_button_toggle"] = request.form.get("allow_button_toggle") == "on"
             wifi["country"] = request.form.get("country", wifi["country"]).strip() or "DE"
             wifi["fallback_hotspot"] = request.form.get("fallback_hotspot") == "on"
             wifi["hotspot_security"] = normalize_hotspot_security(

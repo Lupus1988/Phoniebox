@@ -1,6 +1,7 @@
 import json
 import os
 import secrets
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ from hardware.gpio import GPIO_TO_BOARD_PIN, SysfsGPIOInput, gpio_display_label,
 from hardware.manager import detect_hardware
 from runtime.audio import build_track_queue, load_playlist_entries, pick_track_duration, track_title_from_entry
 from runtime.playback import PlaybackController
+from system.networking import set_wifi_radio, wifi_radio_enabled
 
 DATA_DIR = BASE_DIR / "data"
 PLAYER_FILE = DATA_DIR / "player_state.json"
@@ -94,6 +96,12 @@ def default_runtime_state():
             "pressed": False,
             "seconds": 0,
             "mode": "idle",
+            "pin": "",
+            "started_at": 0.0,
+            "threshold_seconds": 0.0,
+            "routine_id": "",
+            "animation": "",
+            "completed": False,
         },
         "hardware": {
             "reader_connected": False,
@@ -108,6 +116,7 @@ def default_runtime_state():
         "queue_revision": secrets.token_hex(4),
         "playback_session": {},
         "event_log": [],
+        "wifi_enabled": True,
     }
 
 
@@ -120,6 +129,10 @@ def default_button_detect():
 
 
 class RuntimeService:
+    HARDWARE_PROFILE_TTL_SECONDS = 5.0
+    SLEEP_TIMER_FADE_SECONDS = 5.0
+    SLEEP_TIMER_FADE_STEPS = 10
+
     def __init__(self):
         self.runtime_path = RUNTIME_FILE
         self.playback = PlaybackController()
@@ -129,6 +142,30 @@ class RuntimeService:
         self._button_poll_state = {}
         self._last_pressed_pins = []
         self._sysfs_gpio = SysfsGPIOInput()
+        self._hardware_profile_cache = None
+        self._hardware_profile_cached_at = 0.0
+
+    def _power_routine_options(self):
+        return {
+            "sleep_count_up_5": {"duration_seconds": 5.0, "animation": "sleep_count_up"},
+            "sleep_count_up_3": {"duration_seconds": 3.0, "animation": "sleep_count_up"},
+            "power_flicker_up_5": {"duration_seconds": 5.0, "animation": "power_flicker_up"},
+            "power_flicker_up_3": {"duration_seconds": 3.0, "animation": "power_flicker_up"},
+            "sleep_count_down_5": {"duration_seconds": 5.0, "animation": "sleep_count_down"},
+            "sleep_count_down_3": {"duration_seconds": 3.0, "animation": "sleep_count_down"},
+            "power_flicker_down_5": {"duration_seconds": 5.0, "animation": "power_flicker_down"},
+            "power_flicker_down_3": {"duration_seconds": 3.0, "animation": "power_flicker_down"},
+        }
+
+    def _configured_power_routine(self, powered_on):
+        setup = self.load_setup()
+        routines = setup.get("power_routines", {})
+        routine_id = (routines.get("power_off") if powered_on else routines.get("power_on")) or ""
+        options = self._power_routine_options()
+        if routine_id in options:
+            return {"id": routine_id, **options[routine_id]}
+        fallback = "sleep_count_down_5" if powered_on else "sleep_count_up_5"
+        return {"id": fallback, **options[fallback]}
 
     def load_runtime(self):
         return load_json(self.runtime_path, default_runtime_state())
@@ -259,6 +296,54 @@ class RuntimeService:
             return button.get("name", "")
         return ""
 
+    def _is_power_hold_pin(self, setup, pin):
+        mapped = self._button_mapping_for_pin(setup, pin, "lang")
+        return mapped.strip().lower() in {"power on/off", "sleep/power"}
+
+    def _update_power_hold_state(self, runtime_state, pin, now, released=False):
+        hold = runtime_state.get("power_hold", {})
+        if not hold.get("pressed") and not released:
+            routine = self._configured_power_routine(runtime_state.get("powered_on", True))
+            hold.update(
+                {
+                    "pressed": True,
+                    "seconds": 0.0,
+                    "mode": "pending_off" if runtime_state.get("powered_on", True) else "pending_on",
+                    "pin": pin,
+                    "started_at": now,
+                    "threshold_seconds": routine["duration_seconds"],
+                    "routine_id": routine["id"],
+                    "animation": routine["animation"],
+                    "completed": False,
+                }
+            )
+        elif hold.get("pressed") and not released:
+            hold["seconds"] = max(0.0, now - float(hold.get("started_at", now)))
+            if not hold.get("completed") and hold.get("seconds", 0.0) >= float(hold.get("threshold_seconds", 0.0) or 0.0):
+                completed_hold = dict(hold)
+                if runtime_state.get("powered_on", True):
+                    result = self.power_off(runtime_state=runtime_state, player=self.load_player())
+                else:
+                    result = self.power_on(runtime_state=runtime_state, player=self.load_player())
+                runtime_state = result["runtime"]
+                completed_hold.update(
+                    {
+                        "pressed": True,
+                        "seconds": float(completed_hold.get("threshold_seconds", 0.0) or 0.0),
+                        "pin": pin,
+                        "started_at": now - float(completed_hold.get("threshold_seconds", 0.0) or 0.0),
+                        "completed": True,
+                    }
+                )
+                hold = completed_hold
+        if released:
+            runtime_state["power_hold"] = merge_defaults({}, default_runtime_state()["power_hold"])
+        else:
+            runtime_state["power_hold"] = hold
+        runtime_state = self.update_led_status(runtime_state)
+        self.save_runtime(runtime_state)
+        return runtime_state
+
     def _poll_button_detection(self, session, now):
         candidates = [pin for pin in session.get("candidate_pins", []) if pin]
         levels = self._read_gpio_levels(candidates)
@@ -323,8 +408,14 @@ class RuntimeService:
             if is_pressed and not state["pressed"]:
                 state["pressed"] = True
                 state["pressed_at"] = now
+                if self._is_power_hold_pin(setup, pin):
+                    runtime_state = self.ensure_runtime()
+                    self._update_power_hold_state(runtime_state, pin, now, released=False)
                 continue
             if is_pressed:
+                if self._is_power_hold_pin(setup, pin):
+                    runtime_state = self.ensure_runtime()
+                    self._update_power_hold_state(runtime_state, pin, now, released=False)
                 continue
             if not state["pressed"]:
                 continue
@@ -332,6 +423,10 @@ class RuntimeService:
             held_seconds = max(0.0, now - float(state.get("pressed_at", now)))
             state["pressed"] = False
             state["pressed_at"] = 0.0
+            if self._is_power_hold_pin(setup, pin):
+                runtime_state = self.ensure_runtime()
+                self._update_power_hold_state(runtime_state, pin, now, released=True)
+                continue
             if held_seconds < 0.03:
                 continue
             press_type = self.classify_press_type(held_seconds, "kurz")
@@ -368,13 +463,67 @@ class RuntimeService:
             "remove": settings.get("rfid_remove_action", "stop"),
         }
 
-    def update_hardware_profile(self, runtime_state):
+    def _wifi_button_toggle_allowed(self):
         setup = self.load_setup()
-        library = self.load_library()
-        runtime_state["hardware"]["profile"] = detect_hardware(setup, library)
+        return bool((setup.get("wifi") or {}).get("allow_button_toggle", False))
+
+    def _desired_wifi_state(self, runtime_state):
+        if not runtime_state.get("powered_on", True):
+            return False
+        if not self._wifi_button_toggle_allowed():
+            return True
+        return bool(runtime_state.get("wifi_enabled", True))
+
+    def _set_service_active(self, service_name, active):
+        try:
+            subprocess.run(
+                ["systemctl", "start" if active else "stop", service_name],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return False
+        return True
+
+    def apply_wifi_policy(self, runtime_state):
+        desired = self._desired_wifi_state(runtime_state)
+        result = set_wifi_radio(desired)
+        runtime_state["hardware"]["wifi_enabled"] = desired if result.get("ok") else wifi_radio_enabled()
+        return runtime_state
+
+    def toggle_wifi(self):
+        runtime_state = self.ensure_runtime()
+        if not self._wifi_button_toggle_allowed():
+            runtime_state["wifi_enabled"] = True
+            runtime_state = self.add_event(runtime_state, "Wifi-Taste ignoriert: Wifi ist dauerhaft aktiv")
+            runtime_state = self.update_hardware_profile(runtime_state)
+            runtime_state = self.apply_wifi_policy(runtime_state)
+            runtime_state = self.update_led_status(runtime_state)
+            self.save_runtime(runtime_state)
+            return {"runtime": runtime_state, "player": self.load_player()}
+        runtime_state["wifi_enabled"] = not bool(runtime_state.get("wifi_enabled", True))
+        runtime_state = self.add_event(runtime_state, "Wifi an" if runtime_state["wifi_enabled"] else "Wifi aus")
+        runtime_state = self.update_hardware_profile(runtime_state)
+        runtime_state = self.apply_wifi_policy(runtime_state)
+        runtime_state = self.update_led_status(runtime_state)
+        self.save_runtime(runtime_state)
+        return {"runtime": runtime_state, "player": self.load_player()}
+
+    def update_hardware_profile(self, runtime_state):
+        now = time.monotonic()
+        profile = self._hardware_profile_cache
+        if profile is None or (now - self._hardware_profile_cached_at) >= self.HARDWARE_PROFILE_TTL_SECONDS:
+            setup = self.load_setup()
+            library = self.load_library()
+            profile = detect_hardware(setup, library)
+            self._hardware_profile_cache = profile
+            self._hardware_profile_cached_at = now
+        runtime_state["hardware"]["profile"] = profile
         runtime_state["hardware"]["profile"]["audio"]["playback_backend"] = self.playback.status()["active_backend"]
-        runtime_state["hardware"]["reader_type"] = setup.get("reader", {}).get("type", "USB")
+        runtime_state["hardware"]["reader_type"] = runtime_state["hardware"]["profile"]["reader"].get("configured_type", "USB")
         runtime_state["hardware"]["reader_connected"] = runtime_state["hardware"]["profile"]["reader"].get("ready", False)
+        runtime_state["hardware"]["wifi_enabled"] = wifi_radio_enabled()
         return runtime_state
 
     def update_led_status(self, runtime_state):
@@ -384,19 +533,26 @@ class RuntimeService:
         powered_on = runtime_state.get("powered_on", True)
         playback_state = runtime_state.get("playback_state", "paused")
         led_status = []
+        power_hold = runtime_state.get("power_hold", {})
+        override = self._build_power_hold_led_override(runtime_state, leds) if power_hold.get("pressed") else {}
         for led in leds:
             function = led.get("function", "")
             is_on = False
             if function == "power_on":
                 is_on = powered_on
             elif function == "standby":
-                is_on = powered_on and playback_state != "playing"
+                is_on = not powered_on
             elif function == "sleep_1":
                 is_on = sleep_level >= 1
             elif function == "sleep_2":
                 is_on = sleep_level >= 2
             elif function == "sleep_3":
                 is_on = sleep_level >= 3
+            elif function == "wifi_on":
+                is_on = bool(runtime_state.get("hardware", {}).get("wifi_enabled", runtime_state.get("wifi_enabled", True)))
+            if function in override:
+                is_on = override[function]
+            effect = "pulse" if function == "wifi_on" and is_on else ""
             led_status.append(
                 {
                     "id": led.get("id", ""),
@@ -404,10 +560,56 @@ class RuntimeService:
                     "pin": led.get("pin", ""),
                     "brightness": led.get("brightness", 0),
                     "is_on": is_on,
+                    "effect": effect,
                 }
             )
         runtime_state["led_status"] = led_status
         return runtime_state
+
+    def _build_power_hold_led_override(self, runtime_state, leds):
+        hold = runtime_state.get("power_hold", {})
+        if hold.get("completed"):
+            return {}
+        animation = hold.get("animation", "")
+        threshold = max(0.1, float(hold.get("threshold_seconds", 0.0) or 0.0))
+        progress = max(0.0, min(1.0, float(hold.get("seconds", 0.0) or 0.0) / threshold))
+        sleep_functions = {"sleep_1": False, "sleep_2": False, "sleep_3": False}
+        power_on = runtime_state.get("powered_on", True)
+
+        if animation == "sleep_count_up":
+            phase = min(3, int(progress * 4))
+            sleep_functions["sleep_1"] = phase >= 1
+            sleep_functions["sleep_2"] = phase >= 2
+            sleep_functions["sleep_3"] = phase >= 3
+            return {"power_on": False, "standby": False, **sleep_functions}
+
+        if animation == "sleep_count_down":
+            phase = min(3, int(progress * 4))
+            active_count = max(0, 3 - phase)
+            sleep_functions["sleep_1"] = active_count >= 1
+            sleep_functions["sleep_2"] = active_count >= 2
+            sleep_functions["sleep_3"] = active_count >= 3
+            return {"power_on": power_on, "standby": False, **sleep_functions}
+
+        if animation in {"power_flicker_up", "power_flicker_down"}:
+            base_on = animation == "power_flicker_down" and power_on
+            flicker_on = base_on
+            if progress < 1.0:
+                speed = 1.0 + (7.0 * progress)
+                phase = (time.monotonic() * speed) % 1.0
+                if animation == "power_flicker_up":
+                    flicker_on = phase >= 0.5
+                else:
+                    flicker_on = phase < 0.5
+            return {
+                "power_on": flicker_on,
+                "standby": False,
+                "sleep_1": False,
+                "sleep_2": False,
+                "sleep_3": False,
+            }
+
+        return {}
 
     def _refresh_sleep_step(self, runtime_state):
         settings = self.load_settings()
@@ -511,17 +713,16 @@ class RuntimeService:
         if remaining > 0:
             remaining = max(0, remaining - elapsed_seconds)
             runtime_state["sleep_timer"]["remaining_seconds"] = remaining
-            if remaining == 0:
-                runtime_state["playback_state"] = "paused"
-                player["is_playing"] = False
-                if runtime_state.get("playback_session"):
-                    runtime_state["playback_session"] = self.playback.pause(runtime_state["playback_session"])
-                runtime_state = self.add_event(runtime_state, "Sleeptimer abgelaufen")
             runtime_state["sleep_timer"]["level"] = self.compute_sleep_level(
                 remaining, runtime_state["sleep_timer"]["step_seconds"]
             )
+            if remaining == 0:
+                result = self.enter_standby_after_sleep_timer(runtime_state=runtime_state, player=player)
+                runtime_state = result["runtime"]
+                player = result["player"]
 
         runtime_state = self.update_hardware_profile(runtime_state)
+        runtime_state = self.apply_wifi_policy(runtime_state)
         runtime_state = self.update_led_status(runtime_state)
         player["is_playing"] = runtime_state.get("playback_state") == "playing"
         self.save_player(player)
@@ -545,9 +746,72 @@ class RuntimeService:
         runtime_state["sleep_timer"]["remaining_seconds"] = runtime_state["sleep_timer"]["step_seconds"] * level
         runtime_state = self.add_event(runtime_state, f"Sleeptimer auf Stufe {level}" if level else "Sleeptimer aus")
         runtime_state = self.update_hardware_profile(runtime_state)
+        runtime_state = self.apply_wifi_policy(runtime_state)
         runtime_state = self.update_led_status(runtime_state)
         self.save_runtime(runtime_state)
         return runtime_state
+
+    def _set_power_state(self, powered_on, runtime_state=None, player=None, event_message=None):
+        runtime_state = runtime_state or self.ensure_runtime()
+        player = player or self.load_player()
+        runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
+        runtime_state["powered_on"] = bool(powered_on)
+        runtime_state["power_hold"] = merge_defaults({}, default_runtime_state()["power_hold"])
+        if powered_on:
+            runtime_state["playback_state"] = "paused"
+            player["is_playing"] = False
+            message = event_message or "Power an"
+        else:
+            runtime_state["playback_state"] = "stopped"
+            runtime_state["sleep_timer"]["remaining_seconds"] = 0
+            runtime_state["sleep_timer"]["level"] = 0
+            player["is_playing"] = False
+            player["position_seconds"] = 0
+            if runtime_state.get("playback_session"):
+                runtime_state["playback_session"] = self.playback.stop(runtime_state["playback_session"])
+            message = event_message or "Standby aktiv"
+        runtime_state = self.add_event(runtime_state, message)
+        runtime_state = self.update_hardware_profile(runtime_state)
+        runtime_state = self.apply_wifi_policy(runtime_state)
+        self._set_service_active("phoniebox-rfid.service", bool(powered_on))
+        runtime_state = self.update_led_status(runtime_state)
+        self.save_runtime(runtime_state)
+        self.save_player(player)
+        return {"runtime": runtime_state, "player": player}
+
+    def power_off(self, runtime_state=None, player=None, event_message=None):
+        return self._set_power_state(False, runtime_state=runtime_state, player=player, event_message=event_message or "Standby aktiv")
+
+    def power_on(self, runtime_state=None, player=None, event_message=None):
+        return self._set_power_state(True, runtime_state=runtime_state, player=player, event_message=event_message or "Power an")
+
+    def toggle_power(self):
+        runtime_state = self.ensure_runtime()
+        if runtime_state.get("powered_on", True):
+            return self.power_off()
+        return self.power_on()
+
+    def _fade_out_playback(self, runtime_state, player):
+        session = runtime_state.get("playback_session", {})
+        if not session or runtime_state.get("playback_state") != "playing":
+            return runtime_state, player
+        start_volume = max(0, int(player.get("volume", 0)))
+        if start_volume <= 0:
+            return runtime_state, player
+        step_sleep = self.SLEEP_TIMER_FADE_SECONDS / max(1, self.SLEEP_TIMER_FADE_STEPS)
+        for step in range(self.SLEEP_TIMER_FADE_STEPS):
+            remaining_ratio = max(0.0, (self.SLEEP_TIMER_FADE_STEPS - step - 1) / self.SLEEP_TIMER_FADE_STEPS)
+            target_volume = int(round(start_volume * remaining_ratio))
+            runtime_state["playback_session"] = self.playback.set_volume(runtime_state["playback_session"], target_volume)
+            time.sleep(step_sleep)
+        return runtime_state, player
+
+    def enter_standby_after_sleep_timer(self, runtime_state=None, player=None):
+        runtime_state = runtime_state or self.ensure_runtime()
+        player = player or self.load_player()
+        runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
+        runtime_state, player = self._fade_out_playback(runtime_state, player)
+        return self.power_off(runtime_state=runtime_state, player=player, event_message="Sleeptimer abgelaufen, Standby aktiv")
 
     def seek(self, position_seconds):
         runtime_state = self.ensure_runtime()
@@ -565,6 +829,7 @@ class RuntimeService:
             )
         runtime_state = self.add_event(runtime_state, f"Position gesetzt auf {target_position}s")
         runtime_state = self.update_hardware_profile(runtime_state)
+        runtime_state = self.apply_wifi_policy(runtime_state)
         runtime_state = self.update_led_status(runtime_state)
         self.save_runtime(runtime_state)
         self.save_player(player)
@@ -594,6 +859,7 @@ class RuntimeService:
             f"Album geladen: {album.get('name', '')}" if not autoplay else f"Album gestartet: {album.get('name', '')}",
         )
         runtime_state = self.update_hardware_profile(runtime_state)
+        runtime_state = self.apply_wifi_policy(runtime_state)
         runtime_state = self.update_led_status(runtime_state)
         self.save_runtime(runtime_state)
         self.save_player(player)
@@ -641,6 +907,7 @@ class RuntimeService:
         runtime_state["hardware"]["pressed_buttons"] = []
         runtime_state = self.add_event(runtime_state, "Runtime zurückgesetzt")
         runtime_state = self.update_hardware_profile(runtime_state)
+        runtime_state = self.apply_wifi_policy(runtime_state)
         runtime_state = self.update_led_status(runtime_state)
         self.save_runtime(runtime_state)
         self.save_player(player)
@@ -666,6 +933,7 @@ class RuntimeService:
                 runtime_state["playback_session"] = self.playback.play(runtime_state["playback_session"])
         runtime_state = self.add_event(runtime_state, event)
         runtime_state = self.update_hardware_profile(runtime_state)
+        runtime_state = self.apply_wifi_policy(runtime_state)
         runtime_state = self.update_led_status(runtime_state)
         self.save_runtime(runtime_state)
         self.save_player(player)
@@ -682,6 +950,7 @@ class RuntimeService:
             runtime_state["playback_session"] = self.playback.stop(runtime_state["playback_session"])
         runtime_state = self.add_event(runtime_state, "Wiedergabe gestoppt")
         runtime_state = self.update_hardware_profile(runtime_state)
+        runtime_state = self.apply_wifi_policy(runtime_state)
         runtime_state = self.update_led_status(runtime_state)
         self.save_runtime(runtime_state)
         self.save_player(player)
@@ -709,6 +978,7 @@ class RuntimeService:
             runtime_state, player = self._finish_playlist(runtime_state, player)
             runtime_state["queue_revision"] = secrets.token_hex(4)
             runtime_state = self.update_hardware_profile(runtime_state)
+            runtime_state = self.apply_wifi_policy(runtime_state)
             runtime_state = self.update_led_status(runtime_state)
             self.save_runtime(runtime_state)
             self.save_player(player)
@@ -725,6 +995,7 @@ class RuntimeService:
         runtime_state["queue_revision"] = secrets.token_hex(4)
         runtime_state = self.add_event(runtime_state, f"Nächster Titel: {player.get('current_track', '')}")
         runtime_state = self.update_hardware_profile(runtime_state)
+        runtime_state = self.apply_wifi_policy(runtime_state)
         runtime_state = self.update_led_status(runtime_state)
         self.save_runtime(runtime_state)
         self.save_player(player)
@@ -781,6 +1052,7 @@ class RuntimeService:
             )
         runtime_state = self.add_event(runtime_state, f"Lautstärke {player['volume']}%")
         runtime_state = self.update_hardware_profile(runtime_state)
+        runtime_state = self.apply_wifi_policy(runtime_state)
         self.save_runtime(runtime_state)
         self.save_player(player)
         return {"runtime": runtime_state, "player": player}
@@ -810,6 +1082,7 @@ class RuntimeService:
             )
         runtime_state = self.add_event(runtime_state, "Stumm" if player.get("muted") else f"Lautstärke {player['volume']}%")
         runtime_state = self.update_hardware_profile(runtime_state)
+        runtime_state = self.apply_wifi_policy(runtime_state)
         self.save_runtime(runtime_state)
         self.save_player(player)
         return {"runtime": runtime_state, "player": player}
@@ -850,6 +1123,7 @@ class RuntimeService:
         else:
             runtime_state = self.add_event(runtime_state, "Tag entfernt: keine Aktion")
         runtime_state = self.update_hardware_profile(runtime_state)
+        runtime_state = self.apply_wifi_policy(runtime_state)
         runtime_state = self.update_led_status(runtime_state)
         self.save_runtime(runtime_state)
         self.save_player(player)
@@ -876,6 +1150,7 @@ class RuntimeService:
                 runtime_state, player = self.load_album_into_player(album, runtime_state, player, autoplay=(mode == "play"))
                 runtime_state = self.add_event(runtime_state, f"RFID geladen: {album.get('name', '')}")
                 runtime_state = self.update_hardware_profile(runtime_state)
+                runtime_state = self.apply_wifi_policy(runtime_state)
                 runtime_state = self.update_led_status(runtime_state)
                 self.save_runtime(runtime_state)
                 self.save_player(player)
@@ -883,6 +1158,7 @@ class RuntimeService:
         runtime_state["hardware"]["last_scanned_uid"] = uid
         runtime_state = self.add_event(runtime_state, f"Unbekannter RFID-Tag: {uid}", "warning")
         runtime_state = self.update_hardware_profile(runtime_state)
+        runtime_state = self.apply_wifi_policy(runtime_state)
         self.save_runtime(runtime_state)
         return {"ok": False, "runtime": runtime_state, "player": player}
 
@@ -949,13 +1225,22 @@ class RuntimeService:
             runtime_state["hardware"]["last_button_press_type"] = last_press_type
             self.save_runtime(runtime_state)
             return {"runtime": runtime_state, "player": self.load_player()}
+        if normalized == "wifi on/off":
+            result = self.toggle_wifi()
+            result["runtime"]["hardware"]["last_button"] = last_button
+            result["runtime"]["hardware"]["last_button_press_type"] = last_press_type
+            self.save_runtime(result["runtime"])
+            return result
         if normalized in {"power on/off", "sleep/power"}:
-            runtime_state["powered_on"] = not runtime_state.get("powered_on", True)
-            runtime_state["playback_state"] = "paused" if runtime_state["powered_on"] else "stopped"
-            runtime_state = self.add_event(runtime_state, "Power an" if runtime_state["powered_on"] else "Power aus")
+            result = self.toggle_power()
+            result["runtime"]["hardware"]["last_button"] = last_button
+            result["runtime"]["hardware"]["last_button_press_type"] = last_press_type
+            self.save_runtime(result["runtime"])
+            return result
 
         runtime_state = self.update_led_status(runtime_state)
         runtime_state = self.update_hardware_profile(runtime_state)
+        runtime_state = self.apply_wifi_policy(runtime_state)
         self.save_runtime(runtime_state)
         return {"runtime": runtime_state, "player": self.load_player()}
 
@@ -987,6 +1272,7 @@ class RuntimeService:
         runtime_state = self._refresh_sleep_step(runtime_state)
         runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
         runtime_state = self.update_hardware_profile(runtime_state)
+        runtime_state = self.apply_wifi_policy(runtime_state)
         runtime_state = self.update_led_status(runtime_state)
         self.save_player(player)
         self.save_runtime(runtime_state)

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -23,11 +24,22 @@ def main():
         while True:
             runtime = load_json(RUNTIME_FILE, {})
             led_status = runtime.get("led_status", [])
-            payload = json.dumps(led_status, sort_keys=True, ensure_ascii=False)
-            if payload != last_payload:
-                controller.apply_leds(led_status)
+            rendered = []
+            has_pulse = False
+            for led in led_status:
+                rendered_led = dict(led)
+                if led.get("effect") == "pulse" and led.get("is_on"):
+                    has_pulse = True
+                    phase = (time.monotonic() % 2.4) / 2.4
+                    wave = 0.5 - 0.5 * math.cos(phase * 2.0 * math.pi)
+                    base = max(0, min(100, int(led.get("brightness", 0) or 0)))
+                    rendered_led["brightness"] = max(8, int(round(base * (0.22 + 0.78 * wave))))
+                rendered.append(rendered_led)
+            payload = json.dumps(rendered, sort_keys=True, ensure_ascii=False)
+            if has_pulse or payload != last_payload:
+                controller.apply_leds(rendered)
                 last_payload = payload
-            time.sleep(0.2)
+            time.sleep(0.12 if has_pulse else 0.2)
     finally:
         controller.cleanup()
 
