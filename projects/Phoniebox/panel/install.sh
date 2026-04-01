@@ -52,7 +52,7 @@ sudo cp systemd/phoniebox-runtime-tick.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-runtime-tick.timer "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-hdmi-off.service "$SERVICE_DIR"/
 
-sudo python3 -m venv --system-site-packages "$VENV_DIR"
+sudo python3 -m venv "$VENV_DIR"
 sudo "$VENV_DIR/bin/pip" install --upgrade pip
 sudo "$VENV_DIR/bin/pip" install -r "$APP_DIR/requirements.txt"
 sudo "$VENV_DIR/bin/python" -c "import sys; sys.path.insert(0, '$APP_DIR'); from app import ensure_data_files; ensure_data_files()"
