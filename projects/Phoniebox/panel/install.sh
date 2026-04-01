@@ -47,6 +47,7 @@ sudo cp systemd/phoniebox-leds.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-rfid.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-hotspot-fallback.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-hotspot-fallback.timer "$SERVICE_DIR"/
+sudo cp systemd/phoniebox-network-bootstrap.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-runtime-tick.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-runtime-tick.timer "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-hdmi-off.service "$SERVICE_DIR"/
@@ -77,6 +78,7 @@ EOF
 fi
 
 sudo systemctl daemon-reload
+sudo systemctl enable NetworkManager.service
 sudo systemctl disable --now bluetooth.service 2>/dev/null || true
 sudo systemctl disable --now hciuart.service 2>/dev/null || true
 if command -v rfkill >/dev/null 2>&1; then
@@ -88,13 +90,20 @@ sudo systemctl enable phoniebox-gpio-poll.service
 sudo systemctl enable phoniebox-leds.service
 sudo systemctl enable phoniebox-rfid.service
 sudo systemctl enable phoniebox-hdmi-off.service
+sudo systemctl enable phoniebox-network-bootstrap.service
 sudo systemctl enable phoniebox-hotspot-fallback.timer
 sudo systemctl enable phoniebox-runtime-tick.timer
+sudo /usr/bin/python3 "$APP_DIR/scripts/bootstrap_network.py" --seed-only || true
 sudo systemctl restart phoniebox-panel.service
 sudo systemctl restart phoniebox-gpio-poll.service
 sudo systemctl restart phoniebox-leds.service
 sudo systemctl restart phoniebox-rfid.service
 sudo systemctl restart phoniebox-hdmi-off.service
+if [ -z "${SSH_CONNECTION:-}" ]; then
+  sudo systemctl restart phoniebox-network-bootstrap.service || true
+else
+  echo "Aktive SSH-Sitzung erkannt: Netzwerkprofil nur vorbereitet, nicht live umgeschaltet."
+fi
 sudo systemctl restart phoniebox-hotspot-fallback.timer
 sudo systemctl restart phoniebox-runtime-tick.timer
 

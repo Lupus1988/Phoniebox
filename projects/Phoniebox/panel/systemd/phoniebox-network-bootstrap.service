@@ -1,0 +1,12 @@
+[Unit]
+Description=Bootstrap Phoniebox WLAN and hotspot profiles
+After=NetworkManager.service network-online.target
+Wants=NetworkManager.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/phoniebox-panel
+ExecStart=/usr/bin/python3 /opt/phoniebox-panel/scripts/bootstrap_network.py
+
+[Install]
+WantedBy=multi-user.target
