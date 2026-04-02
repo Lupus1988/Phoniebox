@@ -167,33 +167,28 @@
         <input type="hidden" name="led_count" value="{{ setup_data.leds|length }}">
         <div class="panel-box-head">
           <h3>LED-Zuordnung</h3>
-          <span>nur geeignete Pins</span>
         </div>
         <div class="led-table-head">
-          <div>LED</div>
-          <div>PIN</div>
           <div>Funktion</div>
+          <div>PIN</div>
           <div>Helligkeit</div>
         </div>
         <div class="led-table">
           {% for led in setup_data.leds %}
             <div class="led-row">
-              <input name="led_name_{{ loop.index0 }}" value="{{ led.name }}">
+              <div class="mapping-name">{{ led.name }}</div>
+              <input type="hidden" name="led_name_{{ loop.index0 }}" value="{{ led.name }}">
               <select name="led_pin_{{ loop.index0 }}">
                 {% for pin in led_pin_choices %}
                   <option value="{{ pin }}" {% if led.pin == pin %}selected{% endif %}>{{ pin }}</option>
                 {% endfor %}
               </select>
-              <select name="led_function_{{ loop.index0 }}">
-                {% for option in led_functions %}
-                  <option value="{{ option }}" {% if led.function == option %}selected{% endif %}>{{ option }}</option>
-                {% endfor %}
-              </select>
+              <input type="hidden" name="led_function_{{ loop.index0 }}" value="{{ led.function }}">
               <input type="number" name="led_brightness_{{ loop.index0 }}" min="0" max="100" value="{{ led.brightness }}">
             </div>
           {% endfor %}
         </div>
-        <button class="primary full setup-save-button" type="submit">LEDs speichern</button>
+        <button class="primary full setup-save-button led-save-button" type="submit">LEDs speichern</button>
       </form>
 
       <form method="post" class="panel-box setup-save-card">

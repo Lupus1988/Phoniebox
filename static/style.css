@@ -1389,7 +1389,11 @@ dialog[data-power-routine-dialog]::backdrop {
 
 .led-table-head,
 .led-row {
-  grid-template-columns: 1fr 0.9fr 1fr 0.9fr;
+  grid-template-columns: 1fr 0.9fr 0.9fr;
+}
+
+.led-save-button {
+  margin-top: 1rem;
 }
 
 .drop-slot {
