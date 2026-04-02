@@ -30,7 +30,7 @@
         </label>
         <div class="checkbox-row settings-checkbox-row sleep-rotation-row">
           <input type="checkbox" name="sleep_timer_button_rotation" {% if settings.sleep_timer_button_rotation %}checked{% endif %}>
-          <span>Sleeptimer-Taste rotiert 1/3 -> 2/3 -> 3/3 -> 0</span>
+          <span>Rotierende Timertaste</span>
           <button type="button" class="button-like routine-info-button settings-info-button" data-sleep-rotation-info>i</button>
         </div>
         <label class="inline-field startup-volume-row" data-startup-volume-row>
@@ -72,10 +72,27 @@
   <dialog class="modal" data-sleep-rotation-dialog>
     <article class="modal-body compact-modal-body dialog-card sleep-rotation-dialog-card">
       <div class="panel-box-head">
-        <h3>Sleeptimer-Rotation</h3>
+        <h3>Rotierende Timertaste</h3>
       </div>
-      <p>Wenn aktiv, schaltet dieselbe Hardware-Taste für Sleeptimer Plus der Reihe nach auf 1/3, 2/3, 3/3 und danach wieder auf 0 zurück.</p>
-      <p>Wenn deaktiviert, stoppt die Plus-Taste bei 3/3. Zum Reduzieren brauchst du dann eine zweite Taste für Sleeptimer Minus oder das Web-Panel.</p>
+      <table class="routine-info-table">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Verhalten der Taste</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Aktiv</td>
+            <td>Jeder Druck geht weiter: 1/3, dann 2/3, dann 3/3, danach zurück auf 0.</td>
+          </tr>
+          <tr>
+            <td>Inaktiv</td>
+            <td>Die Taste zählt nur bis 3/3 hoch. Für weniger Zeit brauchst du dann eine zweite Taste oder das Web-Panel.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>Das ist praktisch, wenn du hardwareseitig nur eine einzige Sleeptimer-Taste verbauen möchtest.</p>
       <form method="dialog">
         <button class="primary" value="close">Schließen</button>
       </form>

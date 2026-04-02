@@ -23,6 +23,7 @@ else:
 
 DATA_DIR = BASE_DIR / "data"
 SETUP_FILE = DATA_DIR / "setup.json"
+READER_STATUS_FILE = DATA_DIR / "reader_status.json"
 RUNTIME_RFID_URL = "http://127.0.0.1:5080/api/runtime/rfid"
 RUNTIME_RFID_REMOVE_URL = "http://127.0.0.1:5080/api/runtime/rfid/remove"
 
@@ -59,8 +60,27 @@ def post_remove():
     return post_json(RUNTIME_RFID_REMOVE_URL, {})
 
 
+def save_reader_status(configured_type, ready, message, details=None):
+    payload = {
+        "configured_type": configured_type,
+        "ready": bool(ready),
+        "message": str(message or ""),
+        "details": list(details or []),
+        "updated_at": int(time.time()),
+    }
+    try:
+        READER_STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        READER_STATUS_FILE.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
 class BaseReader:
     presence_reader = False
+    ready = False
+    status_message = "Kein Reader initialisiert."
+    status_details = []
 
     def poll(self):
         return None
@@ -75,6 +95,9 @@ class USBKeyboardReader(BaseReader):
         self.current_paths = []
         self.buffer = ""
         self.last_refresh = 0.0
+        self.ready = True
+        self.status_message = "USB-Reader aktiv."
+        self.status_details = ["Warte auf HID-Tastatur-Reader."]
 
     def open_devices(self, paths):
         devices = []
@@ -160,20 +183,52 @@ class RC522Reader(BaseReader):
 
     def __init__(self):
         self.reader = None
+        self.ready = False
+        self.status_message = "RC522 noch nicht initialisiert."
+        self.status_details = ["Prüfe SPI und Python-Treiber."]
         try:
             from mfrc522 import SimpleMFRC522
 
             self.reader = SimpleMFRC522()
-        except Exception:
+            self.ready = True
+            self.status_message = "RC522 bereit."
+            self.status_details = ["Warte auf RFID-Tag."]
+        except Exception as exc:
             self.reader = None
+            self.status_message = f"RC522 konnte nicht initialisiert werden: {exc}"
+            self.status_details = [
+                "Prüfe, ob SPI aktiv ist.",
+                "Prüfe, ob der Reader mit 3.3V versorgt wird.",
+                "Prüfe SDA/SS, SCK, MOSI, MISO und RST auf korrekte Pins.",
+            ]
+
+    def _read_uid(self):
+        if self.reader is None:
+            return None
+        if hasattr(self.reader, "read_id_no_block"):
+            return self.reader.read_id_no_block()
+        if hasattr(self.reader, "read_no_block"):
+            result = self.reader.read_no_block()
+            if isinstance(result, (tuple, list)) and result:
+                return result[0]
+            return result
+        return None
 
     def poll(self):
         if self.reader is None:
             time.sleep(0.3)
             return None
         try:
-            uid = self.reader.read_id_no_block()
-        except Exception:
+            uid = self._read_uid()
+            self.ready = True
+            self.status_message = "RC522 bereit."
+        except Exception as exc:
+            self.ready = False
+            self.status_message = f"RC522 Lesefehler: {exc}"
+            self.status_details = [
+                "Reader wurde erkannt, konnte aber keinen Tag sauber lesen.",
+                "Prüfe Verdrahtung und Tag-Abstand.",
+            ]
             return None
         return str(uid) if uid else None
 
@@ -195,6 +250,9 @@ class PN532Reader(BaseReader):
         self.transport = transport
         self.pn532 = None
         self.handles = []
+        self.ready = False
+        self.status_message = "PN532 noch nicht initialisiert."
+        self.status_details = [f"Prüfe Transport {transport}."]
         try:
             import board
             import busio
@@ -221,9 +279,13 @@ class PN532Reader(BaseReader):
                 self.pn532 = PN532_UART(uart, debug=False)
             if self.pn532 is not None:
                 self.pn532.SAM_configuration()
+                self.ready = True
+                self.status_message = f"PN532 ({transport}) bereit."
+                self.status_details = ["Warte auf RFID-Tag."]
         except Exception:
             self.cleanup()
             self.pn532 = None
+            self.status_message = f"PN532 ({transport}) konnte nicht initialisiert werden."
 
     def poll(self):
         if self.pn532 is None:
@@ -231,7 +293,11 @@ class PN532Reader(BaseReader):
             return None
         try:
             uid = self.pn532.read_passive_target(timeout=0.2)
-        except Exception:
+            self.ready = True
+            self.status_message = f"PN532 ({self.transport}) bereit."
+        except Exception as exc:
+            self.ready = False
+            self.status_message = f"PN532 Lesefehler: {exc}"
             return None
         if not uid:
             return None
@@ -268,6 +334,7 @@ def build_reader(reader_type):
 def main():
     reader = None
     reader_type = None
+    last_status = None
     active_uid = ""
     active_seen_at = 0.0
     last_uid = ""
@@ -282,6 +349,7 @@ def main():
                     reader.cleanup()
                 reader = build_reader(configured_type)
                 reader_type = configured_type
+                last_status = None
                 active_uid = ""
                 active_seen_at = 0.0
 
@@ -289,8 +357,38 @@ def main():
                 time.sleep(0.5)
                 continue
 
+            current_status = (
+                reader_type,
+                bool(getattr(reader, "ready", False)),
+                str(getattr(reader, "status_message", "")),
+                tuple(getattr(reader, "status_details", []) or []),
+            )
+            if current_status != last_status:
+                save_reader_status(
+                    reader_type,
+                    getattr(reader, "ready", False),
+                    getattr(reader, "status_message", ""),
+                    getattr(reader, "status_details", []),
+                )
+                last_status = current_status
+
             uid = reader.poll()
             now = time.monotonic()
+
+            polled_status = (
+                reader_type,
+                bool(getattr(reader, "ready", False)),
+                str(getattr(reader, "status_message", "")),
+                tuple(getattr(reader, "status_details", []) or []),
+            )
+            if polled_status != last_status:
+                save_reader_status(
+                    reader_type,
+                    getattr(reader, "ready", False),
+                    getattr(reader, "status_message", ""),
+                    getattr(reader, "status_details", []),
+                )
+                last_status = polled_status
 
             if uid:
                 if uid == active_uid and getattr(reader, "presence_reader", False):

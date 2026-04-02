@@ -36,6 +36,7 @@ SETUP_FILE = DATA_DIR / "setup.json"
 APPLY_REPORT_FILE = DATA_DIR / "last_apply_report.json"
 RUNTIME_FILE = DATA_DIR / "runtime_state.json"
 LINK_SESSION_FILE = DATA_DIR / "rfid_link_session.json"
+READER_STATUS_FILE = DATA_DIR / "reader_status.json"
 BUTTON_DETECT_FILE = DATA_DIR / "button_detect.json"
 AUDIO_PROFILE_DIR = DATA_DIR / "generated" / "audio"
 READER_GUIDE_DIR = BASE_DIR / "assets" / "reader-guides"
@@ -423,6 +424,16 @@ def default_library():
     return {"albums": []}
 
 
+def default_reader_status():
+    return {
+        "configured_type": "USB",
+        "ready": False,
+        "message": "",
+        "details": [],
+        "updated_at": 0,
+    }
+
+
 def default_settings():
     return {
         "max_volume": 85,
@@ -608,6 +619,10 @@ def save_apply_report(data):
 
 def load_link_session():
     return load_json(LINK_SESSION_FILE, default_link_session())
+
+
+def load_reader_status():
+    return merge_defaults(load_json(READER_STATUS_FILE, default_reader_status()), default_reader_status())
 
 
 def save_link_session(data):
@@ -1761,6 +1776,7 @@ def setup():
         audio_environment=detect_audio_environment(),
         audio_profile_dir=AUDIO_PROFILE_DIR,
         hardware_profile=runtime_snapshot["runtime"]["hardware"].get("profile", {}),
+        reader_status=load_reader_status(),
         runtime_state=runtime_snapshot["runtime"],
         button_mapping_rows=button_mapping_rows(data),
         reader_option=current_reader_option(data.get("reader", {}).get("type", "USB")),

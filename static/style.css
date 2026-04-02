@@ -1441,6 +1441,42 @@ dialog[data-power-routine-dialog]::backdrop {
   margin-top: 0;
 }
 
+.reader-status-box {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.9rem;
+  padding: 0.85rem 0.95rem;
+  border: 2px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.reader-status-box strong {
+  color: var(--ink);
+}
+
+.reader-status-box p {
+  margin: 0;
+}
+
+.reader-status-box.is-ready {
+  border-color: rgba(112, 192, 155, 0.42);
+  background: rgba(112, 192, 155, 0.12);
+}
+
+.reader-status-box.is-warning {
+  border-color: rgba(243, 197, 70, 0.4);
+  background: rgba(243, 197, 70, 0.12);
+}
+
+.compact-plain-list {
+  gap: 0.45rem;
+}
+
+.compact-plain-list li {
+  padding: 0.7rem 0.8rem;
+}
+
 .long-press-field {
   flex: 0 0 auto;
 }
