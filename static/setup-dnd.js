@@ -163,6 +163,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const buttonMapping = document.querySelector("[data-button-mapping]");
   if (buttonMapping) {
     const rows = Array.from(buttonMapping.querySelectorAll(".mapping-row"));
+    const buttonPinSelects = rows
+      .map((row) => row.querySelector("[data-button-pin]"))
+      .filter((entry) => entry instanceof HTMLSelectElement);
+    const ledPinSelects = Array.from(document.querySelectorAll("[data-led-pin]"))
+      .filter((entry) => entry instanceof HTMLSelectElement);
 
     function syncPressTypeChoices() {
       for (const row of rows) {
@@ -204,14 +209,61 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
+    function syncCrossRolePinChoices() {
+      const selectedButtonPins = new Set(buttonPinSelects.map((select) => select.value).filter(Boolean));
+      const selectedLedPins = new Set(ledPinSelects.map((select) => select.value).filter(Boolean));
+
+      for (const select of buttonPinSelects) {
+        const currentValue = select.value;
+        for (const option of select.options) {
+          if (!option.value) {
+            option.hidden = false;
+            option.disabled = false;
+            continue;
+          }
+          const blocked = selectedLedPins.has(option.value) && option.value !== currentValue;
+          option.hidden = blocked;
+          option.disabled = blocked;
+        }
+        if (select.value && select.selectedOptions.length && select.selectedOptions[0].disabled) {
+          select.value = "";
+        }
+      }
+
+      for (const select of ledPinSelects) {
+        const currentValue = select.value;
+        for (const option of select.options) {
+          if (!option.value) {
+            option.hidden = false;
+            option.disabled = false;
+            continue;
+          }
+          const blocked = selectedButtonPins.has(option.value) && option.value !== currentValue;
+          option.hidden = blocked;
+          option.disabled = blocked;
+        }
+        if (select.value && select.selectedOptions.length && select.selectedOptions[0].disabled) {
+          select.value = "";
+        }
+      }
+    }
+
     for (const row of rows) {
       const pinSelect = row.querySelector("[data-button-pin]");
       const pressSelect = row.querySelector("[data-button-press-type]");
-      pinSelect?.addEventListener("change", syncPressTypeChoices);
+      pinSelect?.addEventListener("change", () => {
+        syncPressTypeChoices();
+        syncCrossRolePinChoices();
+      });
       pressSelect?.addEventListener("change", syncPressTypeChoices);
     }
 
     syncPressTypeChoices();
+    syncCrossRolePinChoices();
+
+    for (const select of ledPinSelects) {
+      select.addEventListener("change", syncCrossRolePinChoices);
+    }
   }
 
   const hotspotSecurity = document.querySelector("[data-hotspot-security]");

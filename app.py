@@ -907,14 +907,28 @@ def reserved_system_pins(setup_data):
     return reserved_reader_pins(reader_type) | reserved_audio_pins(output_mode)
 
 
+def assigned_button_pins(setup_data):
+    return {button.get("pin", "").strip() for button in setup_data.get("buttons", []) if button.get("pin", "").strip()}
+
+
+def assigned_led_pins(setup_data):
+    return {led.get("pin", "").strip() for led in setup_data.get("leds", []) if led.get("pin", "").strip()}
+
+
 def pin_choices(setup_data, role):
     reserved = reserved_system_pins(setup_data)
+    blocked_by_other_role = assigned_led_pins(setup_data) if role == "button" else assigned_button_pins(setup_data)
     pins = GPIO_PINS
     if role == "led":
-        pins = [pin for pin in GPIO_PINS if pin in PWM_PINS or pin not in reserved]
+        pins = [pin for pin in GPIO_PINS if (pin in PWM_PINS or pin not in reserved) and pin not in blocked_by_other_role]
     else:
-        pins = [pin for pin in GPIO_PINS if pin not in reserved]
+        pins = [pin for pin in GPIO_PINS if pin not in reserved and pin not in blocked_by_other_role]
     return pins
+
+
+def cross_role_pin_errors(setup_data):
+    overlap = assigned_button_pins(setup_data) & assigned_led_pins(setup_data)
+    return [f"PIN {pin} ist bereits der anderen Gerätegruppe zugeordnet." for pin in sorted(overlap)]
 
 
 def reader_catalog():
@@ -1525,6 +1539,7 @@ def setup():
                 1,
             )
             errors = mapping_errors(candidate)
+            errors.extend(cross_role_pin_errors(candidate))
             if errors:
                 for error in errors:
                     flash(error, "error")
@@ -1537,7 +1552,7 @@ def setup():
 
         if section == "leds":
             rows = collect_rows("led", ["name", "pin", "function", "brightness"])
-            data["leds"] = [
+            candidate_leds = [
                 {
                     "id": f"led-{index + 1}",
                     "name": row["name"],
@@ -1547,6 +1562,14 @@ def setup():
                 }
                 for index, row in enumerate(rows)
             ]
+            candidate = dict(data)
+            candidate["leds"] = candidate_leds
+            errors = cross_role_pin_errors(candidate)
+            if errors:
+                for error in errors:
+                    flash(error, "error")
+                return redirect(url_for("setup"))
+            data["leds"] = candidate_leds
             save_setup(data)
             flash("LED-Zuweisungen gespeichert.", "success")
             return redirect(url_for("setup"))

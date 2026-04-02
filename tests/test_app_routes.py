@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app import app, collect_conflicts, default_setup, ensure_data_files
+from app import app, collect_conflicts, cross_role_pin_errors, default_setup, ensure_data_files
 
 
 class AppRoutesTest(unittest.TestCase):
@@ -55,3 +55,12 @@ class AppRoutesTest(unittest.TestCase):
             response = self.client.post("/api/setup/led-blink", json={"pin": "GPIO12", "brightness": 55})
         self.assertEqual(response.status_code, 200)
         led_controller.return_value.blink_led.assert_called_once_with("GPIO12", brightness=55, repeats=3)
+
+    def test_cross_role_pin_errors_detect_button_led_overlap(self):
+        setup = default_setup()
+        setup["buttons"][0]["pin"] = "GPIO17"
+        setup["leds"][0]["pin"] = "GPIO17"
+
+        errors = cross_role_pin_errors(setup)
+
+        self.assertTrue(errors)
