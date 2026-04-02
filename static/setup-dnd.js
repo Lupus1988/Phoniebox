@@ -229,4 +229,19 @@ document.addEventListener("DOMContentLoaded", () => {
     hotspotSecurity.addEventListener("change", syncHotspotPasswordField);
     syncHotspotPasswordField();
   }
+
+  const audioTestButton = document.querySelector("[data-audio-test-button]");
+  if (audioTestButton instanceof HTMLButtonElement) {
+    audioTestButton.addEventListener("click", async () => {
+      audioTestButton.disabled = true;
+      const originalLabel = audioTestButton.textContent;
+      audioTestButton.textContent = "Spielt...";
+      try {
+        await fetch("/api/runtime/audio-test", {method: "POST"});
+      } finally {
+        audioTestButton.disabled = false;
+        audioTestButton.textContent = originalLabel;
+      }
+    });
+  }
 });

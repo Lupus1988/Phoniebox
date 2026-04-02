@@ -1318,6 +1318,18 @@ dialog[data-power-routine-dialog]::backdrop {
   flex: 0 0 auto;
 }
 
+.setup-action-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.9rem;
+  margin-top: auto;
+}
+
+.setup-action-row .setup-save-button {
+  margin-top: 0;
+}
+
 .long-press-field {
   flex: 0 0 auto;
 }

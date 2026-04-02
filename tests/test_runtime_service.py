@@ -189,8 +189,9 @@ class RuntimeServiceTest(unittest.TestCase):
         self.service.load_album_by_id("album-1", autoplay=True)
         self.service.set_sleep_level(3)
 
-        powered_off = self.service.trigger_button("Power on/off", press_type="lang")
-        powered_on = self.service.trigger_button("Power on/off", press_type="lang")
+        with patch.object(self.service, "play_system_sound", return_value={"ok": True, "details": ["ok"]}) as play_sound:
+            powered_off = self.service.trigger_button("Power on/off", press_type="lang")
+            powered_on = self.service.trigger_button("Power on/off", press_type="lang")
 
         self.assertFalse(powered_off["runtime"]["powered_on"])
         self.assertEqual(powered_off["runtime"]["playback_state"], "stopped")
@@ -204,6 +205,9 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(powered_on["runtime"]["playback_state"], "paused")
         self.assertFalse(powered_on["player"]["is_playing"])
         self.assertEqual(powered_on["runtime"]["last_event"], "Power an")
+        self.assertEqual(play_sound.call_count, 2)
+        self.assertEqual(play_sound.call_args_list[0].args[0], "power_off")
+        self.assertEqual(play_sound.call_args_list[1].args[0], "power_on")
 
     def test_hardware_profile_detection_is_cached_within_ttl(self):
         with patch.object(service_module, "detect_hardware", return_value=service_module.detect_hardware({}, {"albums": []})) as detect:

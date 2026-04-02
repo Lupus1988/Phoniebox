@@ -65,6 +65,7 @@ def _terminate_process_group(pid):
 class PlaybackController:
     def __init__(self):
         self.backend_info = detect_backend()
+        self.preview_pid = None
 
     def status(self):
         self.backend_info = detect_backend()
@@ -143,6 +144,24 @@ class PlaybackController:
         session["state"] = "playing"
         session.pop("error", None)
         return session
+
+    def _launch_preview(self, command):
+        if not command:
+            return {"ok": False, "details": ["Kein Audio-Kommando verfügbar."]}
+        if self.preview_pid:
+            _terminate_process_group(self.preview_pid)
+            self.preview_pid = None
+        try:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                preexec_fn=os.setsid,
+            )
+        except OSError as exc:
+            return {"ok": False, "details": [str(exc)]}
+        self.preview_pid = process.pid
+        return {"ok": True, "details": ["Sound gestartet."]}
 
     def open_track(self, playlist_relative_path, entry, start_position=0, volume=50, previous_session=None):
         if previous_session:
@@ -255,3 +274,20 @@ class PlaybackController:
             session["position_seconds"] = current_position
             return self._launch(session)
         return session
+
+    def play_preview(self, file_path, volume=65):
+        backend = self.status()["active_backend"]
+        track_path = Path(file_path).resolve()
+        try:
+            track_path.relative_to(BASE_DIR.resolve())
+        except ValueError:
+            return {"ok": False, "details": ["Audiodatei liegt außerhalb des Projektpfads."]}
+        if not track_path.exists() or not track_path.is_file():
+            return {"ok": False, "details": ["Audiodatei nicht gefunden."]}
+        if backend == "mock":
+            return {"ok": True, "details": ["Mock-Backend aktiv, Sound nur simuliert."]}
+        command = self._build_command(backend, track_path, 0, volume)
+        result = self._launch_preview(command)
+        if result["ok"]:
+            result["backend"] = backend
+        return result

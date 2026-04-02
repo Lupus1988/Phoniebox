@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from app import app, collect_conflicts, default_setup, ensure_data_files
 
@@ -35,3 +36,9 @@ class AppRoutesTest(unittest.TestCase):
 
         self.assertEqual(setup["wifi"]["mode"], "hotspot_only")
         self.assertEqual(setup["wifi"]["saved_networks"], [])
+
+    def test_audio_test_endpoint_plays_test_sound(self):
+        with patch("app.runtime_service.play_system_sound", return_value={"ok": True, "details": ["ok"]}) as play_sound:
+            response = self.client.post("/api/runtime/audio-test")
+        self.assertEqual(response.status_code, 200)
+        play_sound.assert_called_once_with("test")

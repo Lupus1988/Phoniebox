@@ -1815,9 +1815,8 @@ def api_runtime_rfid_remove():
 
 @app.route("/api/runtime/audio-test", methods=["POST"])
 def api_runtime_audio_test():
-    payload = request.get_json(silent=True) or {}
-    elapsed = to_int(payload.get("elapsed", request.form.get("elapsed", 5)), 5, 1, 120)
-    return jsonify(runtime_service.tick(elapsed))
+    result = runtime_service.play_system_sound("test")
+    return jsonify(result), (200 if result.get("ok") else 404)
 
 
 @app.route("/api/runtime/playback")

@@ -13,6 +13,7 @@ except ImportError:
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+SOUNDS_DIR = BASE_DIR / "assets" / "sounds"
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
@@ -144,6 +145,20 @@ class RuntimeService:
         self._sysfs_gpio = SysfsGPIOInput()
         self._hardware_profile_cache = None
         self._hardware_profile_cached_at = 0.0
+
+    def sound_path(self, sound_name):
+        mapping = {
+            "power_on": SOUNDS_DIR / "power_on.mp3",
+            "power_off": SOUNDS_DIR / "power_off.mp3",
+            "test": SOUNDS_DIR / "test.mp3",
+        }
+        return mapping.get(sound_name)
+
+    def play_system_sound(self, sound_name):
+        sound_path = self.sound_path(sound_name)
+        if not sound_path:
+            return {"ok": False, "details": [f"Unbekannter Sound: {sound_name}"]}
+        return self.playback.play_preview(sound_path, volume=65)
 
     def _power_routine_options(self):
         return {
@@ -779,6 +794,7 @@ class RuntimeService:
         runtime_state = self.update_led_status(runtime_state)
         self.save_runtime(runtime_state)
         self.save_player(player)
+        self.play_system_sound("power_on" if powered_on else "power_off")
         return {"runtime": runtime_state, "player": player}
 
     def power_off(self, runtime_state=None, player=None, event_message=None):
