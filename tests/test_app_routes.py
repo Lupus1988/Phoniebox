@@ -54,7 +54,13 @@ class AppRoutesTest(unittest.TestCase):
             led_controller.return_value.blink_led.return_value = True
             response = self.client.post("/api/setup/led-blink", json={"pin": "GPIO12", "brightness": 55})
         self.assertEqual(response.status_code, 200)
-        led_controller.return_value.blink_led.assert_called_once_with("GPIO12", brightness=55, repeats=3)
+        led_controller.return_value.blink_led.assert_called_once_with(
+            "GPIO12",
+            brightness=55,
+            repeats=3,
+            on_seconds=0.22,
+            off_seconds=0.18,
+        )
 
     def test_cross_role_pin_errors_detect_button_led_overlap(self):
         setup = default_setup()

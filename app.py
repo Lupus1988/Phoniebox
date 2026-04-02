@@ -1818,7 +1818,7 @@ def api_setup_led_blink():
     if not pin:
         return jsonify({"ok": False, "details": ["Kein LED-PIN ausgewählt."]}), 400
     controller = LEDController()
-    ok = controller.blink_led(pin, brightness=brightness, repeats=3)
+    ok = controller.blink_led(pin, brightness=brightness, repeats=3, on_seconds=0.22, off_seconds=0.18)
     controller.cleanup()
     if not ok:
         return jsonify({"ok": False, "details": [f"LED-Test für {pin} konnte nicht gestartet werden."]}), 503

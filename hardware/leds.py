@@ -123,7 +123,7 @@ class LEDController:
                 continue
         self._configured_pins.clear()
 
-    def blink_led(self, gpio_name, brightness=100, repeats=3, on_seconds=0.12, off_seconds=0.12):
+    def blink_led(self, gpio_name, brightness=100, repeats=3, on_seconds=0.22, off_seconds=0.18):
         bcm_pin = gpio_name_to_bcm(gpio_name)
         if bcm_pin is None:
             return False
@@ -134,7 +134,7 @@ class LEDController:
         active_brightness = 100 if brightness <= 0 else brightness
 
         try:
-            if bcm_pin in PWM_PINS and 0 < active_brightness < 100:
+            if 0 < active_brightness < 100:
                 pwm = self._ensure_pwm(bcm_pin)
                 for _ in range(max(1, int(repeats))):
                     pwm.ChangeDutyCycle(active_brightness)
