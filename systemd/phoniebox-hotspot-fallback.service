@@ -5,4 +5,4 @@ After=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/phoniebox-panel
-ExecStart=/usr/bin/python3 /opt/phoniebox-panel/scripts/fallback_hotspot.py
+ExecStart=/opt/phoniebox-panel/.venv/bin/python /opt/phoniebox-panel/scripts/fallback_hotspot.py

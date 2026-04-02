@@ -62,17 +62,17 @@ def merge_defaults(data, defaults):
 
 def default_player():
     return {
-        "current_album": "Lieblingsgeschichten",
-        "current_track": "Lieblingsgeschichten",
+        "current_album": "",
+        "current_track": "",
         "cover_url": "",
         "volume": 45,
         "muted": False,
         "volume_before_mute": 45,
         "position_seconds": 0,
-        "duration_seconds": 278,
+        "duration_seconds": 0,
         "sleep_timer_minutes": 0,
-        "is_playing": True,
-        "playlist": "media/albums/lieblingsgeschichten/playlist.m3u",
+        "is_playing": False,
+        "playlist": "",
         "playlist_entries": [],
         "current_track_index": 0,
         "queue": [],
@@ -81,12 +81,12 @@ def default_player():
 
 def default_runtime_state():
     return {
-        "powered_on": True,
-        "playback_state": "paused",
-        "active_album_id": "album-1",
-        "active_rfid_uid": "1234567890",
-        "last_event": "Systemstart",
-        "last_event_at": int(time.time()),
+        "powered_on": False,
+        "playback_state": "stopped",
+        "active_album_id": "",
+        "active_rfid_uid": "",
+        "last_event": "Bereit",
+        "last_event_at": 0,
         "sleep_timer": {
             "remaining_seconds": 0,
             "step_seconds": 300,
@@ -647,6 +647,8 @@ class RuntimeService:
     def load_album_into_player(self, album, runtime_state=None, player=None, autoplay=False):
         runtime_state = runtime_state or self.ensure_runtime()
         player = player or self.load_player()
+        runtime_state["powered_on"] = True
+        runtime_state["wifi_enabled"] = True
         entries = load_playlist_entries(album.get("playlist", ""))
         player["playlist"] = album.get("playlist", "")
         player["playlist_entries"] = entries

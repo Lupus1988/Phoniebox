@@ -5,4 +5,4 @@ After=network.target
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/phoniebox-panel
-ExecStart=/usr/bin/python3 /opt/phoniebox-panel/scripts/runtime_tick.py
+ExecStart=/opt/phoniebox-panel/.venv/bin/python /opt/phoniebox-panel/scripts/runtime_tick.py

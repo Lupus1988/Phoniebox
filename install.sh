@@ -27,6 +27,7 @@ if [ -d "$APP_DIR/media" ]; then
   sudo cp -a "$APP_DIR/media"/. "$BACKUP_DIR/media"/
 fi
 
+sudo rm -rf "$APP_DIR"
 sudo mkdir -p "$APP_DIR" "$BIN_DIR"
 sudo cp -a "$SOURCE_DIR"/. "$APP_DIR"/
 
@@ -93,7 +94,7 @@ sudo systemctl enable phoniebox-hdmi-off.service
 sudo systemctl enable phoniebox-network-bootstrap.service
 sudo systemctl enable phoniebox-hotspot-fallback.timer
 sudo systemctl enable phoniebox-runtime-tick.timer
-sudo /usr/bin/python3 "$APP_DIR/scripts/bootstrap_network.py" --seed-only || true
+sudo "$VENV_DIR/bin/python" "$APP_DIR/scripts/bootstrap_network.py" --seed-only || true
 sudo systemctl restart phoniebox-panel.service
 sudo systemctl restart phoniebox-gpio-poll.service
 sudo systemctl restart phoniebox-leds.service

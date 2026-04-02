@@ -401,17 +401,17 @@ def enrich_library_data(library_data):
 
 def default_player():
     return {
-        "current_album": "Lieblingsgeschichten",
-        "current_track": "Lieblingsgeschichten",
+        "current_album": "",
+        "current_track": "",
         "cover_url": "",
         "volume": 45,
         "muted": False,
         "volume_before_mute": 45,
         "position_seconds": 0,
-        "duration_seconds": 278,
+        "duration_seconds": 0,
         "sleep_timer_minutes": 0,
-        "is_playing": True,
-        "playlist": "media/albums/lieblingsgeschichten/playlist.m3u",
+        "is_playing": False,
+        "playlist": "",
         "playlist_entries": [],
         "current_track_index": 0,
         "queue": [],
@@ -419,37 +419,7 @@ def default_player():
 
 
 def default_library():
-    return {
-        "albums": [
-            {
-                "id": "album-1",
-                "name": "Lieblingsgeschichten",
-                "folder": "media/albums/lieblingsgeschichten",
-                "playlist": "media/albums/lieblingsgeschichten/playlist.m3u",
-                "track_count": 0,
-                "rfid_uid": "1234567890",
-                "cover_url": "",
-            },
-            {
-                "id": "album-2",
-                "name": "Schlaflieder",
-                "folder": "media/albums/schlaflieder",
-                "playlist": "media/albums/schlaflieder/playlist.m3u",
-                "track_count": 0,
-                "rfid_uid": "",
-                "cover_url": "",
-            },
-            {
-                "id": "album-3",
-                "name": "Tierstimmen",
-                "folder": "media/albums/tierstimmen",
-                "playlist": "media/albums/tierstimmen/playlist.m3u",
-                "track_count": 0,
-                "rfid_uid": "",
-                "cover_url": "",
-            },
-        ]
-    }
+    return {"albums": []}
 
 
 def default_settings():
@@ -461,6 +431,7 @@ def default_settings():
         "startup_volume": 45,
         "rfid_read_action": "play",
         "rfid_remove_action": "stop",
+        "reader_mode": "album_load",
     }
 
 

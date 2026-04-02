@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+data/*.json
+data/generated/
+media/albums/*
+!data/.gitignore
+!media/.gitignore
+!media/albums/.gitignore

@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/phoniebox-panel
-ExecStart=/usr/bin/python3 /opt/phoniebox-panel/scripts/gpio_poll.py
+ExecStart=/opt/phoniebox-panel/.venv/bin/python /opt/phoniebox-panel/scripts/gpio_poll.py
 Restart=always
 RestartSec=2
 
