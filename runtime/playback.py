@@ -66,10 +66,53 @@ class PlaybackController:
     def __init__(self):
         self.backend_info = detect_backend()
         self.preview_pid = None
+        self._processes = {}
 
     def status(self):
         self.backend_info = detect_backend()
         return self.backend_info
+
+    def _process_exists(self, pid):
+        if not pid:
+            return False
+        process = self._processes.get(int(pid))
+        if process is not None:
+            if process.poll() is None:
+                return True
+            self._processes.pop(int(pid), None)
+            return False
+        return _process_exists(pid)
+
+    def _signal_process_group(self, pid, sig):
+        if not self._process_exists(pid):
+            return False
+        try:
+            os.killpg(os.getpgid(int(pid)), sig)
+            return True
+        except (OSError, ProcessLookupError, ValueError):
+            return False
+
+    def _terminate_process_group(self, pid):
+        if not pid:
+            return
+        process = self._processes.get(int(pid))
+        if process is not None:
+            if process.poll() is not None:
+                self._processes.pop(int(pid), None)
+                return
+            self._signal_process_group(pid, signal.SIGCONT)
+            self._signal_process_group(pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=0.75)
+            except subprocess.TimeoutExpired:
+                self._signal_process_group(pid, signal.SIGKILL)
+                try:
+                    process.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    pass
+            self._processes.pop(int(pid), None)
+            return
+        _terminate_process_group(pid)
 
     def _resolve_track_path(self, playlist_relative_path, entry):
         if not playlist_relative_path or not entry:
@@ -140,6 +183,7 @@ class PlaybackController:
             session["pid"] = None
             return session
 
+        self._processes[process.pid] = process
         session["pid"] = process.pid
         session["started_at"] = time.time() - int(session.get("position_seconds", 0))
         session["state"] = "playing"
@@ -150,7 +194,7 @@ class PlaybackController:
         if not command:
             return {"ok": False, "details": ["Kein Audio-Kommando verfügbar."]}
         if self.preview_pid:
-            _terminate_process_group(self.preview_pid)
+            self._terminate_process_group(self.preview_pid)
             self.preview_pid = None
         try:
             process = subprocess.Popen(
@@ -161,6 +205,7 @@ class PlaybackController:
             )
         except OSError as exc:
             return {"ok": False, "details": [str(exc)]}
+        self._processes[process.pid] = process
         self.preview_pid = process.pid
         return {"ok": True, "details": ["Sound gestartet."]}
 
@@ -190,7 +235,7 @@ class PlaybackController:
             return session
 
         pid = session.get("pid")
-        if pid and _process_exists(pid):
+        if pid and self._process_exists(pid):
             if session.get("state") == "playing" and session.get("started_at") is not None:
                 session["position_seconds"] = max(0, int(time.time() - float(session["started_at"])))
             return session
@@ -209,8 +254,8 @@ class PlaybackController:
             session["state"] = "playing"
             session["started_at"] = time.time() - int(session.get("position_seconds", 0))
             return session
-        if session.get("pid") and _process_exists(session["pid"]):
-            _signal_process_group(session["pid"], signal.SIGCONT)
+        if session.get("pid") and self._process_exists(session["pid"]):
+            self._signal_process_group(session["pid"], signal.SIGCONT)
             session["started_at"] = time.time() - int(session.get("position_seconds", 0))
             session["state"] = "playing"
             return session
@@ -226,9 +271,9 @@ class PlaybackController:
             session["started_at"] = None
             session["state"] = "paused"
             return session
-        if session.get("pid") and _process_exists(session["pid"]):
+        if session.get("pid") and self._process_exists(session["pid"]):
             session["position_seconds"] = max(0, int(time.time() - float(session.get("started_at") or time.time())))
-            _signal_process_group(session["pid"], signal.SIGSTOP)
+            self._signal_process_group(session["pid"], signal.SIGSTOP)
         session["started_at"] = None
         session["state"] = "paused"
         return session
@@ -236,7 +281,7 @@ class PlaybackController:
     def stop(self, session):
         session = self.sync_session(session)
         if session.get("backend") != "mock" and session.get("pid"):
-            _terminate_process_group(session["pid"])
+            self._terminate_process_group(session["pid"])
         session["state"] = "stopped"
         session["position_seconds"] = 0
         session["started_at"] = None
@@ -252,7 +297,7 @@ class PlaybackController:
                 session["started_at"] = time.time() - session["position_seconds"]
             return session
         if session.get("pid"):
-            _terminate_process_group(session["pid"])
+            self._terminate_process_group(session["pid"])
             session["pid"] = None
             session["started_at"] = None
         session["state"] = "ready"
@@ -268,7 +313,7 @@ class PlaybackController:
         if session.get("state") == "playing":
             current_position = session.get("position_seconds", 0)
             if session.get("pid"):
-                _terminate_process_group(session["pid"])
+                self._terminate_process_group(session["pid"])
                 session["pid"] = None
                 session["started_at"] = None
             session["state"] = "ready"

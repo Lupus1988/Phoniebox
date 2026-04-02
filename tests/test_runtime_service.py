@@ -209,6 +209,15 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(play_sound.call_args_list[0].args[0], "power_off")
         self.assertEqual(play_sound.call_args_list[1].args[0], "power_on")
 
+    def test_duplicate_power_off_does_not_replay_power_off_sound(self):
+        self.service.power_off()
+
+        with patch.object(self.service, "play_system_sound", return_value={"ok": True, "details": ["ok"]}) as play_sound:
+            result = self.service.power_off()
+
+        self.assertFalse(result["runtime"]["powered_on"])
+        play_sound.assert_not_called()
+
     def test_system_sound_uses_current_player_volume(self):
         write_json(
             self.data_dir / "player_state.json",
