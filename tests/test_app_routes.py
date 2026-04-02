@@ -37,6 +37,12 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(setup["wifi"]["mode"], "hotspot_only")
         self.assertEqual(setup["wifi"]["saved_networks"], [])
 
+    def test_default_setup_has_no_factory_button_or_led_pin_assignments(self):
+        setup = default_setup()
+
+        self.assertTrue(all(not button["pin"] for button in setup["buttons"]))
+        self.assertTrue(all(not led["pin"] for led in setup["leds"]))
+
     def test_audio_test_endpoint_plays_test_sound(self):
         with patch("app.runtime_service.play_system_sound", return_value={"ok": True, "details": ["ok"]}) as play_sound:
             response = self.client.post("/api/runtime/audio-test")
