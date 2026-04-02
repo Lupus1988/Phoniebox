@@ -443,6 +443,7 @@ def default_setup():
             "type": "USB",
             "connection_hint": "USB-Reader anstecken oder RC522 per SPI verdrahten",
         },
+        "hardware_buttons_enabled": True,
         "button_long_press_seconds": 2,
         "buttons": [
             {"id": "btn-1", "name": "Play/Pause", "pin": "", "press_type": "kurz"},
@@ -1534,6 +1535,7 @@ def setup():
                     )
             candidate = dict(data)
             candidate["buttons"] = new_buttons
+            candidate["hardware_buttons_enabled"] = request.form.get("hardware_buttons_enabled") == "on"
             candidate["button_long_press_seconds"] = round(
                 to_float(
                 request.form.get("button_long_press_seconds"),
@@ -1550,6 +1552,7 @@ def setup():
                     flash(error, "error")
                 return redirect(url_for("setup"))
             data["buttons"] = new_buttons
+            data["hardware_buttons_enabled"] = candidate["hardware_buttons_enabled"]
             data["button_long_press_seconds"] = candidate["button_long_press_seconds"]
             save_setup(data)
             flash("Tastenbelegung gespeichert.", "success")

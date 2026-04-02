@@ -34,12 +34,26 @@ def main():
                     wave = 0.5 - 0.5 * math.cos(phase * 2.0 * math.pi)
                     base = max(0, min(100, int(led.get("brightness", 0) or 0)))
                     rendered_led["brightness"] = max(8, int(round(base * (0.22 + 0.78 * wave))))
+                elif led.get("effect") in {"power_ramp_up", "power_ramp_down"} and led.get("is_on"):
+                    has_pulse = True
+                    progress = max(0.0, min(1.0, float(led.get("effect_progress", 0.0) or 0.0)))
+                    base = max(0, min(100, int(led.get("brightness", 0) or 0)))
+                    start_duration = 1.35
+                    end_duration = 0.22
+                    if led.get("effect") == "power_ramp_up":
+                        cycle_duration = start_duration + ((end_duration - start_duration) * progress)
+                    else:
+                        cycle_duration = end_duration + ((start_duration - end_duration) * progress)
+                    cycle_duration = max(0.16, cycle_duration)
+                    phase = (time.monotonic() / cycle_duration) % 1.0
+                    wave = 0.5 - 0.5 * math.cos(phase * 2.0 * math.pi)
+                    rendered_led["brightness"] = max(3, int(round(base * (0.12 + 0.88 * wave))))
                 rendered.append(rendered_led)
             payload = json.dumps(rendered, sort_keys=True, ensure_ascii=False)
             if has_pulse or payload != last_payload:
                 controller.apply_leds(rendered)
                 last_payload = payload
-            time.sleep(0.12 if has_pulse else 0.2)
+            time.sleep(0.07 if has_pulse else 0.2)
     finally:
         controller.cleanup()
 

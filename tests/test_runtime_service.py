@@ -366,6 +366,58 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(result["sleep_timer"]["level"], 0)
         self.assertEqual(result["last_event"], "Sleeptimer im Standby nicht verfügbar")
 
+    def test_gpio_buttons_can_be_disabled_in_setup(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "hardware_buttons_enabled": False,
+                "buttons": [{"id": "btn-1", "name": "Lautstärke +", "pin": "GPIO17", "press_type": "kurz"}],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        result = self.service.trigger_gpio_pin("GPIO17", press_type="kurz")
+
+        self.assertEqual(result["player"]["volume"], 45)
+        self.assertEqual(result["runtime"]["last_event"], "Hardwaretasten deaktiviert")
+
+    def test_power_hold_uses_smooth_power_effect_metadata(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "buttons": [],
+                "leds": [
+                    {"id": "led-1", "name": "Power", "pin": "GPIO12", "function": "power_on", "brightness": 50},
+                    {"id": "led-2", "name": "Standby", "pin": "GPIO13", "function": "standby", "brightness": 30},
+                ],
+                "power_routines": {"power_on": "power_flicker_up_5", "power_off": "power_flicker_down_5"},
+                "wifi": {},
+            },
+        )
+        runtime_state = self.service.ensure_runtime()
+        runtime_state["powered_on"] = False
+        runtime_state["power_hold"] = {
+            "pressed": True,
+            "seconds": 2.5,
+            "mode": "pending_on",
+            "pin": "GPIO17",
+            "started_at": 10.0,
+            "threshold_seconds": 5.0,
+            "routine_id": "power_flicker_up_5",
+            "animation": "power_flicker_up",
+            "completed": False,
+        }
+
+        runtime_state = self.service.update_led_status(runtime_state)
+
+        power_led = next(entry for entry in runtime_state["led_status"] if entry["name"] == "Power")
+        self.assertTrue(power_led["is_on"])
+        self.assertEqual(power_led["effect"], "power_ramp_up")
+        self.assertEqual(power_led["effect_progress"], 0.5)
+
 
 if __name__ == "__main__":
     unittest.main()

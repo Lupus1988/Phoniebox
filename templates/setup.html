@@ -143,9 +143,14 @@
           <input type="number" name="button_long_press_seconds" min="1" max="10" step="0.1" value="{{ setup_data.button_long_press_seconds or 2 }}" inputmode="decimal">
           <em>s</em>
         </div>
+        <label class="checkbox-row compact-checkbox-row">
+          <input type="checkbox" name="hardware_buttons_enabled" {% if setup_data.hardware_buttons_enabled %}checked{% endif %}>
+          <span>Hardwaretasten Aktiv</span>
+        </label>
       </div>
       <div class="setup-note">
         <p>Ein PIN kann für kurzen und langen Tastendruck getrennt verwendet werden. Reader- und Soundkarten-Pins haben Vorrang.</p>
+        <p>Wenn Hardwaretasten deaktiviert sind, bleiben Web-Panel und Setup nutzbar, GPIO-Tastendrücke werden aber ignoriert.</p>
       </div>
     </form>
 

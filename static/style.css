@@ -1294,7 +1294,8 @@ dialog[data-power-routine-dialog]::backdrop {
 }
 
 .player-settings-list {
-  width: max-content;
+  width: 100%;
+  max-width: 42rem;
   justify-self: end;
 }
 
@@ -1308,6 +1309,7 @@ dialog[data-power-routine-dialog]::backdrop {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 1rem;
   margin-top: 1rem;
   margin-bottom: 1.35rem;
@@ -1442,6 +1444,7 @@ dialog[data-power-routine-dialog]::backdrop {
 .checkbox-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.7rem;
   border: 2px solid var(--line);
   border-radius: 16px;
@@ -1453,6 +1456,43 @@ dialog[data-power-routine-dialog]::backdrop {
   width: 18px;
   height: 18px;
   margin: 0;
+}
+
+.checkbox-row span {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.compact-checkbox-row {
+  flex: 0 1 18rem;
+  min-height: 2.7rem;
+}
+
+.settings-checkbox-row {
+  width: 100%;
+}
+
+.settings-info-button {
+  margin-left: auto;
+}
+
+.sleep-rotation-row {
+  align-items: center;
+}
+
+dialog[data-sleep-rotation-dialog] {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+dialog[data-sleep-rotation-dialog]::backdrop {
+  background: rgba(5, 7, 10, 0.62);
+}
+
+.sleep-rotation-dialog-card {
+  width: min(540px, calc(100vw - 2rem));
 }
 
 .warning-box {

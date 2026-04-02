@@ -257,6 +257,10 @@ class RuntimeService:
             value = 2.0
         return max(1.0, min(10.0, value))
 
+    def hardware_buttons_enabled(self):
+        setup = self.load_setup()
+        return bool(setup.get("hardware_buttons_enabled", True))
+
     def classify_press_type(self, held_seconds=None, fallback="kurz"):
         if held_seconds is None:
             return fallback
@@ -448,6 +452,16 @@ class RuntimeService:
             self._poll_button_detection(detect_state, now)
             return
 
+        if not self.hardware_buttons_enabled():
+            self._set_pressed_buttons([])
+            self._button_poll_state.clear()
+            runtime_state = self.ensure_runtime()
+            if runtime_state.get("power_hold", {}).get("pressed"):
+                runtime_state["power_hold"] = merge_defaults({}, default_runtime_state()["power_hold"])
+                runtime_state = self.update_led_status(runtime_state)
+                self.save_runtime(runtime_state)
+            return
+
         setup = self.load_setup()
         configured_pins = sorted({button.get("pin", "").strip() for button in setup.get("buttons", []) if button.get("pin", "").strip()})
         levels = self._read_gpio_levels(configured_pins)
@@ -595,6 +609,7 @@ class RuntimeService:
         led_status = []
         power_hold = runtime_state.get("power_hold", {})
         override = self._build_power_hold_led_override(runtime_state, leds) if power_hold.get("pressed") else {}
+        effect_override = self._build_power_hold_led_effects(runtime_state) if power_hold.get("pressed") else {}
         for led in leds:
             function = led.get("function", "")
             is_on = False
@@ -613,6 +628,13 @@ class RuntimeService:
             if function in override:
                 is_on = override[function]
             effect = "pulse" if function == "wifi_on" and is_on else ""
+            effect_progress = None
+            if function in effect_override:
+                override_effect = effect_override[function]
+                if "is_on" in override_effect:
+                    is_on = bool(override_effect["is_on"])
+                effect = override_effect.get("effect", effect)
+                effect_progress = override_effect.get("progress")
             led_status.append(
                 {
                     "id": led.get("id", ""),
@@ -621,6 +643,7 @@ class RuntimeService:
                     "brightness": led.get("brightness", 0),
                     "is_on": is_on,
                     "effect": effect,
+                    "effect_progress": effect_progress,
                 }
             )
         runtime_state["led_status"] = led_status
@@ -652,23 +675,27 @@ class RuntimeService:
             return {"power_on": power_on, "standby": False, **sleep_functions}
 
         if animation in {"power_flicker_up", "power_flicker_down"}:
-            base_on = animation == "power_flicker_down" and power_on
-            flicker_on = base_on
-            if progress < 1.0:
-                speed = 1.0 + (7.0 * progress)
-                phase = (time.monotonic() * speed) % 1.0
-                if animation == "power_flicker_up":
-                    flicker_on = phase >= 0.5
-                else:
-                    flicker_on = phase < 0.5
             return {
-                "power_on": flicker_on,
+                "power_on": True,
                 "standby": False,
                 "sleep_1": False,
                 "sleep_2": False,
                 "sleep_3": False,
             }
 
+        return {}
+
+    def _build_power_hold_led_effects(self, runtime_state):
+        hold = runtime_state.get("power_hold", {})
+        if hold.get("completed"):
+            return {}
+        animation = hold.get("animation", "")
+        threshold = max(0.1, float(hold.get("threshold_seconds", 0.0) or 0.0))
+        progress = max(0.0, min(1.0, float(hold.get("seconds", 0.0) or 0.0) / threshold))
+        if animation == "power_flicker_up":
+            return {"power_on": {"is_on": True, "effect": "power_ramp_up", "progress": progress}}
+        if animation == "power_flicker_down":
+            return {"power_on": {"is_on": True, "effect": "power_ramp_down", "progress": progress}}
         return {}
 
     def _refresh_sleep_step(self, runtime_state):
@@ -1342,6 +1369,11 @@ class RuntimeService:
         detect_state = self.load_button_detect()
         if detect_state.get("active"):
             runtime_state = self.add_event(runtime_state, f"GPIO erkannt für Tastenerkennung: {pin}")
+            self.save_runtime(runtime_state)
+            return {"runtime": runtime_state, "player": self.load_player()}
+        if not self.hardware_buttons_enabled():
+            runtime_state["hardware"]["pressed_buttons"] = []
+            runtime_state = self.add_event(runtime_state, "Hardwaretasten deaktiviert")
             self.save_runtime(runtime_state)
             return {"runtime": runtime_state, "player": self.load_player()}
         for button in setup.get("buttons", []):

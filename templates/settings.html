@@ -28,10 +28,10 @@
           <input type="number" name="sleep_timer_step" min="1" max="60" value="{{ settings.sleep_timer_step }}">
           <em>min.</em>
         </label>
-        <div class="checkbox-row">
+        <div class="checkbox-row settings-checkbox-row sleep-rotation-row">
           <input type="checkbox" name="sleep_timer_button_rotation" {% if settings.sleep_timer_button_rotation %}checked{% endif %}>
           <span>Sleeptimer-Taste rotiert 1/3 -> 2/3 -> 3/3 -> 0</span>
-          <button type="button" class="button-like" data-sleep-rotation-info>i</button>
+          <button type="button" class="button-like routine-info-button settings-info-button" data-sleep-rotation-info>i</button>
         </div>
         <label class="inline-field startup-volume-row" data-startup-volume-row>
           <span>Startlautstärke</span>
@@ -69,8 +69,8 @@
       </div>
     </article>
   </form>
-  <dialog data-sleep-rotation-dialog>
-    <article class="dialog-card">
+  <dialog class="modal" data-sleep-rotation-dialog>
+    <article class="modal-body compact-modal-body dialog-card sleep-rotation-dialog-card">
       <div class="panel-box-head">
         <h3>Sleeptimer-Rotation</h3>
       </div>
