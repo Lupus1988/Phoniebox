@@ -94,10 +94,10 @@
     <article class="panel-box compact-box utility-box">
       <div class="panel-box-head utility-head">
         <h3>Sleeptimer</h3>
-        <span id="player-sleep-value">Stufe {{ sleep_level }} · {{ player_state.sleep_timer_minutes }} min</span>
+        <span id="player-sleep-value">Stufe {{ sleep_level }} · {{ sleep_remaining_label }}</span>
       </div>
       <form class="mini-controls utility-controls utility-controls-three" method="post" data-player-form>
-        <button name="action" value="stop">Aus</button>
+        <button name="action" value="sleep_reset">0 Min.</button>
         <button name="action" value="sleep_down">-{{ sleep_step_minutes }} min</button>
         <button name="action" value="sleep_up">+{{ sleep_step_minutes }} min</button>
       </form>

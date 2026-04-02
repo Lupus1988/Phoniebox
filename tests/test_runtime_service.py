@@ -302,6 +302,61 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertTrue(second["runtime"]["wifi_enabled"])
         self.assertEqual(second["runtime"]["last_event"], "Wifi an")
 
+    def test_hardware_volume_buttons_use_configured_step_size(self):
+        write_json(
+            self.data_dir / "settings.json",
+            {
+                "max_volume": 85,
+                "volume_step": 7,
+                "sleep_timer_step": 5,
+                "rfid_read_action": "play",
+                "rfid_remove_action": "stop",
+                "reader_mode": "album_load",
+            },
+        )
+        lowered = self.service.trigger_button("Lautstärke -", press_type="kurz")
+        raised = self.service.trigger_button("Lautstärke +", press_type="kurz")
+        self.assertEqual(lowered["player"]["volume"], 38)
+        self.assertEqual(raised["player"]["volume"], 45)
+
+    def test_sleep_timer_plus_rotates_to_zero_when_enabled(self):
+        write_json(
+            self.data_dir / "settings.json",
+            {
+                "max_volume": 85,
+                "volume_step": 5,
+                "sleep_timer_step": 5,
+                "sleep_timer_button_rotation": True,
+                "rfid_read_action": "play",
+                "rfid_remove_action": "stop",
+                "reader_mode": "album_load",
+            },
+        )
+        one = self.service.trigger_button("Sleep Timer +", press_type="kurz")
+        two = self.service.trigger_button("Sleep Timer +", press_type="kurz")
+        three = self.service.trigger_button("Sleep Timer +", press_type="kurz")
+        zero = self.service.trigger_button("Sleep Timer +", press_type="kurz")
+        self.assertEqual(one["runtime"]["sleep_timer"]["level"], 1)
+        self.assertEqual(two["runtime"]["sleep_timer"]["level"], 2)
+        self.assertEqual(three["runtime"]["sleep_timer"]["level"], 3)
+        self.assertEqual(zero["runtime"]["sleep_timer"]["level"], 0)
+
+    def test_sleep_timer_plus_stops_at_three_when_rotation_disabled(self):
+        one = self.service.trigger_button("Sleep Timer +", press_type="kurz")
+        two = self.service.trigger_button("Sleep Timer +", press_type="kurz")
+        three = self.service.trigger_button("Sleep Timer +", press_type="kurz")
+        still_three = self.service.trigger_button("Sleep Timer +", press_type="kurz")
+        self.assertEqual(one["runtime"]["sleep_timer"]["level"], 1)
+        self.assertEqual(two["runtime"]["sleep_timer"]["level"], 2)
+        self.assertEqual(three["runtime"]["sleep_timer"]["level"], 3)
+        self.assertEqual(still_three["runtime"]["sleep_timer"]["level"], 3)
+
+    def test_sleep_timer_cannot_be_started_in_standby(self):
+        self.service.power_off()
+        result = self.service.set_sleep_level(1)
+        self.assertEqual(result["sleep_timer"]["level"], 0)
+        self.assertEqual(result["last_event"], "Sleeptimer im Standby nicht verfügbar")
+
 
 if __name__ == "__main__":
     unittest.main()

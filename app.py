@@ -428,6 +428,7 @@ def default_settings():
         "max_volume": 85,
         "volume_step": 5,
         "sleep_timer_step": 5,
+        "sleep_timer_button_rotation": False,
         "use_startup_volume": False,
         "startup_volume": 45,
         "rfid_read_action": "play",
@@ -1106,7 +1107,8 @@ def build_player_context(snapshot):
     runtime_state = snapshot["runtime"]
     settings = snapshot["settings"]
     sleep_step_minutes = max(1, int(settings.get("sleep_timer_step", 5)))
-    player_state["sleep_timer_minutes"] = int(runtime_state.get("sleep_timer", {}).get("remaining_seconds", 0)) // 60
+    remaining_seconds = int(runtime_state.get("sleep_timer", {}).get("remaining_seconds", 0) or 0)
+    player_state["sleep_timer_minutes"] = remaining_seconds // 60
     return {
         "player_state": player_state,
         "runtime_state": runtime_state,
@@ -1116,6 +1118,8 @@ def build_player_context(snapshot):
         "volume_step": int(settings.get("volume_step", 5)),
         "sleep_step_minutes": sleep_step_minutes,
         "sleep_level": int(runtime_state.get("sleep_timer", {}).get("level", 0)),
+        "sleep_remaining_seconds": remaining_seconds,
+        "sleep_remaining_label": format_mmss(remaining_seconds),
         "position_label": format_mmss(player_state["position_seconds"]),
         "duration_label": format_mmss(player_state["duration_seconds"]),
         "progress_percent": progress_percent(player_state["position_seconds"], player_state["duration_seconds"]),
@@ -1407,6 +1411,7 @@ def apply_settings_form(data, source):
     data["max_volume"] = to_int(source.get("max_volume"), data["max_volume"], 10, 100)
     data["volume_step"] = to_int(source.get("volume_step"), data["volume_step"], 1, 25)
     data["sleep_timer_step"] = to_int(source.get("sleep_timer_step"), data["sleep_timer_step"], 1, 60)
+    data["sleep_timer_button_rotation"] = source.get("sleep_timer_button_rotation") in {"on", True, "true", "1", 1}
     data["use_startup_volume"] = source.get("use_startup_volume") == "on"
     data["startup_volume"] = to_int(source.get("startup_volume"), data.get("startup_volume", 45), 0, 100)
     data["rfid_read_action"] = source.get("rfid_read_action", data["rfid_read_action"])
@@ -1886,6 +1891,8 @@ def api_player_action():
         result = runtime_service.set_volume(int(settings.get("volume_step", 5)))
     elif action == "mute":
         result = runtime_service.toggle_mute()
+    elif action == "sleep_reset":
+        result = {"runtime": runtime_service.set_sleep_level(0), "player": runtime_service.load_player()}
     elif action == "sleep_down":
         level = max(0, int(runtime_state.get("sleep_timer", {}).get("level", 0)) - 1)
         result = {"runtime": runtime_service.set_sleep_level(level), "player": runtime_service.load_player()}
@@ -1902,6 +1909,11 @@ def api_player_action():
 
     updated_snapshot = runtime_service.status()
     return jsonify({"ok": True, **build_player_context(updated_snapshot)})
+
+
+@app.route("/api/player/snapshot")
+def api_player_snapshot():
+    return jsonify({"ok": True, **build_player_context(runtime_service.status())})
 
 
 @app.route("/api/runtime/button", methods=["POST"])

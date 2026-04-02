@@ -5,6 +5,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   const seekSlider = document.getElementById("player-seek-slider");
   const seekBubble = document.getElementById("player-seek-bubble");
+  let pollTimer = null;
 
   function formatMmss(totalSeconds) {
     const safe = Math.max(0, Number(totalSeconds) || 0);
@@ -90,7 +91,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (volumeValue) {
       volumeValue.classList.toggle("muted", Boolean(payload.volume_muted));
     }
-    setHtml("player-sleep-value", `Stufe ${sleepLevel} &middot; ${player.sleep_timer_minutes} min`);
+    setHtml("player-sleep-value", `Stufe ${sleepLevel} &middot; ${payload.sleep_remaining_label || "00:00"}`);
     setText("player-position-label", payload.position_label || "00:00");
     setText("player-duration-label", payload.duration_label || "00:00");
     setText("player-toggle-symbol", isPlaying ? "⏸" : "▶");
@@ -124,6 +125,18 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     applySnapshot(await response.json());
+  }
+
+  async function pollSnapshot() {
+    try {
+      const response = await fetch("/api/player/snapshot");
+      if (!response.ok) {
+        return;
+      }
+      applySnapshot(await response.json());
+    } finally {
+      pollTimer = window.setTimeout(pollSnapshot, 1000);
+    }
   }
 
   for (const form of forms) {
@@ -175,4 +188,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     updateSeekVisuals(Number(seekSlider.value || 0), Number(seekSlider.max || 0));
   }
+
+  pollTimer = window.setTimeout(pollSnapshot, 1000);
 });

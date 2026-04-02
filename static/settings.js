@@ -6,6 +6,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const startupToggle = form.elements.namedItem("use_startup_volume");
   const startupInput = form.elements.namedItem("startup_volume");
   const startupRow = form.querySelector("[data-startup-volume-row]");
+  const sleepRotationButton = document.querySelector("[data-sleep-rotation-info]");
+  const sleepRotationDialog = document.querySelector("[data-sleep-rotation-dialog]");
 
   let saveTimer = null;
   let inFlight = false;
@@ -78,4 +80,8 @@ document.addEventListener("DOMContentLoaded", () => {
     startupToggle.addEventListener("change", syncStartupVolumeState);
   }
   form.addEventListener("change", scheduleSave);
+
+  if (sleepRotationButton instanceof HTMLButtonElement && sleepRotationDialog instanceof HTMLDialogElement) {
+    sleepRotationButton.addEventListener("click", () => sleepRotationDialog.showModal());
+  }
 });

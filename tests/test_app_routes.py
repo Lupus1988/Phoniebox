@@ -22,6 +22,10 @@ class AppRoutesTest(unittest.TestCase):
             response = self.client.get(path)
             self.assertEqual(response.status_code, 200, path)
 
+    def test_player_snapshot_endpoint_renders(self):
+        response = self.client.get("/api/player/snapshot")
+        self.assertEqual(response.status_code, 200)
+
     def test_hotspot_password_warning_uses_current_security_value(self):
         setup = default_setup()
         setup["wifi"]["hotspot_security"] = "wpa-psk"

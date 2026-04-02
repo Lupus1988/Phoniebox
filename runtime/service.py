@@ -164,6 +164,20 @@ class RuntimeService:
             volume = 0
         return self.playback.play_preview(sound_path, volume=volume)
 
+    def volume_step(self):
+        settings = self.load_settings()
+        return int(settings.get("volume_step", 5) or 5)
+
+    def sleep_button_rotation_enabled(self):
+        settings = self.load_settings()
+        return bool(settings.get("sleep_timer_button_rotation", False))
+
+    def next_sleep_level_up(self, current_level):
+        current_level = max(0, min(3, int(current_level or 0)))
+        if current_level >= 3:
+            return 0 if self.sleep_button_rotation_enabled() else 3
+        return current_level + 1
+
     def _power_routine_options(self):
         return {
             "sleep_count_up_5": {"duration_seconds": 5.0, "animation": "sleep_count_up"},
@@ -762,6 +776,10 @@ class RuntimeService:
     def set_sleep_level(self, level):
         runtime_state = self.ensure_runtime()
         runtime_state = self._refresh_sleep_step(runtime_state)
+        if not runtime_state.get("powered_on", True):
+            runtime_state = self.add_event(runtime_state, "Sleeptimer im Standby nicht verfügbar", "warning")
+            self.save_runtime(runtime_state)
+            return runtime_state
         level = max(0, min(3, int(level)))
         runtime_state["sleep_timer"]["level"] = level
         runtime_state["sleep_timer"]["remaining_seconds"] = runtime_state["sleep_timer"]["step_seconds"] * level
@@ -776,6 +794,7 @@ class RuntimeService:
         runtime_state = runtime_state or self.ensure_runtime()
         player = player or self.load_player()
         runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
+        self.play_system_sound("power_on" if powered_on else "power_off")
         runtime_state["powered_on"] = bool(powered_on)
         runtime_state["power_hold"] = merge_defaults({}, default_runtime_state()["power_hold"])
         if powered_on:
@@ -798,7 +817,6 @@ class RuntimeService:
         runtime_state = self.update_led_status(runtime_state)
         self.save_runtime(runtime_state)
         self.save_player(player)
-        self.play_system_sound("power_on" if powered_on else "power_off")
         return {"runtime": runtime_state, "player": player}
 
     def power_off(self, runtime_state=None, player=None, event_message=None):
@@ -1222,20 +1240,20 @@ class RuntimeService:
             self.save_runtime(result["runtime"])
             return result
         if normalized == "lautstärke +":
-            result = self.set_volume(5)
+            result = self.set_volume(self.volume_step())
             result["runtime"]["hardware"]["last_button"] = last_button
             result["runtime"]["hardware"]["last_button_press_type"] = last_press_type
             self.save_runtime(result["runtime"])
             return result
         if normalized == "lautstärke -":
-            result = self.set_volume(-5)
+            result = self.set_volume(-self.volume_step())
             result["runtime"]["hardware"]["last_button"] = last_button
             result["runtime"]["hardware"]["last_button_press_type"] = last_press_type
             self.save_runtime(result["runtime"])
             return result
         if normalized == "sleep timer +":
             current_level = int(runtime_state.get("sleep_timer", {}).get("level", 0))
-            runtime_state = self.set_sleep_level(min(3, current_level + 1))
+            runtime_state = self.set_sleep_level(self.next_sleep_level_up(current_level))
             runtime_state["hardware"]["last_button"] = last_button
             runtime_state["hardware"]["last_button_press_type"] = last_press_type
             self.save_runtime(runtime_state)
