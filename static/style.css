@@ -1401,6 +1401,11 @@ dialog[data-power-routine-dialog]::backdrop {
   align-items: center;
 }
 
+.mapping-row.is-disabled,
+.long-press-field.is-disabled {
+  opacity: 0.45;
+}
+
 .led-table-head,
 .led-row {
   grid-template-columns: 1fr 0.9fr 0.9fr auto;

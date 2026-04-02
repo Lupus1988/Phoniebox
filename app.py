@@ -443,7 +443,7 @@ def default_setup():
             "type": "USB",
             "connection_hint": "USB-Reader anstecken oder RC522 per SPI verdrahten",
         },
-        "hardware_buttons_enabled": True,
+        "hardware_buttons_enabled": False,
         "button_long_press_seconds": 2,
         "buttons": [
             {"id": "btn-1", "name": "Play/Pause", "pin": "", "press_type": "kurz"},

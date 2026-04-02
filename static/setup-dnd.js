@@ -166,8 +166,34 @@ document.addEventListener("DOMContentLoaded", () => {
     const buttonPinSelects = rows
       .map((row) => row.querySelector("[data-button-pin]"))
       .filter((entry) => entry instanceof HTMLSelectElement);
+    const buttonPressSelects = rows
+      .map((row) => row.querySelector("[data-button-press-type]"))
+      .filter((entry) => entry instanceof HTMLSelectElement);
     const ledPinSelects = Array.from(document.querySelectorAll("[data-led-pin]"))
       .filter((entry) => entry instanceof HTMLSelectElement);
+    const hardwareButtonsToggle = buttonMapping.querySelector("[data-hardware-buttons-toggle]");
+    const longPressInput = buttonMapping.querySelector("[data-button-long-press]");
+    const longPressField = buttonMapping.querySelector(".long-press-field");
+
+    function syncHardwareButtonAvailability() {
+      const enabled = !(hardwareButtonsToggle instanceof HTMLInputElement) || hardwareButtonsToggle.checked;
+
+      for (const row of rows) {
+        row.classList.toggle("is-disabled", !enabled);
+      }
+      for (const select of buttonPinSelects) {
+        select.disabled = !enabled;
+      }
+      for (const select of buttonPressSelects) {
+        select.disabled = !enabled;
+      }
+      if (longPressInput instanceof HTMLInputElement) {
+        longPressInput.disabled = !enabled;
+      }
+      if (longPressField instanceof HTMLElement) {
+        longPressField.classList.toggle("is-disabled", !enabled);
+      }
+    }
 
     function syncPressTypeChoices() {
       for (const row of rows) {
@@ -258,6 +284,11 @@ document.addEventListener("DOMContentLoaded", () => {
       pressSelect?.addEventListener("change", syncPressTypeChoices);
     }
 
+    if (hardwareButtonsToggle instanceof HTMLInputElement) {
+      hardwareButtonsToggle.addEventListener("change", syncHardwareButtonAvailability);
+    }
+
+    syncHardwareButtonAvailability();
     syncPressTypeChoices();
     syncCrossRolePinChoices();
 

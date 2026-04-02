@@ -46,7 +46,7 @@ class AppRoutesTest(unittest.TestCase):
 
         self.assertTrue(all(not button["pin"] for button in setup["buttons"]))
         self.assertTrue(all(not led["pin"] for led in setup["leds"]))
-        self.assertTrue(setup["hardware_buttons_enabled"])
+        self.assertFalse(setup["hardware_buttons_enabled"])
 
     def test_audio_test_endpoint_plays_test_sound(self):
         with patch("app.runtime_service.play_system_sound", return_value={"ok": True, "details": ["ok"]}) as play_sound:
