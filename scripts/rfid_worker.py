@@ -1,5 +1,6 @@
 #!/opt/phoniebox-panel/.venv/bin/python
 import json
+import subprocess
 import sys
 import time
 import urllib.error
@@ -74,6 +75,35 @@ def save_reader_status(configured_type, ready, message, details=None):
     except OSError:
         return False
     return True
+
+
+def ensure_spi_pinmux():
+    try:
+        result = subprocess.run(
+            ["pinctrl", "-e", "set", "7-11", "a0", "pn"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        return {
+            "ok": False,
+            "message": f"SPI-Pinmux konnte nicht gesetzt werden: {exc}",
+            "details": ["`pinctrl` ist nicht verfügbar."],
+        }
+    if result.returncode != 0:
+        details = [line.strip() for line in (result.stderr or result.stdout or "").splitlines() if line.strip()]
+        return {
+            "ok": False,
+            "message": "SPI-Pinmux konnte nicht gesetzt werden.",
+            "details": details or ["Unbekannter pinctrl-Fehler."],
+        }
+    details = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+    return {
+        "ok": True,
+        "message": "SPI-Pinmux auf SPI0 gesetzt.",
+        "details": details,
+    }
 
 
 class BaseReader:
@@ -186,13 +216,18 @@ class RC522Reader(BaseReader):
         self.ready = False
         self.status_message = "RC522 noch nicht initialisiert."
         self.status_details = ["Prüfe SPI und Python-Treiber."]
+        pinmux = ensure_spi_pinmux()
+        if not pinmux["ok"]:
+            self.status_message = pinmux["message"]
+            self.status_details = pinmux["details"]
+            return
         try:
             from mfrc522 import SimpleMFRC522
 
             self.reader = SimpleMFRC522()
             self.ready = True
             self.status_message = "RC522 bereit."
-            self.status_details = ["Warte auf RFID-Tag."]
+            self.status_details = ["Warte auf RFID-Tag.", *pinmux["details"]]
         except Exception as exc:
             self.reader = None
             self.status_message = f"RC522 konnte nicht initialisiert werden: {exc}"
@@ -200,6 +235,7 @@ class RC522Reader(BaseReader):
                 "Prüfe, ob SPI aktiv ist.",
                 "Prüfe, ob der Reader mit 3.3V versorgt wird.",
                 "Prüfe SDA/SS, SCK, MOSI, MISO und RST auf korrekte Pins.",
+                *pinmux["details"],
             ]
 
     def _read_uid(self):
@@ -253,6 +289,13 @@ class PN532Reader(BaseReader):
         self.ready = False
         self.status_message = "PN532 noch nicht initialisiert."
         self.status_details = [f"Prüfe Transport {transport}."]
+        pinmux = {"ok": True, "message": "", "details": []}
+        if transport == "spi":
+            pinmux = ensure_spi_pinmux()
+            if not pinmux["ok"]:
+                self.status_message = pinmux["message"]
+                self.status_details = pinmux["details"]
+                return
         try:
             import board
             import busio
@@ -281,7 +324,7 @@ class PN532Reader(BaseReader):
                 self.pn532.SAM_configuration()
                 self.ready = True
                 self.status_message = f"PN532 ({transport}) bereit."
-                self.status_details = ["Warte auf RFID-Tag."]
+                self.status_details = ["Warte auf RFID-Tag.", *pinmux["details"]]
         except Exception:
             self.cleanup()
             self.pn532 = None
