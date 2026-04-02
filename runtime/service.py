@@ -81,12 +81,12 @@ def default_player():
 
 def default_runtime_state():
     return {
-        "powered_on": False,
-        "playback_state": "stopped",
+        "powered_on": True,
+        "playback_state": "paused",
         "active_album_id": "",
         "active_rfid_uid": "",
-        "last_event": "Bereit",
-        "last_event_at": 0,
+        "last_event": "Systemstart",
+        "last_event_at": int(time.time()),
         "sleep_timer": {
             "remaining_seconds": 0,
             "step_seconds": 300,

@@ -55,7 +55,7 @@ Standardverhalten fuer neue Installationen:
 - Hotspot-SSID ist `Phonie-hotspot`
 - gespeicherte WLAN-Netze sind anfangs leer
 - Bibliothek startet leer
-- Player und Runtime starten im Standby statt mit Testinhalt
+- Player und Runtime starten eingeschaltet, aber ohne laufende Wiedergabe
 
 ## Hinweise
 
