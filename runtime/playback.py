@@ -90,7 +90,8 @@ class PlaybackController:
         position_seconds = max(0, int(position_seconds))
         volume = max(0, min(100, int(volume)))
         if backend == "mpg123":
-            return ["mpg123", "-q", str(track_path)]
+            scale = max(0, min(32768, int(round((volume / 100) * 32768))))
+            return ["mpg123", "-q", "-f", str(scale), str(track_path)]
         if backend == "cvlc":
             command = [
                 "cvlc",
@@ -275,7 +276,7 @@ class PlaybackController:
             return self._launch(session)
         return session
 
-    def play_preview(self, file_path, volume=65):
+    def play_preview(self, file_path, volume=50):
         backend = self.status()["active_backend"]
         track_path = Path(file_path).resolve()
         try:

@@ -158,7 +158,11 @@ class RuntimeService:
         sound_path = self.sound_path(sound_name)
         if not sound_path:
             return {"ok": False, "details": [f"Unbekannter Sound: {sound_name}"]}
-        return self.playback.play_preview(sound_path, volume=65)
+        player = self.load_player()
+        volume = int(player.get("volume", 45) or 0)
+        if player.get("muted"):
+            volume = 0
+        return self.playback.play_preview(sound_path, volume=volume)
 
     def _power_routine_options(self):
         return {

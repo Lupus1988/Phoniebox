@@ -209,6 +209,31 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(play_sound.call_args_list[0].args[0], "power_off")
         self.assertEqual(play_sound.call_args_list[1].args[0], "power_on")
 
+    def test_system_sound_uses_current_player_volume(self):
+        write_json(
+            self.data_dir / "player_state.json",
+            {
+                "current_album": "",
+                "current_track": "",
+                "cover_url": "",
+                "volume": 23,
+                "muted": False,
+                "volume_before_mute": 45,
+                "position_seconds": 0,
+                "duration_seconds": 0,
+                "sleep_timer_minutes": 0,
+                "is_playing": False,
+                "queue": [],
+                "playlist": "",
+                "playlist_entries": [],
+                "current_track_index": 0,
+            },
+        )
+        with patch.object(self.service.playback, "play_preview", return_value={"ok": True, "details": ["ok"]}) as preview:
+            result = self.service.play_system_sound("test")
+        self.assertTrue(result["ok"])
+        self.assertEqual(preview.call_args.kwargs["volume"], 23)
+
     def test_hardware_profile_detection_is_cached_within_ttl(self):
         with patch.object(service_module, "detect_hardware", return_value=service_module.detect_hardware({}, {"albums": []})) as detect:
             runtime_state = self.service.ensure_runtime()
