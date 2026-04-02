@@ -992,6 +992,111 @@ label {
   width: 100%;
 }
 
+.upload-status-box {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.85rem 0.9rem;
+  border: 2px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.upload-status-box[hidden] {
+  display: none !important;
+}
+
+.upload-status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.upload-status-head strong {
+  color: var(--ink);
+  font-size: 0.92rem;
+}
+
+.upload-status-head span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-align: right;
+}
+
+.upload-progress-shell {
+  width: 100%;
+  height: 12px;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.upload-progress-bar {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #86bcbb 0%, #5f878b 100%);
+  transition: width 140ms ease;
+}
+
+.upload-file-list {
+  display: grid;
+  gap: 0.5rem;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.upload-file-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.7rem;
+  align-items: center;
+  padding: 0.65rem 0.75rem;
+  border: 2px solid var(--line-soft);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.upload-file-meta {
+  display: grid;
+  gap: 0.22rem;
+  min-width: 0;
+}
+
+.upload-file-name {
+  color: var(--ink);
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.upload-file-detail {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.upload-file-state {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: right;
+}
+
+.upload-file-row.is-active {
+  border-color: rgba(159, 200, 197, 0.72);
+  background: rgba(125, 176, 176, 0.1);
+}
+
+.upload-file-row.is-done .upload-file-state {
+  color: var(--success);
+}
+
+.upload-file-row.is-pending .upload-file-state {
+  color: var(--muted);
+}
+
 .library-edit-button {
   padding: 0.18rem;
 }
@@ -1186,6 +1291,10 @@ dialog[data-power-routine-dialog]::backdrop {
   border-radius: 14px;
   padding: 0.7rem 0.8rem;
   background: rgba(255, 255, 255, 0.04);
+}
+
+.track-row .mono {
+  color: var(--ink);
 }
 
 .secondary-back {

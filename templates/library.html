@@ -139,9 +139,19 @@
           <input type="file" name="album_files" id="album-folder-input" webkitdirectory directory multiple>
         </label>
         <div id="album-create-warning" class="create-warning-box full" hidden>Albumname bereits vorhanden.</div>
+        <div id="album-create-upload-status" class="upload-status-box full" hidden>
+          <div class="upload-status-head">
+            <strong data-upload-title>Noch keine Dateien ausgewählt</strong>
+            <span data-upload-summary></span>
+          </div>
+          <div class="upload-progress-shell" aria-hidden="true">
+            <div class="upload-progress-bar" data-upload-progress-bar></div>
+          </div>
+          <div class="upload-file-list" data-upload-file-list></div>
+        </div>
         <div class="button-row compact-button-row create-button-stack full">
           <button type="button" id="album-folder-trigger">Ordner auswählen</button>
-          <button type="submit" class="primary">Album anlegen</button>
+          <button type="submit" class="primary" id="album-create-submit">Album anlegen</button>
           <button type="button" data-close-create>Zurück</button>
         </div>
       </form>
@@ -197,9 +207,19 @@
           <label class="full hidden-input-wrap">
             <input type="file" name="track_files" id="album-track-input" multiple accept=".mp3,.m4a,.wav,.flac,.ogg,.aac,audio/*">
           </label>
+          <div id="album-add-upload-status" class="upload-status-box full" hidden>
+            <div class="upload-status-head">
+              <strong data-upload-title>Noch keine Dateien ausgewählt</strong>
+              <span data-upload-summary></span>
+            </div>
+            <div class="upload-progress-shell" aria-hidden="true">
+              <div class="upload-progress-bar" data-upload-progress-bar></div>
+            </div>
+            <div class="upload-file-list" data-upload-file-list></div>
+          </div>
           <div class="button-row compact-button-row">
             <button type="button" id="album-track-trigger">Dateien auswählen</button>
-            <button type="submit" class="primary">Titel hinzufügen</button>
+            <button type="submit" class="primary" id="album-add-submit">Titel hinzufügen</button>
           </div>
         </form>
         <button type="button" class="secondary-back" data-edit-back>Zurück</button>

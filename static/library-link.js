@@ -10,6 +10,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const createForm = document.getElementById("album-create-form");
   const folderInput = document.getElementById("album-folder-input");
   const folderTrigger = document.getElementById("album-folder-trigger");
+  const createUploadStatus = document.getElementById("album-create-upload-status");
+  const createSubmitButton = document.getElementById("album-create-submit");
 
   const editModal = document.getElementById("album-edit-modal");
   const editTitle = document.getElementById("album-edit-title");
@@ -23,6 +25,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const addTracksAlbumId = document.getElementById("album-add-id");
   const trackInput = document.getElementById("album-track-input");
   const trackTrigger = document.getElementById("album-track-trigger");
+  const addUploadStatus = document.getElementById("album-add-upload-status");
+  const addSubmitButton = document.getElementById("album-add-submit");
   const renameAlbumId = document.getElementById("album-rename-id");
   const renameFolder = document.getElementById("album-rename-folder");
   const renamePlaylist = document.getElementById("album-rename-playlist");
@@ -136,6 +140,126 @@ document.addEventListener("DOMContentLoaded", () => {
     return Boolean(normalized) && albums.some((entry) => entry.id !== albumId && (entry.name || "").trim().toLowerCase() === normalized);
   }
 
+  function formatBytes(bytes) {
+    const value = Number(bytes || 0);
+    if (value >= 1024 * 1024) {
+      return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+    }
+    if (value >= 1024) {
+      return `${Math.round(value / 1024)} KB`;
+    }
+    return `${value} B`;
+  }
+
+  function renderUploadTracker(root, files, progressRatio = 0, completed = false) {
+    if (!(root instanceof HTMLElement)) {
+      return;
+    }
+    const normalizedFiles = Array.from(files || []);
+    if (!normalizedFiles.length) {
+      root.hidden = true;
+      return;
+    }
+
+    const title = root.querySelector("[data-upload-title]");
+    const summary = root.querySelector("[data-upload-summary]");
+    const bar = root.querySelector("[data-upload-progress-bar]");
+    const list = root.querySelector("[data-upload-file-list]");
+    const totalBytes = normalizedFiles.reduce((sum, file) => sum + (file.size || 0), 0);
+    const loadedBytes = completed ? totalBytes : Math.max(0, Math.min(totalBytes, totalBytes * progressRatio));
+
+    root.hidden = false;
+    if (title) {
+      title.textContent = completed ? "Upload abgeschlossen" : "Upload läuft";
+    }
+    if (summary) {
+      summary.textContent = `${normalizedFiles.length} Titel · ${formatBytes(loadedBytes)} / ${formatBytes(totalBytes)}`;
+    }
+    if (bar instanceof HTMLElement) {
+      const percent = completed ? 100 : Math.round(progressRatio * 100);
+      bar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+    }
+    if (!(list instanceof HTMLElement)) {
+      return;
+    }
+
+    list.innerHTML = "";
+    let consumedBytes = 0;
+    for (const file of normalizedFiles) {
+      const size = file.size || 0;
+      const fileLoaded = completed ? size : Math.max(0, Math.min(size, loadedBytes - consumedBytes));
+      const fileRatio = size > 0 ? (fileLoaded / size) : (completed ? 1 : 0);
+      const row = document.createElement("div");
+      row.className = "upload-file-row";
+      row.classList.add(completed || fileRatio >= 1 ? "is-done" : fileRatio > 0 ? "is-active" : "is-pending");
+
+      const meta = document.createElement("div");
+      meta.className = "upload-file-meta";
+
+      const name = document.createElement("div");
+      name.className = "upload-file-name";
+      name.textContent = file.webkitRelativePath || file.name;
+
+      const detail = document.createElement("div");
+      detail.className = "upload-file-detail";
+      detail.textContent = formatBytes(size);
+
+      const state = document.createElement("div");
+      state.className = "upload-file-state";
+      state.textContent = completed || fileRatio >= 1 ? "Fertig" : fileRatio > 0 ? `${Math.round(fileRatio * 100)}%` : "Wartet";
+
+      meta.appendChild(name);
+      meta.appendChild(detail);
+      row.appendChild(meta);
+      row.appendChild(state);
+      list.appendChild(row);
+
+      consumedBytes += size;
+    }
+  }
+
+  function bindUploadProgress(form, fileInput, statusRoot, submitButton, validate) {
+    if (!(form instanceof HTMLFormElement) || !(fileInput instanceof HTMLInputElement)) {
+      return;
+    }
+
+    fileInput.addEventListener("change", () => {
+      renderUploadTracker(statusRoot, fileInput.files, 0, false);
+    });
+
+    form.addEventListener("submit", (event) => {
+      if (typeof validate === "function" && !validate()) {
+        event.preventDefault();
+        return;
+      }
+      const files = Array.from(fileInput.files || []);
+      if (!files.length) {
+        return;
+      }
+
+      event.preventDefault();
+      submitButton?.setAttribute("disabled", "disabled");
+
+      const request = new XMLHttpRequest();
+      request.open(form.method || "POST", form.action || window.location.pathname);
+      request.upload.addEventListener("progress", (progressEvent) => {
+        if (!progressEvent.lengthComputable) {
+          return;
+        }
+        renderUploadTracker(statusRoot, files, progressEvent.loaded / progressEvent.total, false);
+      });
+      request.addEventListener("load", () => {
+        renderUploadTracker(statusRoot, files, 1, true);
+        window.setTimeout(() => window.location.reload(), 260);
+      });
+      request.addEventListener("error", () => {
+        submitButton?.removeAttribute("disabled");
+        renderUploadTracker(statusRoot, files, 0, false);
+      });
+      request.send(new FormData(form));
+    });
+  }
+
   function renderTrackList(album) {
     if (!trackList) {
       return;
@@ -216,6 +340,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (trackInput) {
       trackInput.value = "";
     }
+    renderUploadTracker(addUploadStatus, [], 0, false);
     renderTrackList(activeAlbum);
     showEditSection("home");
     editModal.showModal();
@@ -358,6 +483,7 @@ document.addEventListener("DOMContentLoaded", () => {
     createModalBody?.classList.add("create-warning-surface");
     createNameInput?.focus();
   });
+  bindUploadProgress(createForm, folderInput, createUploadStatus, createSubmitButton, () => !createNameExists(createNameInput?.value || ""));
 
   for (const closeButton of document.querySelectorAll("[data-close-create]")) {
     closeButton.addEventListener("click", closeCreateModal);
@@ -389,6 +515,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     renameNameInput?.focus();
   });
+  bindUploadProgress(addTracksForm, trackInput, addUploadStatus, addSubmitButton);
   for (const button of document.querySelectorAll("[data-edit-back]")) {
     button.addEventListener("click", () => showEditSection("home"));
   }
