@@ -244,4 +244,39 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
   }
+
+  for (const ledRow of document.querySelectorAll(".led-row")) {
+    const pinSelect = ledRow.querySelector("[data-led-pin]");
+    const brightnessInput = ledRow.querySelector("[data-led-brightness]");
+    const testButton = ledRow.querySelector("[data-led-test-button]");
+    if (!(pinSelect instanceof HTMLSelectElement) || !(testButton instanceof HTMLButtonElement)) {
+      continue;
+    }
+
+    function syncLedTestButton() {
+      testButton.disabled = !pinSelect.value;
+    }
+
+    pinSelect.addEventListener("change", syncLedTestButton);
+    syncLedTestButton();
+
+    testButton.addEventListener("click", async () => {
+      if (!pinSelect.value) {
+        return;
+      }
+      testButton.disabled = true;
+      try {
+        await fetch("/api/setup/led-blink", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            pin: pinSelect.value,
+            brightness: brightnessInput instanceof HTMLInputElement ? brightnessInput.value : 100,
+          }),
+        });
+      } finally {
+        syncLedTestButton();
+      }
+    });
+  }
 });

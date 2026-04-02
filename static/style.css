@@ -1401,11 +1401,25 @@ dialog[data-power-routine-dialog]::backdrop {
 
 .led-table-head,
 .led-row {
-  grid-template-columns: 1fr 0.9fr 0.9fr;
+  grid-template-columns: 1fr 0.9fr 0.9fr auto;
 }
 
 .led-save-button {
   margin-top: 1rem;
+}
+
+.led-test-button {
+  min-width: 2.8rem;
+  min-height: 2.8rem;
+  display: inline-grid;
+  place-items: center;
+  padding: 0.35rem 0.55rem;
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.led-test-button:disabled {
+  opacity: 0.45;
 }
 
 .drop-slot {

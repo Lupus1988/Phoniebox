@@ -175,19 +175,28 @@
           <div>Funktion</div>
           <div>PIN</div>
           <div>Helligkeit</div>
+          <div>Blinken</div>
         </div>
         <div class="led-table">
           {% for led in setup_data.leds %}
             <div class="led-row">
               <div class="mapping-name">{{ led.name }}</div>
               <input type="hidden" name="led_name_{{ loop.index0 }}" value="{{ led.name }}">
-              <select name="led_pin_{{ loop.index0 }}">
+              <select name="led_pin_{{ loop.index0 }}" data-led-pin>
+                <option value="" {% if not led.pin %}selected{% endif %}>-</option>
                 {% for pin in led_pin_choices %}
                   <option value="{{ pin }}" {% if led.pin == pin %}selected{% endif %}>{{ pin }}</option>
                 {% endfor %}
               </select>
               <input type="hidden" name="led_function_{{ loop.index0 }}" value="{{ led.function }}">
-              <input type="number" name="led_brightness_{{ loop.index0 }}" min="0" max="100" value="{{ led.brightness }}">
+              <input type="number" name="led_brightness_{{ loop.index0 }}" min="0" max="100" value="{{ led.brightness }}" data-led-brightness>
+              <button
+                class="button-like led-test-button"
+                type="button"
+                data-led-test-button
+                aria-label="LED testen"
+                title="LED dreimal blinken lassen"
+              >🔆</button>
             </div>
           {% endfor %}
         </div>

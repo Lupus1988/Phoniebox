@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 
 try:
@@ -121,3 +122,41 @@ class LEDController:
             except RuntimeError:
                 continue
         self._configured_pins.clear()
+
+    def blink_led(self, gpio_name, brightness=100, repeats=3, on_seconds=0.12, off_seconds=0.12):
+        bcm_pin = gpio_name_to_bcm(gpio_name)
+        if bcm_pin is None:
+            return False
+        if not self.ensure_gpio():
+            return False
+
+        brightness = max(0, min(100, int(brightness or 0)))
+        active_brightness = 100 if brightness <= 0 else brightness
+
+        try:
+            if bcm_pin in PWM_PINS and 0 < active_brightness < 100:
+                pwm = self._ensure_pwm(bcm_pin)
+                for _ in range(max(1, int(repeats))):
+                    pwm.ChangeDutyCycle(active_brightness)
+                    time.sleep(max(0.02, float(on_seconds)))
+                    pwm.ChangeDutyCycle(0)
+                    time.sleep(max(0.02, float(off_seconds)))
+            else:
+                self._disable_pwm(bcm_pin)
+                if not self._ensure_output(bcm_pin):
+                    return False
+                for _ in range(max(1, int(repeats))):
+                    GPIO.output(bcm_pin, GPIO.HIGH)
+                    time.sleep(max(0.02, float(on_seconds)))
+                    GPIO.output(bcm_pin, GPIO.LOW)
+                    time.sleep(max(0.02, float(off_seconds)))
+        except RuntimeError:
+            return False
+        finally:
+            self._disable_pwm(bcm_pin)
+            try:
+                GPIO.output(bcm_pin, GPIO.LOW)
+            except RuntimeError:
+                pass
+
+        return True

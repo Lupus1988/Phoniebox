@@ -48,3 +48,10 @@ class AppRoutesTest(unittest.TestCase):
             response = self.client.post("/api/runtime/audio-test")
         self.assertEqual(response.status_code, 200)
         play_sound.assert_called_once_with("test")
+
+    def test_led_blink_endpoint_uses_selected_pin(self):
+        with patch("app.LEDController") as led_controller:
+            led_controller.return_value.blink_led.return_value = True
+            response = self.client.post("/api/setup/led-blink", json={"pin": "GPIO12", "brightness": 55})
+        self.assertEqual(response.status_code, 200)
+        led_controller.return_value.blink_led.assert_called_once_with("GPIO12", brightness=55, repeats=3)

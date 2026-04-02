@@ -21,6 +21,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from hardware.gpio import GPIO_PINS, GPIO_TO_BOARD_PIN, gpio_display_label, sample_gpio_levels_sysfs
+from hardware.leds import LEDController
 from runtime.service import RuntimeService
 from system.audio import apply_audio_profile, deploy_audio_profile, detect_audio_environment, i2s_profile_catalog
 from system.networking import apply_wifi_profile, ensure_hostname, fallback_hotspot_cycle
@@ -1784,6 +1785,21 @@ def api_setup_button_detect_start():
 def api_setup_button_detect_status():
     session = button_detect_status_payload(load_setup())
     return jsonify({"ok": True, **session})
+
+
+@app.route("/api/setup/led-blink", methods=["POST"])
+def api_setup_led_blink():
+    payload = request.get_json(silent=True) or {}
+    pin = str(payload.get("pin", request.form.get("pin", ""))).strip()
+    brightness = to_int(payload.get("brightness", request.form.get("brightness", 100)), 100, 0, 100)
+    if not pin:
+        return jsonify({"ok": False, "details": ["Kein LED-PIN ausgewählt."]}), 400
+    controller = LEDController()
+    ok = controller.blink_led(pin, brightness=brightness, repeats=3)
+    controller.cleanup()
+    if not ok:
+        return jsonify({"ok": False, "details": [f"LED-Test für {pin} konnte nicht gestartet werden."]}), 503
+    return jsonify({"ok": True, "details": [f"LED-Test für {pin} gestartet."]})
 
 
 @app.route("/api/runtime/tick", methods=["POST"])
