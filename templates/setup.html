@@ -47,13 +47,7 @@
       <div class="reader-status-box {% if reader_status.ready %}is-ready{% else %}is-warning{% endif %}">
         <strong>Reader-Status</strong>
         <p>{{ reader_status.message or ("Reader bereit." if reader_status.ready else "Noch keine Reader-Diagnose verfügbar.") }}</p>
-        {% if hardware_profile.reader and hardware_profile.reader.notes %}
-          <ul class="plain-list compact-plain-list">
-            {% for note in hardware_profile.reader.notes %}
-              <li>{{ note }}</li>
-            {% endfor %}
-          </ul>
-        {% elif reader_status.details %}
+        {% if (not reader_status.ready) and reader_status.details %}
           <ul class="plain-list compact-plain-list">
             {% for detail in reader_status.details %}
               <li>{{ detail }}</li>

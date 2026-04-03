@@ -27,6 +27,7 @@ SETUP_FILE = DATA_DIR / "setup.json"
 READER_STATUS_FILE = DATA_DIR / "reader_status.json"
 RUNTIME_RFID_URL = "http://127.0.0.1:5080/api/runtime/rfid"
 RUNTIME_RFID_REMOVE_URL = "http://127.0.0.1:5080/api/runtime/rfid/remove"
+VALID_RC522_VERSION_REG_VALUES = {0x91, 0x92}
 
 
 def load_setup():
@@ -103,6 +104,221 @@ def ensure_spi_pinmux():
         "ok": True,
         "message": "SPI-Pinmux auf SPI0 gesetzt.",
         "details": details,
+    }
+
+
+def is_valid_rc522_version(version):
+    return isinstance(version, int) and version in VALID_RC522_VERSION_REG_VALUES
+
+
+class LowLevelRC522Backend:
+    VERSION_REG = 0x37
+    COMMAND_REG = 0x01
+    COMM_I_EN_REG = 0x02
+    COMM_IRQ_REG = 0x04
+    ERROR_REG = 0x06
+    FIFO_DATA_REG = 0x09
+    FIFO_LEVEL_REG = 0x0A
+    CONTROL_REG = 0x0C
+    BIT_FRAMING_REG = 0x0D
+    MODE_REG = 0x11
+    TX_CONTROL_REG = 0x14
+    TX_ASK_REG = 0x15
+    T_MODE_REG = 0x2A
+    T_PRESCALER_REG = 0x2B
+    T_RELOAD_REG_H = 0x2C
+    T_RELOAD_REG_L = 0x2D
+
+    PCD_IDLE = 0x00
+    PCD_AUTHENT = 0x0E
+    PCD_TRANSCEIVE = 0x0C
+    PCD_RESETPHASE = 0x0F
+
+    PICC_REQIDL = 0x26
+    PICC_ANTICOLL = 0x93
+
+    MI_OK = 0
+    MI_NOTAGERR = 1
+    MI_ERR = 2
+
+    def __init__(self, spi_bus=0, spi_device=0, rst_pin=25):
+        import spidev
+        import RPi.GPIO as GPIO
+
+        self._spidev = spidev
+        self._gpio = GPIO
+        self.spi_bus = spi_bus
+        self.spi_device = spi_device
+        self.rst_pin = rst_pin
+        self.spi = None
+        self._open()
+
+    def _open(self):
+        self._gpio.setwarnings(False)
+        self._gpio.setmode(self._gpio.BCM)
+        self._gpio.setup(self.rst_pin, self._gpio.OUT)
+        self._gpio.output(self.rst_pin, self._gpio.HIGH)
+        self.spi = self._spidev.SpiDev()
+        self.spi.open(self.spi_bus, self.spi_device)
+        self.spi.max_speed_hz = 1_000_000
+        self.spi.mode = 0
+        self.reset()
+
+    def _write_reg(self, addr, value):
+        self.spi.xfer2([((addr << 1) & 0x7E), value])
+
+    def _read_reg(self, addr):
+        return self.spi.xfer2([((addr << 1) & 0x7E) | 0x80, 0])[1]
+
+    def _set_bit_mask(self, addr, mask):
+        self._write_reg(addr, self._read_reg(addr) | mask)
+
+    def _clear_bit_mask(self, addr, mask):
+        self._write_reg(addr, self._read_reg(addr) & (~mask))
+
+    def reset(self):
+        self._write_reg(self.COMMAND_REG, self.PCD_RESETPHASE)
+        time.sleep(0.05)
+        self._write_reg(self.T_MODE_REG, 0x8D)
+        self._write_reg(self.T_PRESCALER_REG, 0x3E)
+        self._write_reg(self.T_RELOAD_REG_L, 30)
+        self._write_reg(self.T_RELOAD_REG_H, 0)
+        self._write_reg(self.TX_ASK_REG, 0x40)
+        self._write_reg(self.MODE_REG, 0x3D)
+        self._antenna_on()
+
+    def _antenna_on(self):
+        if not (self._read_reg(self.TX_CONTROL_REG) & 0x03):
+            self._set_bit_mask(self.TX_CONTROL_REG, 0x03)
+
+    def version(self):
+        return self._read_reg(self.VERSION_REG)
+
+    def _to_card(self, command, send_data):
+        recv_data = []
+        recv_bits = 0
+        irq_en = 0x00
+        wait_irq = 0x00
+        status = self.MI_ERR
+
+        if command == self.PCD_AUTHENT:
+            irq_en = 0x12
+            wait_irq = 0x10
+        elif command == self.PCD_TRANSCEIVE:
+            irq_en = 0x77
+            wait_irq = 0x30
+
+        self._write_reg(self.COMM_I_EN_REG, irq_en | 0x80)
+        self._clear_bit_mask(self.COMM_IRQ_REG, 0x80)
+        self._set_bit_mask(self.FIFO_LEVEL_REG, 0x80)
+        self._write_reg(self.COMMAND_REG, self.PCD_IDLE)
+
+        for value in send_data:
+            self._write_reg(self.FIFO_DATA_REG, value)
+        self._write_reg(self.COMMAND_REG, command)
+
+        if command == self.PCD_TRANSCEIVE:
+            self._set_bit_mask(self.BIT_FRAMING_REG, 0x80)
+
+        attempts = 2000
+        while attempts:
+            irq_value = self._read_reg(self.COMM_IRQ_REG)
+            attempts -= 1
+            if (irq_value & 0x01) or (irq_value & wait_irq):
+                break
+
+        self._clear_bit_mask(self.BIT_FRAMING_REG, 0x80)
+
+        if attempts and (self._read_reg(self.ERROR_REG) & 0x1B) == 0x00:
+            status = self.MI_OK
+            if irq_value & irq_en & 0x01:
+                status = self.MI_NOTAGERR
+            if command == self.PCD_TRANSCEIVE:
+                count = self._read_reg(self.FIFO_LEVEL_REG)
+                last_bits = self._read_reg(self.CONTROL_REG) & 0x07
+                recv_bits = (count - 1) * 8 + last_bits if last_bits else count * 8
+                count = min(max(count, 1), 16)
+                for _ in range(count):
+                    recv_data.append(self._read_reg(self.FIFO_DATA_REG))
+
+        return status, recv_data, recv_bits
+
+    def read_uid(self):
+        self._write_reg(self.BIT_FRAMING_REG, 0x07)
+        status, _recv_data, recv_bits = self._to_card(self.PCD_TRANSCEIVE, [self.PICC_REQIDL])
+        if status != self.MI_OK or recv_bits != 0x10:
+            return None
+
+        self._write_reg(self.BIT_FRAMING_REG, 0x00)
+        status, recv_data, _recv_bits = self._to_card(self.PCD_TRANSCEIVE, [self.PICC_ANTICOLL, 0x20])
+        if status != self.MI_OK or len(recv_data) != 5:
+            return None
+
+        checksum = 0
+        for index in range(4):
+            checksum ^= recv_data[index]
+        if checksum != recv_data[4]:
+            return None
+
+        return "".join(f"{value:02X}" for value in recv_data[:4])
+
+    def cleanup(self):
+        if self.spi is not None:
+            try:
+                self.spi.close()
+            except Exception:
+                pass
+            self.spi = None
+        try:
+            self._gpio.cleanup()
+        except Exception:
+            pass
+
+
+def probe_rc522_backend():
+    try:
+        import spidev  # noqa: F401
+        import RPi.GPIO  # noqa: F401
+    except Exception as exc:
+        return {
+            "ok": False,
+            "message": f"RC522-Treiber fehlen: {exc}",
+            "details": ["Für RC522 werden `spidev` und `RPi.GPIO` benötigt."],
+            "backend": None,
+        }
+
+    probe_results = []
+    for spi_device, rst_pin in ((0, 25), (0, 22), (1, 25), (1, 22)):
+        backend = None
+        try:
+            backend = LowLevelRC522Backend(spi_bus=0, spi_device=spi_device, rst_pin=rst_pin)
+            version = backend.version()
+            probe_results.append((spi_device, rst_pin, version))
+            if is_valid_rc522_version(version):
+                return {
+                    "ok": True,
+                    "message": "RC522 bereit.",
+                    "details": [],
+                    "backend": backend,
+                }
+        except Exception as exc:
+            probe_results.append((spi_device, rst_pin, f"ERR:{exc}"))
+        finally:
+            if backend is not None:
+                backend.cleanup()
+
+    formatted = ", ".join(
+        f"CE{spi_device}/RST{rst_pin}={value if isinstance(value, str) else hex(value)}"
+        for spi_device, rst_pin, value in probe_results
+    )
+    return {
+        "ok": False,
+        "message": "RC522 nicht erkannt.",
+        "details": [
+            "Der Chip antwortet nicht über SPI.",
+            formatted,
+        ],
+        "backend": None,
     }
 
 
@@ -221,43 +437,21 @@ class RC522Reader(BaseReader):
             self.status_message = pinmux["message"]
             self.status_details = pinmux["details"]
             return
-        try:
-            from mfrc522 import SimpleMFRC522
-
-            self.reader = SimpleMFRC522()
-            self.ready = True
-            self.status_message = "RC522 bereit."
-            self.status_details = ["Warte auf RFID-Tag.", *pinmux["details"]]
-        except Exception as exc:
+        probe = probe_rc522_backend()
+        if not probe["ok"]:
             self.reader = None
-            self.status_message = f"RC522 konnte nicht initialisiert werden: {exc}"
-            self.status_details = [
-                "Prüfe, ob SPI aktiv ist.",
-                "Prüfe, ob der Reader mit 3.3V versorgt wird.",
-                "Prüfe SDA/SS, SCK, MOSI, MISO und RST auf korrekte Pins.",
-                *pinmux["details"],
-            ]
+            self.status_message = probe["message"]
+            self.status_details = probe["details"]
+            return
+        self.reader = probe["backend"]
+        self.ready = True
+        self.status_message = "RC522 bereit."
+        self.status_details = []
 
     def _read_uid(self):
         if self.reader is None:
             return None
-        if hasattr(self.reader, "read_id_no_block"):
-            return self.reader.read_id_no_block()
-        if hasattr(self.reader, "read_no_block"):
-            result = self.reader.read_no_block()
-            if isinstance(result, (tuple, list)) and result:
-                return result[0]
-            return result
-        basic_reader = getattr(self.reader, "BasicMFRC522", None)
-        if basic_reader is not None:
-            if hasattr(basic_reader, "read_id_no_block"):
-                return basic_reader.read_id_no_block()
-            if hasattr(basic_reader, "read_no_block"):
-                result = basic_reader.read_no_block(getattr(self.reader, "TRAILER_BLOCK", 11))
-                if isinstance(result, (tuple, list)) and result:
-                    return result[0]
-                return result
-        return None
+        return self.reader.read_uid()
 
     def poll(self):
         if self.reader is None:
@@ -267,6 +461,7 @@ class RC522Reader(BaseReader):
             uid = self._read_uid()
             self.ready = True
             self.status_message = "RC522 bereit."
+            self.status_details = []
         except Exception as exc:
             self.ready = False
             self.status_message = f"RC522 Lesefehler: {exc}"
@@ -278,16 +473,15 @@ class RC522Reader(BaseReader):
         return str(uid) if uid else None
 
     def cleanup(self):
-        for target in [self.reader, getattr(self.reader, "BasicMFRC522", None), getattr(self.reader, "READER", None)]:
-            if target is None:
-                continue
-            for method_name in ["close", "cleanup", "Close_MFRC522"]:
-                method = getattr(target, method_name, None)
-                if callable(method):
-                    try:
-                        method()
-                    except Exception:
-                        pass
+        if self.reader is None:
+            return
+        for method_name in ["cleanup", "close"]:
+            method = getattr(self.reader, method_name, None)
+            if callable(method):
+                try:
+                    method()
+                except Exception:
+                    pass
 
 
 class PN532Reader(BaseReader):

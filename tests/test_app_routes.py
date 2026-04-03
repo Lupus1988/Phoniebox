@@ -17,6 +17,35 @@ class AppRoutesTest(unittest.TestCase):
             response = self.client.get(path)
             self.assertEqual(response.status_code, 200, path)
 
+    def test_setup_page_hides_reader_details_when_reader_is_ready(self):
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {"reader": {"notes": ["Interne Notiz"]}}}}}
+        reader_status = {"ready": True, "message": "RC522 bereit.", "details": ["Soll nicht sichtbar sein."]}
+
+        with patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "app.load_reader_status", return_value=reader_status
+        ):
+            response = self.client.get("/setup")
+
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("RC522 bereit.", body)
+        self.assertNotIn("Soll nicht sichtbar sein.", body)
+        self.assertNotIn("Interne Notiz", body)
+
+    def test_setup_page_shows_reader_details_when_reader_is_not_ready(self):
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {"reader": {"notes": ["Interne Notiz"]}}}}}
+        reader_status = {"ready": False, "message": "RC522 nicht erkannt.", "details": ["Der Chip antwortet nicht über SPI."]}
+
+        with patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "app.load_reader_status", return_value=reader_status
+        ):
+            response = self.client.get("/setup")
+
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("RC522 nicht erkannt.", body)
+        self.assertIn("Der Chip antwortet nicht über SPI.", body)
+
     def test_api_endpoints_render(self):
         for path in ("/api/runtime", "/api/audio", "/api/hardware"):
             response = self.client.get(path)
