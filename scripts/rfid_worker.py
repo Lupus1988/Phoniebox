@@ -248,6 +248,15 @@ class RC522Reader(BaseReader):
             if isinstance(result, (tuple, list)) and result:
                 return result[0]
             return result
+        basic_reader = getattr(self.reader, "BasicMFRC522", None)
+        if basic_reader is not None:
+            if hasattr(basic_reader, "read_id_no_block"):
+                return basic_reader.read_id_no_block()
+            if hasattr(basic_reader, "read_no_block"):
+                result = basic_reader.read_no_block(getattr(self.reader, "TRAILER_BLOCK", 11))
+                if isinstance(result, (tuple, list)) and result:
+                    return result[0]
+                return result
         return None
 
     def poll(self):
@@ -269,14 +278,16 @@ class RC522Reader(BaseReader):
         return str(uid) if uid else None
 
     def cleanup(self):
-        backend = getattr(self.reader, "READER", None)
-        for method_name in ["cleanup", "Close_MFRC522"]:
-            method = getattr(backend, method_name, None)
-            if callable(method):
-                try:
-                    method()
-                except Exception:
-                    pass
+        for target in [self.reader, getattr(self.reader, "BasicMFRC522", None), getattr(self.reader, "READER", None)]:
+            if target is None:
+                continue
+            for method_name in ["close", "cleanup", "Close_MFRC522"]:
+                method = getattr(target, method_name, None)
+                if callable(method):
+                    try:
+                        method()
+                    except Exception:
+                        pass
 
 
 class PN532Reader(BaseReader):
