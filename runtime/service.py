@@ -22,6 +22,7 @@ if str(BASE_DIR) not in sys.path:
 
 from hardware.gpio import GPIO_TO_BOARD_PIN, SysfsGPIOInput, gpio_display_label, sysfs_gpio_available
 from hardware.manager import detect_hardware
+from hardware.pins import filter_reserved_gpio_names, reserved_system_pins
 from runtime.audio import build_track_queue, load_playlist_entries, pick_track_duration, track_title_from_entry
 from runtime.playback import PlaybackController
 from system.networking import set_wifi_radio, wifi_radio_enabled
@@ -463,7 +464,12 @@ class RuntimeService:
             return
 
         setup = self.load_setup()
-        configured_pins = sorted({button.get("pin", "").strip() for button in setup.get("buttons", []) if button.get("pin", "").strip()})
+        configured_pins = sorted(
+            filter_reserved_gpio_names(
+                {button.get("pin", "").strip() for button in setup.get("buttons", []) if button.get("pin", "").strip()},
+                setup,
+            )
+        )
         levels = self._read_gpio_levels(configured_pins)
         if not configured_pins or not levels:
             self._set_pressed_buttons([])
@@ -602,6 +608,7 @@ class RuntimeService:
 
     def update_led_status(self, runtime_state):
         setup = self.load_setup()
+        reserved = reserved_system_pins(setup)
         leds = setup.get("leds", [])
         sleep_level = runtime_state.get("sleep_timer", {}).get("level", 0)
         powered_on = runtime_state.get("powered_on", True)
@@ -611,6 +618,8 @@ class RuntimeService:
         override = self._build_power_hold_led_override(runtime_state, leds) if power_hold.get("pressed") else {}
         effect_override = self._build_power_hold_led_effects(runtime_state) if power_hold.get("pressed") else {}
         for led in leds:
+            if led.get("pin", "").strip() in reserved:
+                continue
             function = led.get("function", "")
             is_on = False
             if function == "power_on":

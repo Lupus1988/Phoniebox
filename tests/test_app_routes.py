@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app import app, collect_conflicts, cross_role_pin_errors, default_setup, ensure_data_files
+from app import app, collect_conflicts, cross_role_pin_errors, default_setup, ensure_data_files, pin_choices
 
 
 class AppRoutesTest(unittest.TestCase):
@@ -104,3 +104,32 @@ class AppRoutesTest(unittest.TestCase):
         errors = cross_role_pin_errors(setup)
 
         self.assertTrue(errors)
+
+    def test_collect_conflicts_marks_gpio22_as_reserved_for_rc522(self):
+        setup = default_setup()
+        setup["reader"]["type"] = "RC522"
+        setup["buttons"][0]["pin"] = "GPIO22"
+
+        warnings = collect_conflicts(setup)
+
+        self.assertTrue(any("GPIO22" in warning and "Reader oder Soundkarte" in warning for warning in warnings))
+
+    def test_collect_conflicts_warns_about_potential_reader_pins_even_without_active_reader(self):
+        setup = default_setup()
+        setup["reader"]["type"] = "USB"
+        setup["buttons"][0]["pin"] = "GPIO22"
+
+        warnings = collect_conflicts(setup)
+
+        self.assertTrue(any("GPIO22" in warning and "grundsätzlich" in warning for warning in warnings))
+
+    def test_pin_choices_hide_potential_reader_and_audio_pins_by_default(self):
+        setup = default_setup()
+
+        button_pins = pin_choices(setup, "button")
+        led_pins = pin_choices(setup, "led")
+
+        self.assertNotIn("GPIO22", button_pins)
+        self.assertNotIn("GPIO25", button_pins)
+        self.assertNotIn("GPIO20", button_pins)
+        self.assertNotIn("GPIO22", led_pins)

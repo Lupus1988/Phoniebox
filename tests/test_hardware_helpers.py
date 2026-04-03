@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from hardware import leds as leds_module
+from hardware import manager as manager_module
 from hardware import rfid as rfid_module
 
 
@@ -72,6 +73,39 @@ class HardwareHelpersTest(unittest.TestCase):
             self.assertEqual(fake_gpio.outputs[23], fake_gpio.HIGH)
             self.assertIn(18, controller._pwm)
             self.assertEqual(controller._pwm[18].duty, 40)
+
+    def test_detect_leds_reports_reserved_pin_conflicts_without_blank_pwm_noise(self):
+        setup = {
+            "reader": {"type": "RC522"},
+            "audio": {"output_mode": "usb_dac"},
+            "leds": [
+                {"pin": "GPIO22", "brightness": 50},
+                {"pin": "", "brightness": 30},
+            ],
+        }
+
+        result = manager_module.detect_leds(setup)
+
+        self.assertTrue(any("GPIO22" in note for note in result["notes"]))
+        self.assertFalse(any(" , " in note for note in result["notes"]))
+
+    def test_detect_reader_uses_reader_status_for_rc522(self):
+        setup = {"reader": {"type": "RC522"}}
+
+        with patch.object(
+            manager_module,
+            "load_json",
+            return_value={
+                "configured_type": "RC522",
+                "ready": False,
+                "message": "RC522 nicht erkannt.",
+                "details": ["CE0/RST25=0x0"],
+            },
+        ):
+            result = manager_module.detect_reader(setup)
+
+        self.assertFalse(result["ready"])
+        self.assertIn("RC522 nicht erkannt.", result["notes"])
 
 
 if __name__ == "__main__":

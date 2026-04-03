@@ -252,6 +252,47 @@ class RuntimeServiceTest(unittest.TestCase):
 
         self.assertEqual(detect.call_count, 1)
 
+    def test_poll_buttons_ignores_reader_reserved_pins(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "RC522", "connection_hint": ""},
+                "audio": {"output_mode": "usb_dac"},
+                "hardware_buttons_enabled": True,
+                "buttons": [
+                    {"id": "btn-1", "name": "Play/Pause", "pin": "GPIO22", "press_type": "kurz"},
+                    {"id": "btn-2", "name": "Stopp", "pin": "GPIO17", "press_type": "kurz"},
+                ],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        with patch.object(self.service, "_read_gpio_levels", return_value={"GPIO17": 1}) as read_gpio:
+            self.service.poll_buttons_once(now=123.0)
+
+        read_gpio.assert_called_once_with(["GPIO17"])
+
+    def test_update_led_status_ignores_reader_reserved_pins(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "RC522", "connection_hint": ""},
+                "audio": {"output_mode": "usb_dac"},
+                "buttons": [],
+                "leds": [
+                    {"id": "led-1", "name": "Power", "pin": "GPIO22", "function": "power_on", "brightness": 50},
+                    {"id": "led-2", "name": "Wifi", "pin": "GPIO17", "function": "wifi_on", "brightness": 55},
+                ],
+                "wifi": {},
+            },
+        )
+
+        runtime_state = self.service.ensure_runtime()
+        runtime_state = self.service.update_led_status(runtime_state)
+
+        self.assertEqual([entry["pin"] for entry in runtime_state["led_status"]], ["GPIO17"])
+
     @patch.object(service_module.time, "sleep", return_value=None)
     def test_sleep_timer_expiry_fades_out_and_enters_standby(self, _sleep):
         self.service.load_album_by_id("album-1", autoplay=True)

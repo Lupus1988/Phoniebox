@@ -22,6 +22,7 @@ if str(BASE_DIR) not in sys.path:
 
 from hardware.gpio import GPIO_PINS, GPIO_TO_BOARD_PIN, gpio_display_label, sample_gpio_levels_sysfs
 from hardware.leds import LEDController
+from hardware.pins import potential_system_pins, reserved_system_pins
 from runtime.service import RuntimeService
 from system.audio import apply_audio_profile, deploy_audio_profile, detect_audio_environment, i2s_profile_catalog
 from system.networking import apply_wifi_profile, ensure_hostname, fallback_hotspot_cycle
@@ -899,31 +900,6 @@ def get_wifi_snapshot():
     return snapshot
 
 
-def reserved_reader_pins(reader_type):
-    reader_type = (reader_type or "").strip().upper()
-    if reader_type == "RC522":
-        return {"GPIO8", "GPIO9", "GPIO10", "GPIO11", "GPIO25"}
-    if reader_type == "PN532_I2C":
-        return {"GPIO2", "GPIO3"}
-    if reader_type == "PN532_SPI":
-        return {"GPIO8", "GPIO9", "GPIO10", "GPIO11"}
-    if reader_type == "PN532_UART":
-        return {"GPIO14", "GPIO15"}
-    return set()
-
-
-def reserved_audio_pins(output_mode):
-    if (output_mode or "").strip() == "i2s_dac":
-        return {"GPIO18", "GPIO19", "GPIO20", "GPIO21"}
-    return set()
-
-
-def reserved_system_pins(setup_data):
-    reader_type = setup_data.get("reader", {}).get("type", "")
-    output_mode = setup_data.get("audio", {}).get("output_mode", "")
-    return reserved_reader_pins(reader_type) | reserved_audio_pins(output_mode)
-
-
 def assigned_button_pins(setup_data):
     return {button.get("pin", "").strip() for button in setup_data.get("buttons", []) if button.get("pin", "").strip()}
 
@@ -933,7 +909,7 @@ def assigned_led_pins(setup_data):
 
 
 def pin_choices(setup_data, role):
-    reserved = reserved_system_pins(setup_data)
+    reserved = potential_system_pins()
     blocked_by_other_role = assigned_led_pins(setup_data) if role == "button" else assigned_button_pins(setup_data)
     pins = GPIO_PINS
     if role == "led":
@@ -1007,13 +983,19 @@ def collect_conflicts(setup_data):
         warnings.append(f"PIN {pin} ist gleichzeitig für Taste und LED vergeben und muss neu zugeordnet werden.")
 
     reserved = reserved_system_pins(setup_data)
+    potential = potential_system_pins()
     for pin, by_press_type in button_pins.items():
         if pin in reserved:
             button_names = [name for names in by_press_type.values() for name in names]
             warnings.append(f"Taste {', '.join(button_names)} muss neu zugeordnet werden. {pin} wird jetzt von Reader oder Soundkarte benötigt.")
+        elif pin in potential:
+            button_names = [name for names in by_press_type.values() for name in names]
+            warnings.append(f"Taste {', '.join(button_names)} sollte neu zugeordnet werden. {pin} ist grundsätzlich für Reader oder Soundkarten reserviert.")
     for pin, names in led_pins.items():
         if pin in reserved:
             warnings.append(f"LED {', '.join(names)} muss neu zugeordnet werden. {pin} wird jetzt von Reader oder Soundkarte benötigt.")
+        elif pin in potential:
+            warnings.append(f"LED {', '.join(names)} sollte neu zugeordnet werden. {pin} ist grundsätzlich für Reader oder Soundkarten reserviert.")
 
     wifi = setup_data.get("wifi", {})
     if normalize_hotspot_security(wifi.get("hotspot_security")) == "wpa-psk" and len(wifi.get("hotspot_password", "")) < 8:
