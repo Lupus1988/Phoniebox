@@ -38,7 +38,6 @@ if command -v raspi-config >/dev/null 2>&1; then
   sudo raspi-config nonint do_i2c 0 || true
   sudo raspi-config nonint do_spi 0 || true
   sudo raspi-config nonint do_serial_cons 1 || true
-  sudo raspi-config nonint do_serial_hw 0 || true
 fi
 
 sudo cp systemd/phoniebox-panel.service "$SERVICE_DIR"/

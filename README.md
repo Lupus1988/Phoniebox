@@ -27,7 +27,7 @@ Der Installer:
 - installiert die systemd-Dienste und Timer
 - bereitet WLAN-Client- und Hotspot-Profile fuer den Erststart vor
 - deaktiviert Bluetooth, blockiert es per `rfkill` und schaltet HDMI ab
-- aktiviert auf Raspberry Pi nach Moeglichkeit `I2C`, `SPI` und `UART`
+- aktiviert auf Raspberry Pi nach Moeglichkeit `I2C` und `SPI`; `UART` bleibt standardmaessig unberuehrt und wird nur bei Bedarf fuer passende Reader manuell aktiviert
 
 ## Lokale Entwicklung
 
@@ -62,5 +62,5 @@ Standardverhalten fuer neue Installationen:
 - Fuer `phoniebox.local` wird `avahi-daemon` verwendet.
 - Das Audio-Backend bevorzugt `mpg123`, faellt sonst auf Alternativen oder `mock` zurueck.
 - Reader-Profile fuer `USB`, `RC522` und `PN532` ueber `I2C`, `SPI` und `UART` sind vorbereitet.
-- Wichtiger Reader-Befund aus dem Generaltest auf Pi Zero 2 W: Ein frisches `Raspberry Pi OS Lite 64-bit` mit aktiviertem SPI erkannte den `RC522` im nackten `spidev`-Test korrekt (`VersionReg = 0x92`), waehrend ein vorheriger `32-bit`-Teststand auf demselben Geraet nur `VersionReg = 0x00` lieferte. Fuer neue RC522-Tests auf Pi Zero 2 W ist `64-bit Lite` derzeit deshalb der bevorzugte Ausgangspunkt.
+- Wichtiger Reader-Befund aus dem Generaltest auf Pi Zero 2 W: Ein frisches System mit aktiviertem SPI erkennt den `RC522` im nackten `spidev`-Test korrekt (`VersionReg = 0x92`). Der spaetere Ausfall liess sich im Repro enger auf Installations-/Boot-Zustaende rund um den Serial-/UART-Pfad eingrenzen, nicht auf `32-bit` gegen `64-bit` als Grundursache.
 - Der Designentwurf liegt unter `docs/Designentwurf.pdf`.
