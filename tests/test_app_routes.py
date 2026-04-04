@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app import app, collect_conflicts, cross_role_pin_errors, default_setup, ensure_data_files, pin_choices
+from app import app, collect_conflicts, cross_role_pin_errors, default_setup, ensure_data_files, normalize_setup_data, pin_choices
 
 
 class AppRoutesTest(unittest.TestCase):
@@ -70,6 +70,20 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(setup["wifi"]["mode"], "hotspot_only")
         self.assertEqual(setup["wifi"]["saved_networks"], [])
 
+    def test_default_setup_has_no_reader_installed(self):
+        setup = default_setup()
+
+        self.assertEqual(setup["reader"]["type"], "NONE")
+        self.assertEqual(setup["reader"]["target_type"], "NONE")
+        self.assertEqual(setup["reader"]["install_state"], "not_installed")
+
+    def test_normalize_setup_migrates_existing_reader_type_to_target_type(self):
+        setup = normalize_setup_data({"reader": {"type": "RC522"}, "audio": {"output_mode": "usb_dac"}})
+
+        self.assertEqual(setup["reader"]["type"], "RC522")
+        self.assertEqual(setup["reader"]["target_type"], "RC522")
+        self.assertEqual(setup["reader"]["install_state"], "installed")
+
     def test_default_setup_has_no_factory_button_or_led_pin_assignments(self):
         setup = default_setup()
 
@@ -133,3 +147,38 @@ class AppRoutesTest(unittest.TestCase):
         self.assertNotIn("GPIO25", button_pins)
         self.assertNotIn("GPIO20", button_pins)
         self.assertNotIn("GPIO22", led_pins)
+
+    def test_reader_select_action_only_updates_target_type(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "app.save_setup"
+        ) as save_setup:
+            response = self.client.post(
+                "/setup",
+                data={"section": "reader", "reader_action": "select", "reader_type": "RC522"},
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 302)
+        saved = save_setup.call_args.args[0]
+        self.assertEqual(saved["reader"]["type"], "NONE")
+        self.assertEqual(saved["reader"]["target_type"], "RC522")
+
+    def test_reader_install_action_uses_transition_helper(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "app.apply_reader_install_action",
+            return_value={"ok": True, "message": "RC522 wurde vorbereitet.", "reboot_scheduled": True},
+        ) as apply_action:
+            response = self.client.post(
+                "/setup",
+                data={"section": "reader", "reader_action": "install", "reader_type": "RC522"},
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 302)
+        apply_action.assert_called_once()

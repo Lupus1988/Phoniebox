@@ -43,6 +43,7 @@ AUDIO_PROFILE_DIR = DATA_DIR / "generated" / "audio"
 READER_GUIDE_DIR = BASE_DIR / "assets" / "reader-guides"
 AUDIO_GUIDE_DIR = BASE_DIR / "assets" / "audio-guides"
 HOTSPOT_SECURITY_CHOICES = {"open", "wpa-psk"}
+READER_NONE_ID = "NONE"
 
 app = Flask(
     __name__,
@@ -132,6 +133,7 @@ POWER_ROUTINE_OPTIONS = [
     },
 ]
 READER_OPTIONS = [
+    {"id": READER_NONE_ID, "label": "Kein Reader installiert", "driver": "-", "transport": "-"},
     {"id": "USB", "label": "USB-Reader", "driver": "hid/keyboard-reader", "transport": "usb"},
     {"id": "RC522", "label": "RC522", "driver": "mfrc522", "transport": "spi"},
     {"id": "PN532_I2C", "label": "PN532 (I2C)", "driver": "pn532", "transport": "i2c"},
@@ -427,9 +429,9 @@ def default_library():
 
 def default_reader_status():
     return {
-        "configured_type": "USB",
+        "configured_type": READER_NONE_ID,
         "ready": False,
-        "message": "",
+        "message": "Kein Reader installiert.",
         "details": [],
         "updated_at": 0,
     }
@@ -452,7 +454,11 @@ def default_settings():
 def default_setup():
     return {
         "reader": {
-            "type": "USB",
+            "type": READER_NONE_ID,
+            "target_type": READER_NONE_ID,
+            "install_state": "not_installed",
+            "needs_reboot": False,
+            "last_action_message": "Noch kein Reader installiert.",
             "connection_hint": "USB-Reader anstecken oder RC522 per SPI verdrahten",
         },
         "hardware_buttons_enabled": False,
@@ -589,11 +595,157 @@ def save_settings(data):
 
 
 def load_setup():
-    return merge_defaults(load_json(SETUP_FILE, default_setup()), default_setup())
+    data = merge_defaults(load_json(SETUP_FILE, default_setup()), default_setup())
+    return normalize_setup_data(data)
 
 
 def save_setup(data):
     save_json(SETUP_FILE, data)
+
+
+def valid_reader_ids():
+    return {option["id"] for option in READER_OPTIONS}
+
+
+def normalize_reader_type(value):
+    reader_type = (value or READER_NONE_ID).strip()
+    if reader_type not in valid_reader_ids():
+        return READER_NONE_ID
+    return reader_type
+
+
+def reader_requires_reboot(current_type, target_type):
+    current_type = normalize_reader_type(current_type)
+    target_type = normalize_reader_type(target_type)
+    if current_type == target_type:
+        return False
+    return any(reader_type in {READER_NONE_ID, "RC522", "PN532_I2C", "PN532_SPI", "PN532_UART"} for reader_type in (current_type, target_type))
+
+
+def reader_transition_commands(target_type):
+    target_type = normalize_reader_type(target_type)
+    commands = []
+    if target_type in {"RC522", "PN532_SPI"}:
+        commands.append(["raspi-config", "nonint", "do_spi", "0"])
+    if target_type == "PN532_I2C":
+        commands.append(["raspi-config", "nonint", "do_i2c", "0"])
+    if target_type == "PN532_UART":
+        commands.append(["raspi-config", "nonint", "do_serial_cons", "1"])
+        commands.append(["raspi-config", "nonint", "do_serial_hw", "0"])
+    return commands
+
+
+def run_local_command(command):
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    output = (result.stdout or result.stderr or "").strip()
+    return {"ok": result.returncode == 0, "output": output}
+
+
+def save_reader_status(configured_type, ready, message, details=None):
+    save_json(
+        READER_STATUS_FILE,
+        {
+            "configured_type": normalize_reader_type(configured_type),
+            "ready": bool(ready),
+            "message": str(message or ""),
+            "details": list(details or []),
+            "updated_at": int(time.time()),
+        },
+    )
+
+
+def normalize_setup_data(data):
+    reader = data.setdefault("reader", {})
+    installed_type = normalize_reader_type(reader.get("type"))
+    target_type = normalize_reader_type(reader.get("target_type", installed_type))
+    reader["type"] = installed_type
+    reader["target_type"] = target_type
+    state = (reader.get("install_state") or "").strip() or ("installed" if installed_type != READER_NONE_ID else "not_installed")
+    if state not in {"not_installed", "selected", "installed", "reboot_pending", "error"}:
+        state = "installed" if installed_type != READER_NONE_ID else "not_installed"
+    reader["install_state"] = state
+    reader["needs_reboot"] = bool(reader.get("needs_reboot", False))
+    reader["last_action_message"] = (reader.get("last_action_message") or "").strip() or (
+        "Noch kein Reader installiert." if installed_type == READER_NONE_ID else f"{current_reader_option(installed_type)['label']} ist installiert."
+    )
+    return data
+
+
+def reader_install_state(reader_config):
+    installed_type = normalize_reader_type(reader_config.get("type"))
+    target_type = normalize_reader_type(reader_config.get("target_type", installed_type))
+    installed_option = current_reader_option(installed_type)
+    target_option = current_reader_option(target_type)
+    state = (reader_config.get("install_state") or "not_installed").strip()
+    needs_reboot = bool(reader_config.get("needs_reboot"))
+    message = (reader_config.get("last_action_message") or "").strip()
+    if not message:
+        message = "Noch kein Reader installiert." if installed_type == READER_NONE_ID else f"{installed_option['label']} ist installiert."
+    return {
+        "installed_type": installed_type,
+        "target_type": target_type,
+        "installed_option": installed_option,
+        "target_option": target_option,
+        "state": state,
+        "needs_reboot": needs_reboot,
+        "message": message,
+        "can_install": target_type != READER_NONE_ID and target_type != installed_type,
+        "can_uninstall": installed_type != READER_NONE_ID,
+    }
+
+
+def schedule_reboot(delay_seconds=3):
+    subprocess.Popen(
+        ["/bin/sh", "-c", f"sleep {max(int(delay_seconds), 1)} && systemctl reboot"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def apply_reader_install_action(data, action, selected_type):
+    reader = data.setdefault("reader", {})
+    current_type = normalize_reader_type(reader.get("type"))
+    selected_type = normalize_reader_type(selected_type)
+    target_type = READER_NONE_ID if action == "uninstall" else selected_type
+    details = []
+
+    for command in reader_transition_commands(target_type):
+        result = run_local_command(command)
+        details.append(result["output"] or "OK")
+        if not result["ok"]:
+            reader["target_type"] = selected_type
+            reader["install_state"] = "error"
+            reader["needs_reboot"] = False
+            reader["last_action_message"] = f"Reader-Aktion fehlgeschlagen: {' '.join(command)}"
+            save_setup(data)
+            return {
+                "ok": False,
+                "message": reader["last_action_message"],
+                "details": [entry for entry in details if entry],
+                "target_type": target_type,
+            }
+
+    reader["type"] = target_type
+    reader["target_type"] = target_type
+    reader["install_state"] = "reboot_pending" if reader_requires_reboot(current_type, target_type) else ("installed" if target_type != READER_NONE_ID else "not_installed")
+    reader["needs_reboot"] = reader["install_state"] == "reboot_pending"
+    if action == "install":
+        reader["last_action_message"] = f"{current_reader_option(target_type)['label']} wurde vorbereitet."
+        save_reader_status(target_type, False, "Reader-Installation vorbereitet.", ["System wird für den gewählten Reader eingerichtet."])
+    else:
+        reader["last_action_message"] = "Reader wurde deinstalliert."
+        save_reader_status(READER_NONE_ID, False, "Kein Reader installiert.", [])
+    save_setup(data)
+    if reader["needs_reboot"]:
+        schedule_reboot()
+    return {
+        "ok": True,
+        "message": reader["last_action_message"],
+        "details": [entry for entry in details if entry],
+        "target_type": target_type,
+        "reboot_scheduled": reader["needs_reboot"],
+    }
 
 
 def build_audio_runtime_config(audio_setup, settings):
@@ -1509,9 +1661,24 @@ def setup():
         section = request.form.get("section", "").strip()
 
         if section == "reader":
-            data["reader"]["type"] = request.form.get("reader_type", data["reader"]["type"]).strip() or "USB"
-            save_setup(data)
-            flash("Reader-Setup gespeichert.", "success")
+            action = request.form.get("reader_action", "select").strip() or "select"
+            selected_type = normalize_reader_type(request.form.get("reader_type", data.get("reader", {}).get("target_type")))
+            data["reader"]["target_type"] = selected_type
+            if action == "select":
+                data["reader"]["install_state"] = "selected"
+                data["reader"]["needs_reboot"] = False
+                data["reader"]["last_action_message"] = f"Ausgewählt: {current_reader_option(selected_type)['label']}"
+                save_setup(data)
+                flash("Reader-Auswahl gespeichert. Für Hardware-Reader jetzt installieren.", "success")
+                return redirect(url_for("setup"))
+            if action in {"install", "uninstall"}:
+                result = apply_reader_install_action(data, action, selected_type)
+                flash(
+                    f"{result['message']} Reboot wird gestartet." if result.get("reboot_scheduled") else result["message"],
+                    "success" if result["ok"] else "error",
+                )
+                return redirect(url_for("setup"))
+            flash("Unbekannte Reader-Aktion.", "error")
             return redirect(url_for("setup"))
 
         if section == "buttons":
@@ -1748,6 +1915,7 @@ def setup():
             return redirect(url_for("setup"))
 
     wifi_snapshot = get_wifi_snapshot()
+    reader_management = reader_install_state(data.get("reader", {}))
     return render_template(
         "setup.html",
         setup_data=data,
@@ -1759,9 +1927,10 @@ def setup():
         audio_profile_dir=AUDIO_PROFILE_DIR,
         hardware_profile=runtime_snapshot["runtime"]["hardware"].get("profile", {}),
         reader_status=load_reader_status(),
+        reader_management=reader_management,
         runtime_state=runtime_snapshot["runtime"],
         button_mapping_rows=button_mapping_rows(data),
-        reader_option=current_reader_option(data.get("reader", {}).get("type", "USB")),
+        reader_option=reader_management["target_option"],
     )
 
 

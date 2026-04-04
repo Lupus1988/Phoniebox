@@ -107,6 +107,14 @@ class HardwareHelpersTest(unittest.TestCase):
         self.assertFalse(result["ready"])
         self.assertIn("RC522 nicht erkannt.", result["notes"])
 
+    def test_detect_reader_reports_none_as_not_installed(self):
+        setup = {"reader": {"type": "NONE", "target_type": "RC522"}}
+
+        result = manager_module.detect_reader(setup)
+
+        self.assertFalse(result["ready"])
+        self.assertIn("Kein Reader installiert.", result["notes"])
+
 
 if __name__ == "__main__":
     unittest.main()

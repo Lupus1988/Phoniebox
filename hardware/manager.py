@@ -32,7 +32,8 @@ def load_json(path, default):
 
 def detect_reader(setup_data):
     reader = setup_data.get("reader", {})
-    reader_type = reader.get("type", "USB")
+    reader_type = (reader.get("type") or "NONE").strip()
+    target_type = (reader.get("target_type") or reader_type).strip()
     reader_status = load_json(READER_STATUS_FILE, {})
     result = {
         "configured_type": reader_type,
@@ -41,7 +42,11 @@ def detect_reader(setup_data):
         "transport": "",
         "notes": [],
     }
-    if reader_type == "USB":
+    if reader_type == "NONE":
+        result["notes"].append("Kein Reader installiert.")
+        if target_type != "NONE":
+            result["notes"].append(f"Ausgewählt: {target_type}. Installation im Setup ausführen.")
+    elif reader_type == "USB":
         result["driver"] = "hid/keyboard-reader"
         result["transport"] = "usb"
         result["ready"] = True

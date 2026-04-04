@@ -24,28 +24,33 @@
       <input type="hidden" name="section" value="reader">
       <div class="panel-box-head">
         <h3>RFID-Reader</h3>
-        <span>{{ reader_option.label }}</span>
+        <span>{{ reader_management.installed_option.label }}</span>
       </div>
       <div class="form-grid compact">
         <label>
-          <span>Reader-Typ</span>
+          <span>Ziel-Reader</span>
           <select name="reader_type">
             {% for option in reader_options %}
-              <option value="{{ option.id }}" {% if setup_data.reader.type == option.id %}selected{% endif %}>{{ option.label }}</option>
+              <option value="{{ option.id }}" {% if reader_management.target_type == option.id %}selected{% endif %}>{{ option.label }}</option>
             {% endfor %}
           </select>
         </label>
-        {% if reader_option.id != "USB" %}
+        {% if reader_option.id not in ["USB", "NONE"] %}
         <label class="full">
           <span>Anschluss-Hinweis</span>
           <a href="{{ url_for('download_reader_guide', reader_type=reader_option.id) }}">Anschlussplan für {{ reader_option.label }} herunterladen</a>
         </label>
         {% endif %}
       </div>
-      <p class="page-copy">Treiber: {{ reader_option.driver }} · Transport: {{ reader_option.transport }}</p>
-      <p class="page-copy">Pins, die vom Reader gebraucht werden, verschwinden automatisch aus den Tasten- und LED-Dropdowns.</p>
+      <p class="page-copy">Installiert: {{ reader_management.installed_option.label }} · Ausgewählt: {{ reader_management.target_option.label }}</p>
+      <p class="page-copy">Ein Reader wird hier nicht live umgeschaltet, sondern gezielt installiert oder deinstalliert. Hardware-Reader werden danach mit Reboot aktiviert.</p>
+      {% if reader_option.id != "NONE" %}
+        <p class="page-copy">Treiber: {{ reader_option.driver }} · Transport: {{ reader_option.transport }}</p>
+      {% endif %}
+      <p class="page-copy">Pins, die vom installierten Reader gebraucht werden, verschwinden automatisch aus den Tasten- und LED-Dropdowns.</p>
       <div class="reader-status-box {% if reader_status.ready %}is-ready{% else %}is-warning{% endif %}">
         <strong>Reader-Status</strong>
+        <p>{{ reader_management.message }}</p>
         <p>{{ reader_status.message or ("Reader bereit." if reader_status.ready else "Noch keine Reader-Diagnose verfügbar.") }}</p>
         {% if (not reader_status.ready) and reader_status.details %}
           <ul class="plain-list compact-plain-list">
@@ -55,7 +60,11 @@
           </ul>
         {% endif %}
       </div>
-      <button class="primary setup-save-button" type="submit">Reader speichern</button>
+      <div class="setup-action-row">
+        <button class="button-like setup-save-button" type="submit" name="reader_action" value="select">Auswahl speichern</button>
+        <button class="primary setup-save-button" type="submit" name="reader_action" value="install" {% if not reader_management.can_install %}disabled{% endif %}>Reader installieren</button>
+        <button class="button-like setup-save-button" type="submit" name="reader_action" value="uninstall" {% if not reader_management.can_uninstall %}disabled{% endif %}>Reader deinstallieren</button>
+      </div>
     </form>
 
     <form method="post" class="panel-box setup-save-card">

@@ -290,11 +290,13 @@ def probe_rc522_backend():
     probe_results = []
     for spi_device, rst_pin in ((0, 25), (0, 22), (1, 25), (1, 22)):
         backend = None
+        keep_backend = False
         try:
             backend = LowLevelRC522Backend(spi_bus=0, spi_device=spi_device, rst_pin=rst_pin)
             version = backend.version()
             probe_results.append((spi_device, rst_pin, version))
             if is_valid_rc522_version(version):
+                keep_backend = True
                 return {
                     "ok": True,
                     "message": "RC522 bereit.",
@@ -304,7 +306,7 @@ def probe_rc522_backend():
         except Exception as exc:
             probe_results.append((spi_device, rst_pin, f"ERR:{exc}"))
         finally:
-            if backend is not None:
+            if backend is not None and not keep_backend:
                 backend.cleanup()
 
     formatted = ", ".join(
@@ -325,7 +327,7 @@ def probe_rc522_backend():
 class BaseReader:
     presence_reader = False
     ready = False
-    status_message = "Kein Reader initialisiert."
+    status_message = "Kein Reader installiert."
     status_details = []
 
     def poll(self):
@@ -591,7 +593,7 @@ def main():
     try:
         while True:
             setup = load_setup()
-            configured_type = (((setup.get("reader") or {}).get("type")) or "USB").strip()
+            configured_type = (((setup.get("reader") or {}).get("type")) or "NONE").strip()
             if configured_type != reader_type:
                 if reader is not None:
                     reader.cleanup()
