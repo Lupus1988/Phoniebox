@@ -703,6 +703,14 @@ def save_reader_status(configured_type, ready, message, details=None):
     )
 
 
+def current_boot_timestamp():
+    try:
+        uptime_seconds = float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0
+    return int(time.time() - uptime_seconds)
+
+
 def normalize_setup_data(data):
     reader = data.setdefault("reader", {})
     installed_type = normalize_reader_type(reader.get("type"))
@@ -711,19 +719,27 @@ def normalize_setup_data(data):
     reader["target_type"] = target_type
     state = (reader.get("install_state") or "").strip() or ("installed" if installed_type != READER_NONE_ID else "not_installed")
     needs_reboot = bool(reader.get("needs_reboot", False))
+    reboot_requested_at = to_int(reader.get("reboot_requested_at"), 0, 0, 9999999999)
     if state not in {"not_installed", "selected", "installed", "reboot_pending", "error"}:
         state = "installed" if installed_type != READER_NONE_ID else "not_installed"
-    if state == "reboot_pending" and installed_type == target_type:
-        state = "installed" if installed_type != READER_NONE_ID else "not_installed"
-        needs_reboot = False
-        if not (reader.get("last_action_message") or "").strip():
+    if state == "reboot_pending":
+        booted_at = current_boot_timestamp()
+        if reboot_requested_at and booted_at and booted_at >= reboot_requested_at:
+            installed_type = target_type
+            reader["type"] = installed_type
+            state = "installed" if installed_type != READER_NONE_ID else "not_installed"
+            needs_reboot = False
+            reboot_requested_at = 0
             reader["last_action_message"] = (
                 "Noch kein Reader installiert."
                 if installed_type == READER_NONE_ID
                 else f"{current_reader_option(installed_type)['label']} ist installiert."
             )
+    else:
+        reboot_requested_at = 0
     reader["install_state"] = state
     reader["needs_reboot"] = needs_reboot
+    reader["reboot_requested_at"] = reboot_requested_at
     reader["last_action_message"] = (reader.get("last_action_message") or "").strip() or (
         "Noch kein Reader installiert." if installed_type == READER_NONE_ID else f"{current_reader_option(installed_type)['label']} ist installiert."
     )
@@ -788,16 +804,32 @@ def apply_reader_install_action(data, action, selected_type):
                 "target_type": target_type,
             }
 
-    reader["type"] = target_type
+    reboot_required = reader_requires_reboot(current_type, target_type)
+    reader["type"] = current_type if reboot_required else target_type
     reader["target_type"] = target_type
-    reader["install_state"] = "reboot_pending" if reader_requires_reboot(current_type, target_type) else ("installed" if target_type != READER_NONE_ID else "not_installed")
-    reader["needs_reboot"] = reader["install_state"] == "reboot_pending"
+    reader["install_state"] = "reboot_pending" if reboot_required else ("installed" if target_type != READER_NONE_ID else "not_installed")
+    reader["needs_reboot"] = reboot_required
+    reader["reboot_requested_at"] = int(time.time()) if reboot_required else 0
     if action == "install":
-        reader["last_action_message"] = f"{current_reader_option(target_type)['label']} wurde vorbereitet."
-        save_reader_status(target_type, False, "Reader-Installation vorbereitet.", ["System wird für den gewählten Reader eingerichtet."])
+        reader["last_action_message"] = (
+            f"{current_reader_option(target_type)['label']} wird nach dem Neustart installiert."
+            if reboot_required
+            else f"{current_reader_option(target_type)['label']} wurde vorbereitet."
+        )
+        save_reader_status(
+            target_type,
+            False,
+            "Reader-Installation vorbereitet.",
+            ["System wird für den gewählten Reader eingerichtet."] + ([f"Neustart erforderlich für {current_reader_option(target_type)['label']}."] if reboot_required else []),
+        )
     else:
-        reader["last_action_message"] = "Reader wurde deinstalliert."
-        save_reader_status(READER_NONE_ID, False, "Kein Reader installiert.", [])
+        reader["last_action_message"] = "Reader wird nach dem Neustart entfernt." if reboot_required else "Reader wurde deinstalliert."
+        save_reader_status(
+            current_type if reboot_required else READER_NONE_ID,
+            False,
+            "Reader-Deinstallation vorbereitet." if reboot_required else "Kein Reader installiert.",
+            ["System bereitet die Reader-Entfernung vor."] if reboot_required else [],
+        )
     save_setup(data)
     if reader["needs_reboot"]:
         schedule_reboot()

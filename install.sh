@@ -67,6 +67,16 @@ sudo "$VENV_DIR/bin/pip" uninstall -y RPi.GPIO || true
 sudo "$VENV_DIR/bin/pip" install --upgrade rpi-lgpio
 # Match the reference RC522 stack without reintroducing the broken legacy RPi.GPIO dependency.
 sudo "$VENV_DIR/bin/pip" install --upgrade --force-reinstall --no-deps pi-rc522==2.3.0
+PY_MINOR=$(python3 - <<'EOF'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+EOF
+)
+sudo tee "$VENV_DIR/lib/python${PY_MINOR}/site-packages/phoniebox-system-site.pth" >/dev/null <<EOF
+/usr/local/lib/python${PY_MINOR}/dist-packages
+/usr/lib/python3/dist-packages
+/usr/lib/python${PY_MINOR}/dist-packages
+EOF
 sudo "$VENV_DIR/bin/python" -c "import sys; sys.path.insert(0, '$APP_DIR'); from app import ensure_data_files; ensure_data_files()"
 
 if [ -d "$BACKUP_DIR/data" ]; then

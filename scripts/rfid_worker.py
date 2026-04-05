@@ -1,6 +1,7 @@
 #!/opt/phoniebox-panel/.venv/bin/python
 import json
 import os
+import sysconfig
 import subprocess
 import sys
 import time
@@ -12,6 +13,22 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
+
+
+def add_system_site_packages():
+    version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    candidates = [
+        Path(f"/usr/local/lib/python{version}/dist-packages"),
+        Path("/usr/lib/python3/dist-packages"),
+        Path(f"/usr/lib/python{version}/dist-packages"),
+    ]
+    for path in candidates:
+        raw = str(path)
+        if path.exists() and raw not in sys.path:
+            sys.path.append(raw)
+
+
+add_system_site_packages()
 
 from hardware.rfid import decode_keycode_to_char, discover_usb_keyboard_devices, evdev_available
 

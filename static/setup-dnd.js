@@ -4,6 +4,32 @@ document.addEventListener("DOMContentLoaded", () => {
   let detectPollTimer = null;
   let readerRebootTimer = null;
 
+  const readerForm = document.querySelector("[data-reader-form]");
+  if (readerForm) {
+    const installedReader = (readerForm.dataset.installedReader || "NONE").trim();
+    const typeSelect = readerForm.querySelector("[data-reader-type-select]");
+    const installButton = readerForm.querySelector("[data-reader-install-button]");
+    const uninstallButton = readerForm.querySelector("[data-reader-uninstall-button]");
+
+    const syncReaderButtons = () => {
+      if (!(typeSelect instanceof HTMLSelectElement)) {
+        return;
+      }
+      const selectedType = (typeSelect.value || "NONE").trim();
+      if (installButton instanceof HTMLButtonElement) {
+        installButton.disabled = selectedType === "NONE" || selectedType === installedReader;
+      }
+      if (uninstallButton instanceof HTMLButtonElement) {
+        uninstallButton.disabled = installedReader === "NONE";
+      }
+    };
+
+    if (typeSelect instanceof HTMLSelectElement) {
+      typeSelect.addEventListener("change", syncReaderButtons);
+    }
+    syncReaderButtons();
+  }
+
   function emptyLabel(slot) {
     return slot.dataset.emptyLabel || "Funktion hierhin ziehen";
   }
@@ -334,6 +360,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const countdownNode = readerRebootDialog.querySelector("[data-reader-reboot-countdown]");
     const titleNode = readerRebootDialog.querySelector("[data-reader-reboot-title]");
     const copyNode = readerRebootDialog.querySelector("[data-reader-reboot-copy]");
+    const refreshButton = readerRebootDialog.querySelector("[data-reader-reboot-refresh]");
     const action = readerRebootDialog.dataset.action || "";
     const initialSeconds = Number.parseInt(readerRebootDialog.dataset.seconds || "0", 10);
 
@@ -341,6 +368,15 @@ document.addEventListener("DOMContentLoaded", () => {
       if (countdownNode) {
         countdownNode.textContent = `Neustart in ${Math.max(seconds, 0)}S`;
       }
+    }
+
+    function stripReaderRebootQuery() {
+      const currentUrl = new URL(window.location.href);
+      currentUrl.searchParams.delete("reader_reboot");
+      currentUrl.searchParams.delete("reader_action");
+      currentUrl.searchParams.delete("reboot_seconds");
+      const normalized = `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`;
+      window.history.replaceState({}, "", normalized || "/setup");
     }
 
     if (titleNode) {
@@ -351,6 +387,11 @@ document.addEventListener("DOMContentLoaded", () => {
         ? "Die Reader-Konfiguration wird entfernt. Das System startet gleich neu."
         : "Die Reader-Konfiguration wird eingerichtet. Das System startet gleich neu.";
     }
+    if (refreshButton instanceof HTMLButtonElement) {
+      refreshButton.addEventListener("click", () => {
+        window.location.assign("/setup");
+      });
+    }
 
     if (readerRebootDialog.dataset.active === "true" && Number.isFinite(initialSeconds) && initialSeconds > 0) {
       renderReaderRebootCountdown(initialSeconds);
@@ -358,10 +399,16 @@ document.addEventListener("DOMContentLoaded", () => {
       let remainingSeconds = initialSeconds;
       readerRebootTimer = window.setInterval(() => {
         remainingSeconds -= 1;
+        if (remainingSeconds <= 1) {
+          stripReaderRebootQuery();
+        }
         renderReaderRebootCountdown(remainingSeconds);
         if (remainingSeconds <= 0) {
           window.clearInterval(readerRebootTimer);
           readerRebootTimer = null;
+          if (refreshButton instanceof HTMLButtonElement) {
+            refreshButton.hidden = false;
+          }
         }
       }, 1000);
     }
