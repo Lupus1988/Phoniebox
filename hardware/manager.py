@@ -62,7 +62,7 @@ def detect_reader(setup_data):
         elif not (Path("/dev/spidev0.0").exists() or Path("/dev/spidev0.1").exists()):
             result["notes"].append("SPI-Gerät nicht sichtbar. Für echte Hardware später SPI aktivieren.")
         else:
-            result["notes"].append("RC522 ausgewählt. Live-Status folgt nach RFID-Initialisierung.")
+            result["notes"].append("RC522 ausgewählt. Referenzpfad: CE0/GPIO8, RST/GPIO22, IRQ/GPIO18.")
     elif reader_type == "PN532_I2C":
         result["driver"] = "pn532"
         result["transport"] = "i2c"

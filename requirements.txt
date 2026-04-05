@@ -2,4 +2,7 @@ Flask>=3.0,<4.0
 gunicorn>=23.0,<24.0
 adafruit-blinka>=8.0,<9.0
 adafruit-circuitpython-pn532>=2.0,<3.0
-mfrc522-python>=0.0.9,<0.1
+# Keep the RPi.GPIO API on newer Raspberry Pi OS / kernel versions via lgpio.
+rpi-lgpio
+evdev
+spidev

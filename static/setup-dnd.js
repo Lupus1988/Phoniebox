@@ -2,6 +2,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let draggedFunction = "";
   let selectedChip = null;
   let detectPollTimer = null;
+  let readerRebootTimer = null;
 
   function emptyLabel(slot) {
     return slot.dataset.emptyLabel || "Funktion hierhin ziehen";
@@ -326,6 +327,44 @@ document.addEventListener("DOMContentLoaded", () => {
         audioTestButton.textContent = originalLabel;
       }
     });
+  }
+
+  const readerRebootDialog = document.querySelector("[data-reader-reboot-dialog]");
+  if (readerRebootDialog instanceof HTMLDialogElement) {
+    const countdownNode = readerRebootDialog.querySelector("[data-reader-reboot-countdown]");
+    const titleNode = readerRebootDialog.querySelector("[data-reader-reboot-title]");
+    const copyNode = readerRebootDialog.querySelector("[data-reader-reboot-copy]");
+    const action = readerRebootDialog.dataset.action || "";
+    const initialSeconds = Number.parseInt(readerRebootDialog.dataset.seconds || "0", 10);
+
+    function renderReaderRebootCountdown(seconds) {
+      if (countdownNode) {
+        countdownNode.textContent = `Neustart in ${Math.max(seconds, 0)}S`;
+      }
+    }
+
+    if (titleNode) {
+      titleNode.textContent = action === "uninstall" ? "Reader wird deinstalliert" : "Reader wird installiert";
+    }
+    if (copyNode) {
+      copyNode.textContent = action === "uninstall"
+        ? "Die Reader-Konfiguration wird entfernt. Das System startet gleich neu."
+        : "Die Reader-Konfiguration wird eingerichtet. Das System startet gleich neu.";
+    }
+
+    if (readerRebootDialog.dataset.active === "true" && Number.isFinite(initialSeconds) && initialSeconds > 0) {
+      renderReaderRebootCountdown(initialSeconds);
+      readerRebootDialog.showModal();
+      let remainingSeconds = initialSeconds;
+      readerRebootTimer = window.setInterval(() => {
+        remainingSeconds -= 1;
+        renderReaderRebootCountdown(remainingSeconds);
+        if (remainingSeconds <= 0) {
+          window.clearInterval(readerRebootTimer);
+          readerRebootTimer = null;
+        }
+      }, 1000);
+    }
   }
 
   for (const ledRow of document.querySelectorAll(".led-row")) {

@@ -1,7 +1,7 @@
 def reserved_reader_pins(reader_type):
     reader_type = (reader_type or "").strip().upper()
     if reader_type == "RC522":
-        return {"GPIO8", "GPIO9", "GPIO10", "GPIO11", "GPIO22", "GPIO25"}
+        return {"GPIO8", "GPIO9", "GPIO10", "GPIO11", "GPIO18", "GPIO22"}
     if reader_type == "PN532_I2C":
         return {"GPIO2", "GPIO3"}
     if reader_type == "PN532_SPI":
@@ -34,6 +34,7 @@ def potential_reader_pins():
         "GPIO11",
         "GPIO14",
         "GPIO15",
+        "GPIO18",
         "GPIO22",
         "GPIO25",
     }

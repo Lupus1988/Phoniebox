@@ -1,5 +1,6 @@
 #!/opt/phoniebox-panel/.venv/bin/python
 import json
+import os
 import subprocess
 import sys
 import time
@@ -25,9 +26,12 @@ else:
 DATA_DIR = BASE_DIR / "data"
 SETUP_FILE = DATA_DIR / "setup.json"
 READER_STATUS_FILE = DATA_DIR / "reader_status.json"
-RUNTIME_RFID_URL = "http://127.0.0.1:5080/api/runtime/rfid"
-RUNTIME_RFID_REMOVE_URL = "http://127.0.0.1:5080/api/runtime/rfid/remove"
+PANEL_PORT = int(os.environ.get("PHONIEBOX_PORT", "80"))
+RUNTIME_RFID_URL = f"http://127.0.0.1:{PANEL_PORT}/api/runtime/rfid"
+RUNTIME_RFID_REMOVE_URL = f"http://127.0.0.1:{PANEL_PORT}/api/runtime/rfid/remove"
 VALID_RC522_VERSION_REG_VALUES = {0x91, 0x92}
+RC522_PROBE_ORDER = ((0, 22), (0, 25), (1, 22), (1, 25))
+RC522_DEFAULT_IRQ_PIN = 18
 
 
 def load_setup():
@@ -288,25 +292,23 @@ def probe_rc522_backend():
         }
 
     probe_results = []
-    for spi_device, rst_pin in ((0, 25), (0, 22), (1, 25), (1, 22)):
+    for spi_device, rst_pin in RC522_PROBE_ORDER:
         backend = None
-        keep_backend = False
         try:
             backend = LowLevelRC522Backend(spi_bus=0, spi_device=spi_device, rst_pin=rst_pin)
             version = backend.version()
             probe_results.append((spi_device, rst_pin, version))
             if is_valid_rc522_version(version):
-                keep_backend = True
                 return {
                     "ok": True,
                     "message": "RC522 bereit.",
-                    "details": [],
-                    "backend": backend,
+                    "details": [f"SPI-Antwort erkannt auf CE{spi_device}/RST{rst_pin}."],
+                    "config": {"spi_bus": 0, "spi_device": spi_device, "rst_pin": rst_pin, "irq_pin": RC522_DEFAULT_IRQ_PIN},
                 }
         except Exception as exc:
             probe_results.append((spi_device, rst_pin, f"ERR:{exc}"))
         finally:
-            if backend is not None and not keep_backend:
+            if backend is not None:
                 backend.cleanup()
 
     formatted = ", ".join(
@@ -320,8 +322,33 @@ def probe_rc522_backend():
             "Der Chip antwortet nicht über SPI.",
             formatted,
         ],
-        "backend": None,
+        "config": None,
     }
+
+
+class PiRc522ReaderBackend:
+    def __init__(self, spi_bus=0, spi_device=0, rst_pin=22, irq_pin=18):
+        from pirc522 import RFID
+
+        self.spi_bus = spi_bus
+        self.spi_device = spi_device
+        self.rst_pin = rst_pin
+        self.irq_pin = irq_pin
+        self.reader = RFID(bus=spi_bus, device=spi_device, speed=1_000_000, pin_rst=rst_pin, pin_ce=spi_device, pin_irq=irq_pin)
+
+    def read_uid(self):
+        error, _tag_type = self.reader.request()
+        if error:
+            return None
+        error, uid = self.reader.anticoll()
+        if error or not uid:
+            return None
+        return "".join(str(value) for value in uid)
+
+    def cleanup(self):
+        method = getattr(self.reader, "cleanup", None)
+        if callable(method):
+            method()
 
 
 class BaseReader:
@@ -431,9 +458,10 @@ class RC522Reader(BaseReader):
 
     def __init__(self):
         self.reader = None
+        self.reader_config = None
         self.ready = False
         self.status_message = "RC522 noch nicht initialisiert."
-        self.status_details = ["Prüfe SPI und Python-Treiber."]
+        self.status_details = ["Prüfe SPI, Verdrahtung und Python-Treiber."]
         pinmux = ensure_spi_pinmux()
         if not pinmux["ok"]:
             self.status_message = pinmux["message"]
@@ -445,10 +473,24 @@ class RC522Reader(BaseReader):
             self.status_message = probe["message"]
             self.status_details = probe["details"]
             return
-        self.reader = probe["backend"]
+        self.reader_config = probe["config"]
+        try:
+            self.reader = PiRc522ReaderBackend(**self.reader_config)
+        except Exception as exc:
+            self.reader = None
+            self.status_message = f"RC522-Treiber konnte nicht gestartet werden: {exc}"
+            self.status_details = [
+                "Der Chip antwortet zwar über SPI, der Python-Reader konnte aber nicht geöffnet werden.",
+                *probe.get("details", []),
+                "Erwartete Verdrahtung: CE0/GPIO8, RST/GPIO22, IRQ/GPIO18.",
+            ]
+            return
         self.ready = True
         self.status_message = "RC522 bereit."
-        self.status_details = []
+        self.status_details = [
+            *probe.get("details", []),
+            "Erwartete Verdrahtung: CE0/GPIO8, RST/GPIO22, IRQ/GPIO18.",
+        ]
 
     def _read_uid(self):
         if self.reader is None:
@@ -463,13 +505,15 @@ class RC522Reader(BaseReader):
             uid = self._read_uid()
             self.ready = True
             self.status_message = "RC522 bereit."
-            self.status_details = []
+            self.status_details = [
+                "Erwartete Verdrahtung: CE0/GPIO8, RST/GPIO22, IRQ/GPIO18.",
+            ]
         except Exception as exc:
             self.ready = False
             self.status_message = f"RC522 Lesefehler: {exc}"
             self.status_details = [
                 "Reader wurde erkannt, konnte aber keinen Tag sauber lesen.",
-                "Prüfe Verdrahtung und Tag-Abstand.",
+                "Prüfe Verdrahtung, IRQ18, Tag-Abstand und mögliche GPIO-Konflikte.",
             ]
             return None
         return str(uid) if uid else None

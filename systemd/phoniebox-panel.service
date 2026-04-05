@@ -8,8 +8,8 @@ Type=simple
 WorkingDirectory=/opt/phoniebox-panel
 Environment=PYTHONUNBUFFERED=1
 Environment=PHONIEBOX_HOST=0.0.0.0
-Environment=PHONIEBOX_PORT=5080
-ExecStart=/opt/phoniebox-panel/.venv/bin/gunicorn --workers 2 --bind 0.0.0.0:5080 wsgi:app
+Environment=PHONIEBOX_PORT=80
+ExecStart=/opt/phoniebox-panel/.venv/bin/gunicorn --workers 2 --bind 0.0.0.0:80 wsgi:app
 Restart=always
 RestartSec=3
 

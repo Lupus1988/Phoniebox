@@ -647,15 +647,47 @@ label {
 }
 
 .library-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
   gap: 1rem;
   margin-bottom: 1rem;
 }
 
+.library-toolbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
 .library-add-button {
   min-width: 220px;
+}
+
+.library-storage-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.library-storage-card {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.9rem 1rem;
+  border: 2px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.library-storage-card span,
+.library-storage-card em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 0.84rem;
+}
+
+.library-storage-card strong {
+  font-size: 1.15rem;
+  color: var(--ink);
 }
 
 .library-top-grid,
@@ -1691,6 +1723,28 @@ dialog[data-sleep-rotation-dialog]::backdrop {
   box-shadow: var(--shadow);
 }
 
+.reader-reboot-modal-body {
+  width: min(420px, calc(100vw - 2rem));
+  text-align: center;
+}
+
+.reader-reboot-modal-body .panel-box-head {
+  align-items: center;
+}
+
+.reader-reboot-modal-body .panel-box-head span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 10.5rem;
+  margin: 0 auto;
+  padding: 0.55rem 0.9rem;
+  border: 2px solid var(--line);
+  border-radius: 999px;
+  background: rgba(125, 176, 176, 0.16);
+  color: var(--ink);
+}
+
 .page-footer {
   margin-top: 1.8rem;
   padding-top: 1rem;
@@ -1717,6 +1771,7 @@ dialog[data-sleep-rotation-dialog]::backdrop {
   .setup-core-grid,
   .system-grid,
   .now-playing-grid,
+  .library-storage-grid,
   .library-table-head,
   .library-table-row,
   .mapping-table-head,

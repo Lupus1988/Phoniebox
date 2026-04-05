@@ -1,3 +1,4 @@
+import copy
 import io
 import json
 import os
@@ -586,6 +587,50 @@ def save_library(data):
     save_json(LIBRARY_FILE, data)
 
 
+def format_storage_size(num_bytes):
+    value = max(0, int(num_bytes or 0))
+    units = ["B", "KB", "MB", "GB", "TB"]
+    index = 0
+    value_float = float(value)
+    while value_float >= 1024 and index < len(units) - 1:
+        value_float /= 1024.0
+        index += 1
+    if index == 0:
+        return f"{int(value_float)} {units[index]}"
+    return f"{value_float:.1f} {units[index]}"
+
+
+def library_storage_summary():
+    target_path = ALBUMS_DIR if ALBUMS_DIR.exists() else BASE_DIR
+    try:
+        usage = shutil.disk_usage(target_path)
+    except OSError:
+        return {
+            "total_bytes": 0,
+            "used_bytes": 0,
+            "free_bytes": 0,
+            "total_label": "Unbekannt",
+            "used_label": "Unbekannt",
+            "free_label": "Unbekannt",
+            "used_percent": 0,
+            "target_path": str(target_path),
+        }
+    total_bytes = int(usage.total)
+    used_bytes = int(usage.used)
+    free_bytes = int(usage.free)
+    used_percent = int(round((used_bytes / total_bytes) * 100)) if total_bytes > 0 else 0
+    return {
+        "total_bytes": total_bytes,
+        "used_bytes": used_bytes,
+        "free_bytes": free_bytes,
+        "total_label": format_storage_size(total_bytes),
+        "used_label": format_storage_size(used_bytes),
+        "free_label": format_storage_size(free_bytes),
+        "used_percent": max(0, min(100, used_percent)),
+        "target_path": str(target_path),
+    }
+
+
 def load_settings():
     return merge_defaults(load_json(SETTINGS_FILE, default_settings()), default_settings())
 
@@ -596,7 +641,11 @@ def save_settings(data):
 
 def load_setup():
     data = merge_defaults(load_json(SETUP_FILE, default_setup()), default_setup())
-    return normalize_setup_data(data)
+    original = copy.deepcopy(data)
+    normalized = normalize_setup_data(data)
+    if normalized != original:
+        save_setup(normalized)
+    return normalized
 
 
 def save_setup(data):
@@ -661,10 +710,20 @@ def normalize_setup_data(data):
     reader["type"] = installed_type
     reader["target_type"] = target_type
     state = (reader.get("install_state") or "").strip() or ("installed" if installed_type != READER_NONE_ID else "not_installed")
+    needs_reboot = bool(reader.get("needs_reboot", False))
     if state not in {"not_installed", "selected", "installed", "reboot_pending", "error"}:
         state = "installed" if installed_type != READER_NONE_ID else "not_installed"
+    if state == "reboot_pending" and installed_type == target_type:
+        state = "installed" if installed_type != READER_NONE_ID else "not_installed"
+        needs_reboot = False
+        if not (reader.get("last_action_message") or "").strip():
+            reader["last_action_message"] = (
+                "Noch kein Reader installiert."
+                if installed_type == READER_NONE_ID
+                else f"{current_reader_option(installed_type)['label']} ist installiert."
+            )
     reader["install_state"] = state
-    reader["needs_reboot"] = bool(reader.get("needs_reboot", False))
+    reader["needs_reboot"] = needs_reboot
     reader["last_action_message"] = (reader.get("last_action_message") or "").strip() or (
         "Noch kein Reader installiert." if installed_type == READER_NONE_ID else f"{current_reader_option(installed_type)['label']} ist installiert."
     )
@@ -694,7 +753,10 @@ def reader_install_state(reader_config):
     }
 
 
-def schedule_reboot(delay_seconds=3):
+READER_REBOOT_DELAY_SECONDS = 8
+
+
+def schedule_reboot(delay_seconds=READER_REBOOT_DELAY_SECONDS):
     subprocess.Popen(
         ["/bin/sh", "-c", f"sleep {max(int(delay_seconds), 1)} && systemctl reboot"],
         stdout=subprocess.DEVNULL,
@@ -1229,6 +1291,8 @@ def network_targets(setup_data):
         "recommended_name": f"{hostname}.local",
         "custom_box_name": "phonie.box",
         "supports_custom_box": False,
+        "panel_url": f"http://{hostname}.local",
+        "panel_ip_example": "http://192.168.0.xxx",
     }
 
 
@@ -1543,7 +1607,12 @@ def library():
             return redirect(url_for("library"))
 
     enrich_library_data(library_data)
-    return render_template("library.html", library_data=library_data, link_session=load_link_session())
+    return render_template(
+        "library.html",
+        library_data=library_data,
+        link_session=load_link_session(),
+        storage_summary=library_storage_summary(),
+    )
 
 
 @app.route("/settings", methods=["GET", "POST"])
@@ -1661,23 +1730,23 @@ def setup():
         section = request.form.get("section", "").strip()
 
         if section == "reader":
-            action = request.form.get("reader_action", "select").strip() or "select"
+            action = request.form.get("reader_action", "").strip()
             selected_type = normalize_reader_type(request.form.get("reader_type", data.get("reader", {}).get("target_type")))
             data["reader"]["target_type"] = selected_type
-            if action == "select":
-                data["reader"]["install_state"] = "selected"
-                data["reader"]["needs_reboot"] = False
-                data["reader"]["last_action_message"] = f"Ausgewählt: {current_reader_option(selected_type)['label']}"
-                save_setup(data)
-                flash("Reader-Auswahl gespeichert. Für Hardware-Reader jetzt installieren.", "success")
-                return redirect(url_for("setup"))
             if action in {"install", "uninstall"}:
                 result = apply_reader_install_action(data, action, selected_type)
+                redirect_kwargs = {}
+                if result.get("reboot_scheduled"):
+                    redirect_kwargs = {
+                        "reader_reboot": "1",
+                        "reader_action": action,
+                        "reboot_seconds": READER_REBOOT_DELAY_SECONDS,
+                    }
                 flash(
                     f"{result['message']} Reboot wird gestartet." if result.get("reboot_scheduled") else result["message"],
                     "success" if result["ok"] else "error",
                 )
-                return redirect(url_for("setup"))
+                return redirect(url_for("setup", **redirect_kwargs))
             flash("Unbekannte Reader-Aktion.", "error")
             return redirect(url_for("setup"))
 
@@ -1916,6 +1985,11 @@ def setup():
 
     wifi_snapshot = get_wifi_snapshot()
     reader_management = reader_install_state(data.get("reader", {}))
+    reader_reboot_notice = {
+        "active": request.args.get("reader_reboot") == "1",
+        "action": request.args.get("reader_action", "").strip(),
+        "seconds": to_int(request.args.get("reboot_seconds"), READER_REBOOT_DELAY_SECONDS, 1, 60),
+    }
     return render_template(
         "setup.html",
         setup_data=data,
@@ -1931,6 +2005,7 @@ def setup():
         runtime_state=runtime_snapshot["runtime"],
         button_mapping_rows=button_mapping_rows(data),
         reader_option=reader_management["target_option"],
+        reader_reboot_notice=reader_reboot_notice,
     )
 
 
@@ -2168,5 +2243,5 @@ def api_library_link_session_cancel():
 if __name__ == "__main__":
     ensure_data_files()
     host = os.environ.get("PHONIEBOX_HOST", "0.0.0.0").strip() or "0.0.0.0"
-    port = int(os.environ.get("PHONIEBOX_PORT", "5080"))
+    port = int(os.environ.get("PHONIEBOX_PORT", "80"))
     app.run(host=host, port=port, debug=False)

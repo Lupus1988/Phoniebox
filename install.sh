@@ -13,6 +13,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+has_remote_shell() {
+  if [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_CLIENT:-}" ] || [ -n "${SSH_TTY:-}" ]; then
+    return 0
+  fi
+  who -m 2>/dev/null | grep -qE '\([[:alnum:].:%-]+\)$'
+}
+
 echo "Installiere Phoniebox Panel nach $APP_DIR"
 
 if [ -d "$APP_DIR/data" ]; then
@@ -32,7 +39,7 @@ sudo mkdir -p "$APP_DIR" "$BIN_DIR"
 sudo cp -a "$SOURCE_DIR"/. "$APP_DIR"/
 
 sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip python3-rpi.gpio python3-evdev python3-spidev python3-smbus2 python3-serial network-manager avahi-daemon alsa-utils mpg123
+sudo apt-get install -y python3 python3-venv python3-pip python3-lgpio python3-evdev python3-spidev python3-smbus2 python3-serial network-manager avahi-daemon alsa-utils mpg123
 
 if command -v raspi-config >/dev/null 2>&1; then
   sudo raspi-config nonint do_i2c 0 || true
@@ -55,6 +62,11 @@ sudo cp systemd/phoniebox-hdmi-off.service "$SERVICE_DIR"/
 sudo python3 -m venv "$VENV_DIR"
 sudo "$VENV_DIR/bin/pip" install --upgrade pip
 sudo "$VENV_DIR/bin/pip" install -r "$APP_DIR/requirements.txt"
+# Some upstream packages still pull the legacy RPi.GPIO wheel, which breaks GPIO on newer Pi kernels.
+sudo "$VENV_DIR/bin/pip" uninstall -y RPi.GPIO || true
+sudo "$VENV_DIR/bin/pip" install --upgrade rpi-lgpio
+# Match the reference RC522 stack without reintroducing the broken legacy RPi.GPIO dependency.
+sudo "$VENV_DIR/bin/pip" install --upgrade --force-reinstall --no-deps pi-rc522==2.3.0
 sudo "$VENV_DIR/bin/python" -c "import sys; sys.path.insert(0, '$APP_DIR'); from app import ensure_data_files; ensure_data_files()"
 
 if [ -d "$BACKUP_DIR/data" ]; then
@@ -99,13 +111,13 @@ sudo systemctl restart phoniebox-gpio-poll.service
 sudo systemctl restart phoniebox-leds.service
 sudo systemctl restart phoniebox-rfid.service
 sudo systemctl restart phoniebox-hdmi-off.service
-if [ -z "${SSH_CONNECTION:-}" ]; then
-  sudo systemctl restart phoniebox-network-bootstrap.service || true
+if has_remote_shell; then
+  echo "Aktive Remote-Sitzung erkannt: Netzwerkprofil nur vorbereitet, nicht live umgeschaltet."
 else
-  echo "Aktive SSH-Sitzung erkannt: Netzwerkprofil nur vorbereitet, nicht live umgeschaltet."
+  sudo systemctl restart phoniebox-network-bootstrap.service || true
 fi
 sudo systemctl restart phoniebox-hotspot-fallback.timer
 sudo systemctl restart phoniebox-runtime-tick.timer
 
 echo "Installation abgeschlossen."
-echo "Panel: http://phoniebox.local:5080"
+echo "Panel: http://phoniebox.local"

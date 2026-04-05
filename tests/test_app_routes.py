@@ -144,11 +144,10 @@ class AppRoutesTest(unittest.TestCase):
         led_pins = pin_choices(setup, "led")
 
         self.assertNotIn("GPIO22", button_pins)
-        self.assertNotIn("GPIO25", button_pins)
         self.assertNotIn("GPIO20", button_pins)
         self.assertNotIn("GPIO22", led_pins)
 
-    def test_reader_select_action_only_updates_target_type(self):
+    def test_unknown_reader_action_does_not_save_setup(self):
         setup = default_setup()
         runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
 
@@ -162,9 +161,7 @@ class AppRoutesTest(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 302)
-        saved = save_setup.call_args.args[0]
-        self.assertEqual(saved["reader"]["type"], "NONE")
-        self.assertEqual(saved["reader"]["target_type"], "RC522")
+        save_setup.assert_not_called()
 
     def test_reader_install_action_uses_transition_helper(self):
         setup = default_setup()

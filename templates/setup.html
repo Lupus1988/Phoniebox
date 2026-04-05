@@ -20,7 +20,7 @@
   {% endif %}
 
   <section class="setup-hero-grid">
-    <form method="post" class="panel-box setup-save-card">
+    <form method="post" class="panel-box setup-save-card" data-reader-form>
       <input type="hidden" name="section" value="reader">
       <div class="panel-box-head">
         <h3>RFID-Reader</h3>
@@ -43,11 +43,9 @@
         {% endif %}
       </div>
       <p class="page-copy">Installiert: {{ reader_management.installed_option.label }} · Ausgewählt: {{ reader_management.target_option.label }}</p>
-      <p class="page-copy">Ein Reader wird hier nicht live umgeschaltet, sondern gezielt installiert oder deinstalliert. Hardware-Reader werden danach mit Reboot aktiviert.</p>
       {% if reader_option.id != "NONE" %}
         <p class="page-copy">Treiber: {{ reader_option.driver }} · Transport: {{ reader_option.transport }}</p>
       {% endif %}
-      <p class="page-copy">Pins, die vom installierten Reader gebraucht werden, verschwinden automatisch aus den Tasten- und LED-Dropdowns.</p>
       <div class="reader-status-box {% if reader_status.ready %}is-ready{% else %}is-warning{% endif %}">
         <strong>Reader-Status</strong>
         <p>{{ reader_management.message }}</p>
@@ -61,7 +59,6 @@
         {% endif %}
       </div>
       <div class="setup-action-row">
-        <button class="button-like setup-save-button" type="submit" name="reader_action" value="select">Auswahl speichern</button>
         <button class="primary setup-save-button" type="submit" name="reader_action" value="install" {% if not reader_management.can_install %}disabled{% endif %}>Reader installieren</button>
         <button class="button-like setup-save-button" type="submit" name="reader_action" value="uninstall" {% if not reader_management.can_uninstall %}disabled{% endif %}>Reader deinstallieren</button>
       </div>
@@ -101,7 +98,6 @@
         </label>
         {% endif %}
       </div>
-      <p class="page-copy">Pins, die von der Soundkarte gebraucht werden, verschwinden automatisch aus den Tasten- und LED-Dropdowns.</p>
       <ul class="plain-list">
         {% if audio_environment.recommended_external_card %}
           <li>Pi Zero 2 W erkannt: USB-DAC oder I2S-HAT als Standardpfad einplanen.</li>
@@ -331,6 +327,7 @@
       <div class="panel-box-head">
         <h3>Hotspot</h3>
       </div>
+      <p class="page-copy">Erreichbar über IP oder {{ network_info.recommended_name }}. Ein zusätzlicher Port ist nicht nötig.</p>
       <form method="post" class="form-grid compact">
         <input type="hidden" name="section" value="wifi">
         <input type="hidden" name="mode" value="{{ setup_data.wifi.mode }}">
@@ -377,6 +374,22 @@
       <form method="dialog">
         <button class="primary" type="submit">Schließen</button>
       </form>
+    </article>
+  </dialog>
+
+  <dialog
+    class="modal"
+    data-reader-reboot-dialog
+    data-active="{{ 'true' if reader_reboot_notice.active else 'false' }}"
+    data-action="{{ reader_reboot_notice.action }}"
+    data-seconds="{{ reader_reboot_notice.seconds }}"
+  >
+    <article class="modal-body reader-reboot-modal-body">
+      <div class="panel-box-head panel-box-head-stack">
+        <h3 data-reader-reboot-title>Reader wird vorbereitet</h3>
+        <span data-reader-reboot-countdown>Neustart in {{ reader_reboot_notice.seconds }}S</span>
+      </div>
+      <p data-reader-reboot-copy>Das System startet gleich neu.</p>
     </article>
   </dialog>
 

@@ -1,8 +1,25 @@
 {% extends "base.html" %}
 {% block content %}
   <section class="library-toolbar">
-    <button type="button" class="primary library-add-button" id="open-album-create">+ Neues Album</button>
-    <span class="status-pill neutral">{{ library_data.albums|length }} Alben</span>
+    <div class="library-toolbar-actions">
+      <button type="button" class="primary library-add-button" id="open-album-create">+ Neues Album</button>
+      <span class="status-pill neutral">{{ library_data.albums|length }} Alben</span>
+    </div>
+    <div class="library-storage-grid">
+      <article class="library-storage-card">
+        <span>Gesamtkapazität</span>
+        <strong>{{ storage_summary.total_label }}</strong>
+      </article>
+      <article class="library-storage-card">
+        <span>Belegt</span>
+        <strong>{{ storage_summary.used_label }}</strong>
+        <em>{{ storage_summary.used_percent }}%</em>
+      </article>
+      <article class="library-storage-card">
+        <span>Frei</span>
+        <strong>{{ storage_summary.free_label }}</strong>
+      </article>
+    </div>
   </section>
 
   <article class="panel-box library-overview-box">

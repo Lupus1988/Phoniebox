@@ -17,15 +17,17 @@ class FakeBackend:
 
 
 class ProbeRC522BackendTest(unittest.TestCase):
-    def test_probe_keeps_successful_backend_open(self):
+    def test_probe_returns_detected_config(self):
         backend = FakeBackend(0x92)
 
         with patch.object(rfid_worker, "LowLevelRC522Backend", return_value=backend):
             result = rfid_worker.probe_rc522_backend()
 
         self.assertTrue(result["ok"])
-        self.assertIs(result["backend"], backend)
-        self.assertFalse(backend.cleaned)
+        self.assertEqual(result["config"]["spi_device"], 0)
+        self.assertEqual(result["config"]["rst_pin"], 22)
+        self.assertEqual(result["config"]["irq_pin"], 18)
+        self.assertTrue(backend.cleaned)
 
     def test_probe_cleans_failed_backend(self):
         backend = FakeBackend(0x00)

@@ -18,7 +18,7 @@ cd Phoniebox
 sudo bash ./install.sh
 ```
 
-Danach ist das Panel standardmaessig unter `http://phoniebox.local:5080` erreichbar.
+Danach ist das Panel standardmaessig unter `http://phoniebox.local` erreichbar.
 
 Der Installer:
 - sichert vorhandene `data/`- und `media/`-Inhalte
@@ -38,7 +38,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Dann erreichbar unter `http://SERVER-IP:5080`.
+Dann erreichbar unter `http://SERVER-IP` oder `http://phoniebox.local`.
 
 Automatische Tests:
 
@@ -62,5 +62,6 @@ Standardverhalten fuer neue Installationen:
 - Fuer `phoniebox.local` wird `avahi-daemon` verwendet.
 - Das Audio-Backend bevorzugt `mpg123`, faellt sonst auf Alternativen oder `mock` zurueck.
 - Reader-Profile fuer `USB`, `RC522` und `PN532` ueber `I2C`, `SPI` und `UART` sind vorbereitet.
+- Der bevorzugte `RC522`-Referenzpfad ist `CE0/GPIO8`, `RST/GPIO22`, `IRQ/GPIO18`.
 - Wichtiger Reader-Befund aus dem Generaltest auf Pi Zero 2 W: Ein frisches System mit aktiviertem SPI erkennt den `RC522` im nackten `spidev`-Test korrekt (`VersionReg = 0x92`). Der spaetere Ausfall liess sich im Repro enger auf Installations-/Boot-Zustaende rund um den Serial-/UART-Pfad eingrenzen, nicht auf `32-bit` gegen `64-bit` als Grundursache.
 - Der Designentwurf liegt unter `docs/Designentwurf.pdf`.
