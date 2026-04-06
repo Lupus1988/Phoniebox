@@ -1,7 +1,22 @@
 import unittest
+from io import BytesIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from app import app, collect_conflicts, cross_role_pin_errors, default_setup, ensure_data_files, normalize_setup_data, pin_choices
+from app import (
+    app,
+    collect_conflicts,
+    cross_role_pin_errors,
+    default_setup,
+    effective_track_entries,
+    ensure_data_files,
+    normalize_setup_data,
+    pin_choices,
+    remove_tracks_from_album,
+    reader_runtime_cleanup_packages,
+    reader_runtime_commands,
+)
 
 
 class AppRoutesTest(unittest.TestCase):
@@ -16,6 +31,31 @@ class AppRoutesTest(unittest.TestCase):
         for path in ("/player", "/library", "/settings", "/setup"):
             response = self.client.get(path)
             self.assertEqual(response.status_code, 200, path)
+
+    def test_album_editor_page_renders(self):
+        library_payload = {
+            "albums": [
+                {
+                    "id": "album-1",
+                    "name": "Testalbum",
+                    "folder": "media/albums/test",
+                    "playlist": "media/albums/test/playlist.m3u",
+                    "track_count": 2,
+                    "rfid_uid": "",
+                    "cover_url": "",
+                    "track_entries": ["eins.mp3", "zwei.mp3"],
+                }
+            ]
+        }
+
+        with patch("app.load_library", return_value=library_payload), patch("app.refresh_album_metadata") as refresh_album:
+            response = self.client.get("/library/album/album-1")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Albumname", response.get_data(as_text=True))
+        self.assertIn("Auswahl löschen", response.get_data(as_text=True))
+        self.assertIn("Auswahl 0/2", response.get_data(as_text=True))
+        refresh_album.assert_called_once()
 
     def test_setup_page_hides_reader_details_when_reader_is_ready(self):
         runtime_snapshot = {"runtime": {"hardware": {"profile": {"reader": {"notes": ["Interne Notiz"]}}}}}
@@ -179,3 +219,135 @@ class AppRoutesTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         apply_action.assert_called_once()
+
+    def test_reader_runtime_cleanup_packages_keep_only_rc522_set(self):
+        cleanup = reader_runtime_cleanup_packages("RC522")
+
+        self.assertNotIn("spidev", cleanup)
+        self.assertIn("evdev", cleanup)
+        self.assertIn("adafruit-circuitpython-pn532", cleanup)
+
+    def test_reader_runtime_commands_for_rc522_install_only_rc522_stack(self):
+        commands = reader_runtime_commands("RC522")
+        joined = [" ".join(command) for command in commands]
+
+        self.assertTrue(any("pip uninstall -y" in item and "evdev" in item for item in joined))
+        self.assertTrue(any("pip install --upgrade spidev" in item for item in joined))
+        self.assertTrue(any("pi-rc522==2.3.0" in item and "--no-deps" in item for item in joined))
+        self.assertFalse(any("pip install --upgrade adafruit-circuitpython-pn532" in item for item in joined))
+
+    def test_add_tracks_xhr_returns_json_error_when_no_files_selected(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "app.load_library",
+            return_value={"albums": [{"id": "album-1", "name": "Test", "folder": "media/albums/test", "playlist": "", "track_count": 0, "rfid_uid": "", "cover_url": ""}]},
+        ):
+            response = self.client.post(
+                "/library",
+                data={"action": "add_tracks", "album_id": "album-1"},
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(response.is_json)
+        self.assertFalse(response.get_json()["ok"])
+
+    def test_add_tracks_xhr_returns_json_success(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+        library_payload = {"albums": [{"id": "album-1", "name": "Test", "folder": "media/albums/test", "playlist": "", "track_count": 0, "rfid_uid": "", "cover_url": ""}]}
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "app.load_library", return_value=library_payload
+        ), patch("app.add_tracks_to_album") as add_tracks, patch("app.save_library") as save_library:
+            response = self.client.post(
+                "/library",
+                data={"action": "add_tracks", "album_id": "album-1", "track_files": (BytesIO(b"fake"), "song.mp3")},
+                content_type="multipart/form-data",
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        self.assertTrue(response.get_json()["ok"])
+        add_tracks.assert_called_once()
+        save_library.assert_called_once_with(library_payload)
+
+    def test_remove_tracks_from_album_requires_selection(self):
+        with self.assertRaises(ValueError):
+            remove_tracks_from_album({"folder": "media/albums/test"}, [])
+
+    def test_remove_tracks_xhr_returns_json_success(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+        album = {"id": "album-1", "name": "Test", "folder": "media/albums/test", "playlist": "", "track_count": 2, "rfid_uid": "", "cover_url": ""}
+        library_payload = {"albums": [album]}
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "app.load_library", return_value=library_payload
+        ), patch("app.remove_tracks_from_album", return_value=2) as remove_tracks, patch("app.save_library") as save_library:
+            response = self.client.post(
+                "/library",
+                data={"action": "remove_tracks", "album_id": "album-1", "track_path": ["eins.mp3", "zwei.mp3"]},
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        self.assertTrue(response.get_json()["ok"])
+        remove_tracks.assert_called_once()
+        save_library.assert_called_once_with(library_payload)
+
+    def test_album_editor_reorder_tracks_redirects_back_to_editor(self):
+        album = {"id": "album-1", "name": "Test", "folder": "media/albums/test", "playlist": "", "track_count": 2, "rfid_uid": "", "cover_url": ""}
+        library_payload = {"albums": [album]}
+
+        with patch("app.load_library", return_value=library_payload), patch("app.reorder_album_tracks") as reorder_tracks, patch(
+            "app.save_library"
+        ) as save_library:
+            response = self.client.post(
+                "/library/album/album-1",
+                data={"action": "reorder_tracks", "track_order": ["zwei.mp3", "eins.mp3"]},
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/library/album/album-1", response.headers["Location"])
+        reorder_tracks.assert_called_once()
+        save_library.assert_called_once_with(library_payload)
+
+    def test_album_editor_rename_track_uses_helper(self):
+        album = {"id": "album-1", "name": "Test", "folder": "media/albums/test", "playlist": "", "track_count": 2, "rfid_uid": "", "cover_url": ""}
+        library_payload = {"albums": [album]}
+
+        with patch("app.load_library", return_value=library_payload), patch("app.rename_track_in_album") as rename_track, patch(
+            "app.save_library"
+        ) as save_library:
+            response = self.client.post(
+                "/library/album/album-1",
+                data={"action": "rename_track", "track_path": "eins.mp3", "new_name": "Erstes Lied"},
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/library/album/album-1", response.headers["Location"])
+        rename_track.assert_called_once_with(album, "eins.mp3", "Erstes Lied")
+        save_library.assert_called_once_with(library_payload)
+
+    def test_effective_track_entries_preserves_playlist_order_and_appends_new_files(self):
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            album_dir = base_dir / "media" / "albums" / "test"
+            album_dir.mkdir(parents=True)
+            (album_dir / "b_track.mp3").write_bytes(b"b")
+            (album_dir / "a_track.mp3").write_bytes(b"a")
+            (album_dir / "c_track.mp3").write_bytes(b"c")
+            (album_dir / "playlist.m3u").write_text("#EXTM3U\nb_track.mp3\na_track.mp3\n", encoding="utf-8")
+            album = {"folder": "media/albums/test", "playlist": "media/albums/test/playlist.m3u"}
+
+            with patch("app.BASE_DIR", base_dir):
+                entries = effective_track_entries(album)
+
+        self.assertEqual(entries, ["b_track.mp3", "a_track.mp3", "c_track.mp3"])

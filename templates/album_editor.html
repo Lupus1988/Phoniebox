@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block content %}
+  <section class="album-editor-topbar">
+    <a href="{{ url_for('library') }}" class="button-like">Zur Bibliothek</a>
+    <span class="status-pill neutral" id="album-track-count-pill">{{ album.track_count }} Titel</span>
+  </section>
+
+  <section class="album-editor-shell" id="album-editor-app" data-album-id="{{ album.id }}">
+    <article class="panel-box album-editor-panel">
+      <div class="album-editor-control-row">
+        <form method="post" class="album-inline-form" id="album-name-form">
+          <input type="hidden" name="action" value="rename_album">
+          <label class="album-inline-field">
+            <span>Albumname</span>
+            <input type="text" name="name" id="album-name-input" value="{{ album.name }}" required>
+          </label>
+          <button type="submit" class="album-icon-button" aria-label="Albumname speichern" title="Albumname speichern">
+            <svg viewBox="0 0 64 64" aria-hidden="true">
+              <path d="M14 12h30l6 6v34H14z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+              <path d="M22 12v14h20V12M22 46h20M24 36h16" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </form>
+
+        <form method="post" enctype="multipart/form-data" class="album-inline-form album-upload-form" id="album-upload-form">
+          <input type="hidden" name="action" value="add_tracks">
+          <label class="album-inline-field">
+            <span>Titel hinzufügen</span>
+            <input type="file" name="track_files" id="album-track-input" multiple accept=".mp3,.m4a,.wav,.flac,.ogg,.aac,.opus,.oga,.aif,.aiff,.m4b,.mp4,audio/*">
+          </label>
+          <button type="submit" class="album-icon-button" aria-label="Titel hochladen" title="Titel hochladen">
+            <svg viewBox="0 0 64 64" aria-hidden="true">
+              <path d="M32 14v24M22 24l10-10 10 10" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M16 42v8h32v-8" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </form>
+      </div>
+
+      <div class="album-editor-table-head slim">
+        <span id="track-selection-summary" class="status-pill neutral">Auswahl 0/{{ album.track_count }}</span>
+        <button type="button" class="danger" id="track-delete-submit" disabled>Auswahl löschen</button>
+        <span class="status-pill neutral" id="album-editor-status">Bereit</span>
+      </div>
+
+      <div class="album-track-table-wrap">
+        <table class="album-track-table">
+          <thead>
+            <tr>
+              <th class="album-track-select-col">
+                <input type="checkbox" id="track-select-all" aria-label="Alle Titel auswählen">
+              </th>
+              <th class="album-track-order-col">#</th>
+              <th class="album-track-drag-col">Sortieren</th>
+              <th>Titel</th>
+              <th class="album-track-actions-col"><span class="album-track-actions-head">Aktionen</span></th>
+            </tr>
+          </thead>
+          <tbody id="album-track-table-body">
+            {% for row in track_rows %}
+              <tr class="album-track-row" data-track-path="{{ row.path }}">
+                <td class="album-track-select-col">
+                  <input type="checkbox" value="{{ row.path }}" data-track-checkbox>
+                </td>
+                <td class="album-track-order-col" data-track-index>{{ row.index }}</td>
+                <td class="album-track-drag-col">
+                  <button type="button" class="album-track-drag-handle" aria-label="Titel verschieben" draggable="true">
+                    <svg viewBox="0 0 64 64" aria-hidden="true">
+                      <path d="M32 14v36" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+                      <path d="M24 22l8-8 8 8" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                      <path d="M24 42l8 8 8-8" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </button>
+                </td>
+                <td class="album-track-title-col">
+                  <form method="post" class="album-track-rename-form" data-track-rename-form>
+                    <input type="hidden" name="action" value="rename_track">
+                    <input type="hidden" name="track_path" value="{{ row.path }}">
+                    <input type="text" name="new_name" value="{{ row.display_name }}" class="album-track-title-input" required>
+                  </form>
+                </td>
+                <td class="album-track-actions-cell">
+                  <div class="album-track-actions-wrap">
+                  <button type="button" class="album-icon-button album-track-save-button" data-track-save-button aria-label="Titel speichern" title="Titel speichern">
+                    <svg viewBox="0 0 64 64" aria-hidden="true">
+                      <path d="M14 12h30l6 6v34H14z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+                      <path d="M22 12v14h20V12M22 46h20M24 36h16" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </button>
+                  <button type="button" class="album-icon-button danger album-track-delete-button" data-track-delete-button aria-label="Titel löschen" title="Titel löschen">
+                    <svg viewBox="0 0 64 64" aria-hidden="true">
+                      <path d="M20 20h24l-2 30H22L20 20Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+                      <path d="M16 20h32M26 20v-4h12v4M28 28v14M36 28v14" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+                    </svg>
+                  </button>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  </section>
+
+  <script id="album-editor-json" type="application/json">{{ {"album": {"id": album.id, "name": album.name, "track_count": album.track_count, "rfid_uid": album.rfid_uid, "playlist": album.playlist}, "track_rows": track_rows} | tojson }}</script>
+  <script src="{{ url_for('static', filename='album-editor.js', v=asset_version) }}"></script>
+{% endblock %}

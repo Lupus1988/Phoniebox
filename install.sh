@@ -20,6 +20,35 @@ has_remote_shell() {
   who -m 2>/dev/null | grep -qE '\([[:alnum:].:%-]+\)$'
 }
 
+ensure_hardware_groups() {
+  local -a groups=(gpio spi input)
+  local -a users=()
+  local candidate
+  for candidate in "${SUDO_USER:-}" "$(logname 2>/dev/null || true)" "$(id -un 2>/dev/null || true)"; do
+    [ -n "$candidate" ] || continue
+    [ "$candidate" = "root" ] && continue
+    case " ${users[*]} " in
+      *" $candidate "*) continue ;;
+    esac
+    users+=("$candidate")
+  done
+
+  [ ${#users[@]} -gt 0 ] || return 0
+
+  local user group
+  for user in "${users[@]}"; do
+    id "$user" >/dev/null 2>&1 || continue
+    for group in "${groups[@]}"; do
+      getent group "$group" >/dev/null 2>&1 || continue
+      if id -nG "$user" | grep -qw "$group"; then
+        continue
+      fi
+      echo "Füge Benutzer $user der Gruppe $group hinzu"
+      sudo usermod -a -G "$group" "$user"
+    done
+  done
+}
+
 echo "Installiere Phoniebox Panel nach $APP_DIR"
 
 if [ -d "$APP_DIR/data" ]; then
@@ -39,13 +68,11 @@ sudo mkdir -p "$APP_DIR" "$BIN_DIR"
 sudo cp -a "$SOURCE_DIR"/. "$APP_DIR"/
 
 sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip python3-lgpio python3-evdev python3-spidev python3-smbus2 python3-serial network-manager avahi-daemon alsa-utils mpg123
+sudo apt-get install -y python3 python3-venv python3-pip python3-lgpio network-manager avahi-daemon alsa-utils mpg123
+ensure_hardware_groups
 
-if command -v raspi-config >/dev/null 2>&1; then
-  sudo raspi-config nonint do_i2c 0 || true
-  sudo raspi-config nonint do_spi 0 || true
-  sudo raspi-config nonint do_serial_cons 1 || true
-fi
+# Reader-specific buses are enabled by the setup workflow when the user actually installs
+# a concrete reader. Avoid broad hardware mutations during base installation.
 
 sudo cp systemd/phoniebox-panel.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-audio-init.service "$SERVICE_DIR"/
@@ -65,8 +92,6 @@ sudo "$VENV_DIR/bin/pip" install -r "$APP_DIR/requirements.txt"
 # Some upstream packages still pull the legacy RPi.GPIO wheel, which breaks GPIO on newer Pi kernels.
 sudo "$VENV_DIR/bin/pip" uninstall -y RPi.GPIO || true
 sudo "$VENV_DIR/bin/pip" install --upgrade rpi-lgpio
-# Match the reference RC522 stack without reintroducing the broken legacy RPi.GPIO dependency.
-sudo "$VENV_DIR/bin/pip" install --upgrade --force-reinstall --no-deps pi-rc522==2.3.0
 PY_MINOR=$(python3 - <<'EOF'
 import sys
 print(f"{sys.version_info.major}.{sys.version_info.minor}")

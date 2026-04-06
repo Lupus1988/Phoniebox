@@ -189,7 +189,7 @@ def safe_relative_path(raw_name):
 
 
 def is_audio_file(path):
-    return path.suffix.lower() in {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".aac"}
+    return path.suffix.lower() in {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".aac", ".opus", ".oga", ".aif", ".aiff", ".m4b", ".mp4"}
 
 
 def is_cover_file(path):
@@ -207,6 +207,24 @@ def build_playlist(album_dir):
         playlist_lines.append(track.relative_to(album_dir).as_posix())
     playlist_path.write_text("\n".join(playlist_lines) + "\n", encoding="utf-8")
     return playlist_path, audio_files
+
+
+def list_album_audio_entries(album_dir):
+    return sorted(
+        [
+            path.relative_to(album_dir).as_posix()
+            for path in album_dir.rglob("*")
+            if path.is_file() and is_audio_file(path)
+        ],
+        key=str.lower,
+    )
+
+
+def write_playlist_entries(album_dir, entries):
+    playlist_path = album_dir / "playlist.m3u"
+    playlist_lines = ["#EXTM3U", *entries]
+    playlist_path.write_text("\n".join(playlist_lines) + "\n", encoding="utf-8")
+    return playlist_path
 
 
 def detect_cover(album_dir):
@@ -305,22 +323,43 @@ def read_playlist_entries(album):
     return entries
 
 
+def effective_track_entries(album):
+    album_dir = BASE_DIR / album.get("folder", "")
+    if not album_dir.exists():
+        return []
+
+    existing = list_album_audio_entries(album_dir)
+    existing_set = set(existing)
+    ordered = []
+    seen = set()
+
+    for entry in read_playlist_entries(album):
+        normalized = safe_relative_path(entry).as_posix()
+        if normalized in existing_set and normalized not in seen:
+            ordered.append(normalized)
+            seen.add(normalized)
+
+    for entry in existing:
+        if entry not in seen:
+            ordered.append(entry)
+            seen.add(entry)
+
+    return ordered
+
+
 def refresh_album_metadata(album):
     album_dir = BASE_DIR / album.get("folder", "")
     if not album_dir.exists():
         return album
-    audio_files = sorted(
-        [path for path in album_dir.rglob("*") if path.is_file() and is_audio_file(path)],
-        key=lambda item: str(item.relative_to(album_dir)).lower(),
-    )
-    if audio_files:
-        playlist_path, _ = build_playlist(album_dir)
+    track_entries = effective_track_entries(album)
+    if track_entries:
+        playlist_path = write_playlist_entries(album_dir, track_entries)
     else:
         playlist_path = write_empty_playlist(album_dir)
     album["playlist"] = playlist_path.relative_to(BASE_DIR).as_posix()
-    album["track_count"] = len(audio_files)
+    album["track_count"] = len(track_entries)
     album["cover_url"] = detect_cover(album_dir)
-    album["track_entries"] = read_playlist_entries(album)
+    album["track_entries"] = track_entries
     return album
 
 
@@ -382,6 +421,19 @@ def add_tracks_to_album(album, files):
     return refresh_album_metadata(album)
 
 
+def remove_tracks_from_album(album, track_paths):
+    requested = [item.strip() for item in (track_paths or []) if str(item or "").strip()]
+    if not requested:
+        raise ValueError("Keine Titel ausgewählt.")
+
+    removed = 0
+    for track_path in requested:
+        remove_track_from_album(album, track_path)
+        removed += 1
+    refresh_album_metadata(album)
+    return removed
+
+
 def remove_track_from_album(album, track_path):
     album_dir = BASE_DIR / album.get("folder", "")
     target = (album_dir / safe_relative_path(track_path)).resolve()
@@ -397,6 +449,86 @@ def remove_track_from_album(album, track_path):
             break
         current = current.parent
     return refresh_album_metadata(album)
+
+
+def rename_track_in_album(album, track_path, new_name):
+    requested_name = str(new_name or "").strip()
+    if not requested_name:
+        raise ValueError("Neuer Titelname fehlt.")
+
+    album_dir = (BASE_DIR / album.get("folder", "")).resolve()
+    source = (album_dir / safe_relative_path(track_path)).resolve()
+    if not source.exists() or album_dir not in source.parents:
+        raise ValueError("Titel konnte nicht gefunden werden.")
+    if not is_audio_file(source):
+        raise ValueError("Nur Audiodateien können umbenannt werden.")
+
+    cleaned_name = secure_filename(requested_name)
+    if not cleaned_name:
+        raise ValueError("Titelname ist ungültig.")
+    if Path(cleaned_name).suffix.lower() != source.suffix.lower():
+        cleaned_name = f"{Path(cleaned_name).stem or cleaned_name}{source.suffix.lower()}"
+    if Path(cleaned_name).name in {"", ".", ".."}:
+        raise ValueError("Titelname ist ungültig.")
+
+    target = source.with_name(cleaned_name)
+    if target == source:
+        return refresh_album_metadata(album)
+    if target.exists():
+        raise ValueError("Ein Titel mit diesem Namen existiert bereits.")
+
+    source.rename(target)
+
+    old_entry = source.relative_to(album_dir).as_posix()
+    new_entry = target.relative_to(album_dir).as_posix()
+    entries = [new_entry if entry == old_entry else entry for entry in effective_track_entries(album)]
+    write_playlist_entries(album_dir, entries)
+    return refresh_album_metadata(album)
+
+
+def reorder_album_tracks(album, ordered_paths):
+    current_entries = effective_track_entries(album)
+    if not current_entries:
+        return refresh_album_metadata(album)
+
+    normalized = []
+    seen = set()
+    current_set = set(current_entries)
+    for entry in ordered_paths or []:
+        candidate = safe_relative_path(entry).as_posix()
+        if candidate in current_set and candidate not in seen:
+            normalized.append(candidate)
+            seen.add(candidate)
+
+    if not normalized:
+        raise ValueError("Keine Reihenfolge übergeben.")
+
+    for entry in current_entries:
+        if entry not in seen:
+            normalized.append(entry)
+
+    album_dir = BASE_DIR / album.get("folder", "")
+    write_playlist_entries(album_dir, normalized)
+    return refresh_album_metadata(album)
+
+
+def track_display_name(track_path):
+    leaf = Path(track_path).name
+    return Path(leaf).stem.replace("_", " ")
+
+
+def track_rows(album):
+    rows = []
+    for index, track in enumerate(album.get("track_entries", []), start=1):
+        rows.append(
+            {
+                "index": index,
+                "path": track,
+                "filename": Path(track).name,
+                "display_name": track_display_name(track),
+            }
+        )
+    return rows
 
 
 def enrich_library_data(library_data):
@@ -684,6 +816,49 @@ def reader_transition_commands(target_type):
     return commands
 
 
+def reader_runtime_cleanup_packages(target_type):
+    target_type = normalize_reader_type(target_type)
+    profile_packages = {
+        "USB": {"evdev"},
+        "RC522": {"pi-rc522", "spidev"},
+        "PN532_I2C": {"adafruit-blinka", "adafruit-circuitpython-pn532", "smbus2"},
+        "PN532_SPI": {"adafruit-blinka", "adafruit-circuitpython-pn532", "spidev"},
+        "PN532_UART": {"adafruit-blinka", "adafruit-circuitpython-pn532", "pyserial"},
+    }
+    keep = profile_packages.get(target_type, set())
+    all_packages = set().union(*profile_packages.values())
+    return sorted(all_packages - keep)
+
+
+def reader_runtime_commands(target_type):
+    python_bin = sys.executable
+    target_type = normalize_reader_type(target_type)
+    commands = []
+
+    cleanup_packages = reader_runtime_cleanup_packages(target_type)
+    if cleanup_packages:
+        commands.append([python_bin, "-m", "pip", "uninstall", "-y", *cleanup_packages])
+
+    if target_type == "USB":
+        commands.append([python_bin, "-m", "pip", "install", "--upgrade", "evdev"])
+    elif target_type == "RC522":
+        commands.append([python_bin, "-m", "pip", "uninstall", "-y", "RPi.GPIO"])
+        commands.append([python_bin, "-m", "pip", "install", "--upgrade", "spidev"])
+        commands.append([python_bin, "-m", "pip", "install", "--upgrade", "rpi-lgpio"])
+        commands.append([python_bin, "-m", "pip", "install", "--upgrade", "--force-reinstall", "--no-deps", "pi-rc522==2.3.0"])
+    elif target_type in {"PN532_I2C", "PN532_SPI", "PN532_UART"}:
+        commands.append([python_bin, "-m", "pip", "install", "--upgrade", "adafruit-blinka>=8.0,<9.0"])
+        commands.append([python_bin, "-m", "pip", "install", "--upgrade", "adafruit-circuitpython-pn532>=2.0,<3.0"])
+        if target_type == "PN532_I2C":
+            commands.append([python_bin, "-m", "pip", "install", "--upgrade", "smbus2"])
+        elif target_type == "PN532_SPI":
+            commands.append([python_bin, "-m", "pip", "install", "--upgrade", "spidev"])
+        elif target_type == "PN532_UART":
+            commands.append([python_bin, "-m", "pip", "install", "--upgrade", "pyserial"])
+
+    return commands
+
+
 def run_local_command(command):
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     output = (result.stdout or result.stderr or "").strip()
@@ -701,6 +876,40 @@ def save_reader_status(configured_type, ready, message, details=None):
             "updated_at": int(time.time()),
         },
     )
+
+
+def is_xhr_request():
+    return request.headers.get("X-Requested-With", "").lower() == "xmlhttprequest"
+
+
+def library_action_response(ok, message, category="success", status_code=200):
+    if is_xhr_request():
+        return jsonify({"ok": bool(ok), "message": str(message or ""), "category": category}), status_code
+    flash(str(message or ""), category)
+    return redirect(url_for("library"))
+
+
+def album_editor_response(album_id, ok, message, category="success", status_code=200):
+    if is_xhr_request():
+        return jsonify({"ok": bool(ok), "message": str(message or ""), "category": category}), status_code
+    flash(str(message or ""), category)
+    return redirect(url_for("library_album", album_id=album_id))
+
+
+def album_editor_payload(album, message=""):
+    refresh_album_metadata(album)
+    return {
+        "ok": True,
+        "message": str(message or ""),
+        "album": {
+            "id": album.get("id", ""),
+            "name": album.get("name", ""),
+            "track_count": int(album.get("track_count", 0) or 0),
+            "rfid_uid": album.get("rfid_uid", ""),
+            "playlist": album.get("playlist", ""),
+        },
+        "track_rows": track_rows(album),
+    }
 
 
 def current_boot_timestamp():
@@ -787,6 +996,22 @@ def apply_reader_install_action(data, action, selected_type):
     selected_type = normalize_reader_type(selected_type)
     target_type = READER_NONE_ID if action == "uninstall" else selected_type
     details = []
+
+    for command in reader_runtime_commands(target_type):
+        result = run_local_command(command)
+        details.append(result["output"] or "OK")
+        if not result["ok"]:
+            reader["target_type"] = selected_type
+            reader["install_state"] = "error"
+            reader["needs_reboot"] = False
+            reader["last_action_message"] = f"Reader-Pakete konnten nicht eingerichtet werden: {' '.join(command)}"
+            save_setup(data)
+            return {
+                "ok": False,
+                "message": reader["last_action_message"],
+                "details": [entry for entry in details if entry],
+                "target_type": target_type,
+            }
 
     for command in reader_transition_commands(target_type):
         result = run_local_command(command)
@@ -1514,18 +1739,16 @@ def library():
             album_name = request.form.get("name", "").strip()
             rfid_uid = request.form.get("rfid_uid", "").strip()
             if not album_name:
-                flash("Albumname ist erforderlich.", "error")
-                return redirect(url_for("library"))
+                return library_action_response(False, "Albumname ist erforderlich.", "error", 400)
             try:
                 album_entry = import_album_folder(files, album_name, rfid_uid) if files else create_empty_album(album_name, rfid_uid)
             except ValueError as exc:
-                flash(str(exc), "error")
-                return redirect(url_for("library"))
-            flash(
+                return library_action_response(False, str(exc), "error", 400)
+            return library_action_response(
+                True,
                 f"Album {album_entry['name']} importiert und Playlist erzeugt." if files else f"Leeres Album {album_entry['name']} angelegt.",
                 "success",
             )
-            return redirect(url_for("library"))
 
         if action == "save_album":
             album_id = request.form.get("album_id", "").strip() or f"album-{secrets.token_hex(4)}"
@@ -1611,32 +1834,38 @@ def library():
             album_id = request.form.get("album_id", "").strip()
             album = next((entry for entry in albums if entry["id"] == album_id), None)
             if not album:
-                flash("Album nicht gefunden.", "error")
-                return redirect(url_for("library"))
+                return library_action_response(False, "Album nicht gefunden.", "error", 404)
             try:
                 add_tracks_to_album(album, request.files.getlist("track_files"))
                 save_library(library_data)
             except ValueError as exc:
-                flash(str(exc), "error")
-                return redirect(url_for("library"))
-            flash("Titel ergänzt.", "success")
-            return redirect(url_for("library"))
+                return library_action_response(False, str(exc), "error", 400)
+            return library_action_response(True, "Titel ergänzt.", "success")
 
         if action == "remove_track":
             album_id = request.form.get("album_id", "").strip()
             track_path = request.form.get("track_path", "").strip()
             album = next((entry for entry in albums if entry["id"] == album_id), None)
             if not album:
-                flash("Album nicht gefunden.", "error")
-                return redirect(url_for("library"))
+                return library_action_response(False, "Album nicht gefunden.", "error", 404)
             try:
                 remove_track_from_album(album, track_path)
                 save_library(library_data)
             except ValueError as exc:
-                flash(str(exc), "error")
-                return redirect(url_for("library"))
-            flash("Titel entfernt.", "success")
-            return redirect(url_for("library"))
+                return library_action_response(False, str(exc), "error", 400)
+            return library_action_response(True, "Titel entfernt.", "success")
+
+        if action == "remove_tracks":
+            album_id = request.form.get("album_id", "").strip()
+            album = next((entry for entry in albums if entry["id"] == album_id), None)
+            if not album:
+                return library_action_response(False, "Album nicht gefunden.", "error", 404)
+            try:
+                removed = remove_tracks_from_album(album, request.form.getlist("track_path"))
+                save_library(library_data)
+            except ValueError as exc:
+                return library_action_response(False, str(exc), "error", 400)
+            return library_action_response(True, f"{removed} Titel entfernt.", "success")
 
     enrich_library_data(library_data)
     return render_template(
@@ -1645,6 +1874,88 @@ def library():
         link_session=load_link_session(),
         storage_summary=library_storage_summary(),
     )
+
+
+@app.route("/library/album/<album_id>", methods=["GET", "POST"])
+def library_album(album_id):
+    library_data = load_library()
+    album = next((entry for entry in library_data.get("albums", []) if entry.get("id") == album_id), None)
+    if not album:
+        flash("Album nicht gefunden.", "error")
+        return redirect(url_for("library"))
+
+    if request.method == "POST":
+        action = request.form.get("action", "").strip()
+        try:
+            if action == "rename_album":
+                name = request.form.get("name", "").strip()
+                if not name:
+                    return album_editor_response(album_id, False, "Albumname ist erforderlich.", "error", 400)
+                conflict = next(
+                    (
+                        entry
+                        for entry in library_data["albums"]
+                        if entry.get("id") != album_id and entry.get("name", "").strip().lower() == name.lower()
+                    ),
+                    None,
+                )
+                if conflict:
+                    return album_editor_response(album_id, False, f"Albumname bereits vorhanden: {conflict['name']}.", "error", 400)
+                album["name"] = name
+                save_library(library_data)
+                if is_xhr_request():
+                    return jsonify(album_editor_payload(album, "Albumname aktualisiert."))
+                return album_editor_response(album_id, True, "Albumname aktualisiert.", "success")
+
+            if action == "add_tracks":
+                add_tracks_to_album(album, request.files.getlist("track_files"))
+                save_library(library_data)
+                if is_xhr_request():
+                    return jsonify(album_editor_payload(album, "Titel ergänzt."))
+                return album_editor_response(album_id, True, "Titel ergänzt.", "success")
+
+            if action == "remove_tracks":
+                removed = remove_tracks_from_album(album, request.form.getlist("track_path"))
+                save_library(library_data)
+                if is_xhr_request():
+                    return jsonify(album_editor_payload(album, f"{removed} Titel entfernt."))
+                return album_editor_response(album_id, True, f"{removed} Titel entfernt.", "success")
+
+            if action == "rename_track":
+                rename_track_in_album(
+                    album,
+                    request.form.get("track_path", "").strip(),
+                    request.form.get("new_name", "").strip(),
+                )
+                save_library(library_data)
+                if is_xhr_request():
+                    return jsonify(album_editor_payload(album, "Titel umbenannt."))
+                return album_editor_response(album_id, True, "Titel umbenannt.", "success")
+
+            if action == "reorder_tracks":
+                reorder_album_tracks(album, request.form.getlist("track_order"))
+                save_library(library_data)
+                if is_xhr_request():
+                    return jsonify(album_editor_payload(album, "Reihenfolge gespeichert."))
+                return album_editor_response(album_id, True, "Reihenfolge gespeichert.", "success")
+        except ValueError as exc:
+            return album_editor_response(album_id, False, str(exc), "error", 400)
+
+    refresh_album_metadata(album)
+    return render_template(
+        "album_editor.html",
+        album=album,
+        track_rows=track_rows(album),
+    )
+
+
+@app.route("/api/library/album/<album_id>")
+def api_library_album(album_id):
+    library_data = load_library()
+    album = next((entry for entry in library_data.get("albums", []) if entry.get("id") == album_id), None)
+    if not album:
+        return jsonify({"ok": False, "message": "Album nicht gefunden."}), 404
+    return jsonify(album_editor_payload(album))
 
 
 @app.route("/settings", methods=["GET", "POST"])

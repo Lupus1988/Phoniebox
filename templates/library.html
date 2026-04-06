@@ -5,21 +5,6 @@
       <button type="button" class="primary library-add-button" id="open-album-create">+ Neues Album</button>
       <span class="status-pill neutral">{{ library_data.albums|length }} Alben</span>
     </div>
-    <div class="library-storage-grid">
-      <article class="library-storage-card">
-        <span>Gesamtkapazität</span>
-        <strong>{{ storage_summary.total_label }}</strong>
-      </article>
-      <article class="library-storage-card">
-        <span>Belegt</span>
-        <strong>{{ storage_summary.used_label }}</strong>
-        <em>{{ storage_summary.used_percent }}%</em>
-      </article>
-      <article class="library-storage-card">
-        <span>Frei</span>
-        <strong>{{ storage_summary.free_label }}</strong>
-      </article>
-    </div>
   </section>
 
   <article class="panel-box library-overview-box">
@@ -107,16 +92,14 @@
           </div>
           <div class="library-action-cell">
             <div class="library-cell-title">Bearbeiten</div>
-            <button
-              type="button"
-              class="js-open-edit-modal library-icon-button library-edit-button"
-              data-album-id="{{ album.id }}"
-              data-album-name="{{ album.name }}"
+            <a
+              href="{{ url_for('library_album', album_id=album.id) }}"
+              class="library-icon-button library-edit-button"
               title="Bearbeiten"
               aria-label="Bearbeiten"
             >
               <img src="{{ url_for('static', filename='edit-05-icon.png', v=asset_version) }}" alt="" aria-hidden="true">
-            </button>
+            </a>
           </div>
           <div class="library-action-cell">
             <div class="library-cell-title">Löschen</div>
@@ -139,6 +122,24 @@
       {% endfor %}
     </div>
 
+  </article>
+
+  <article class="panel-box library-storage-panel">
+    <div class="library-storage-head">
+      <div>
+        <h3>Speicherplatz</h3>
+        <p>{{ storage_summary.used_label }} von {{ storage_summary.total_label }} belegt</p>
+      </div>
+      <strong>{{ storage_summary.used_percent }}%</strong>
+    </div>
+    <div class="library-storage-meter" aria-hidden="true">
+      <div class="library-storage-meter-fill" style="width: {{ storage_summary.used_percent }}%"></div>
+    </div>
+    <div class="library-storage-stats">
+      <span>Belegt: {{ storage_summary.used_label }}</span>
+      <span>Frei: {{ storage_summary.free_label }}</span>
+      <span>Gesamt: {{ storage_summary.total_label }}</span>
+    </div>
   </article>
 
   <dialog class="modal" id="album-create-modal">
@@ -172,75 +173,6 @@
           <button type="button" data-close-create>Zurück</button>
         </div>
       </form>
-    </div>
-  </dialog>
-
-  <dialog class="modal" id="album-edit-modal">
-    <div class="modal-body compact-modal-body edit-modal-body">
-      <div class="panel-box-head">
-        <div class="panel-box-head-stack">
-          <h3 id="album-edit-title">Bearbeiten</h3>
-          <span id="album-edit-current-name" class="edit-album-subtitle"></span>
-        </div>
-      </div>
-
-      <div id="album-edit-home" class="dialog-stack">
-        <button type="button" id="open-rename-album">Name ändern</button>
-        <button type="button" id="open-remove-tracks">Titel entfernen</button>
-        <button type="button" id="open-add-tracks">Titel hinzufügen</button>
-        <button type="button" data-close-edit>Zurück</button>
-      </div>
-
-      <div id="album-edit-rename" class="dialog-stack" hidden>
-        <form method="post" id="album-rename-form">
-          <input type="hidden" name="action" value="save_album">
-          <input type="hidden" name="album_id" id="album-rename-id" value="">
-          <input type="hidden" name="folder" id="album-rename-folder" value="">
-          <input type="hidden" name="playlist" id="album-rename-playlist" value="">
-          <input type="hidden" name="track_count" id="album-rename-track-count" value="">
-          <input type="hidden" name="rfid_uid" id="album-rename-rfid" value="">
-          <input type="hidden" name="cover_url" id="album-rename-cover" value="">
-          <label>
-            <span>Albumname</span>
-            <input name="name" id="album-rename-name" required>
-          </label>
-          <div id="album-rename-warning" class="create-warning-box" hidden>Albumname bereits vorhanden.</div>
-          <div class="button-row compact-button-row">
-            <button type="submit" class="primary">Speichern</button>
-            <button type="button" data-edit-back>Zurück</button>
-          </div>
-        </form>
-      </div>
-
-      <div id="album-edit-remove" class="dialog-stack" hidden>
-        <div id="album-track-list" class="track-remove-list"></div>
-        <button type="button" class="secondary-back" data-edit-back>Zurück</button>
-      </div>
-
-      <div id="album-edit-add" class="dialog-stack" hidden>
-        <form method="post" enctype="multipart/form-data" id="album-add-tracks-form">
-          <input type="hidden" name="action" value="add_tracks">
-          <input type="hidden" name="album_id" id="album-add-id" value="">
-          <label class="full hidden-input-wrap">
-            <input type="file" name="track_files" id="album-track-input" multiple accept=".mp3,.m4a,.wav,.flac,.ogg,.aac,audio/*">
-          </label>
-          <div id="album-add-upload-status" class="upload-status-box full" hidden>
-            <div class="upload-status-head">
-              <strong data-upload-title>Noch keine Dateien ausgewählt</strong>
-              <span data-upload-summary></span>
-            </div>
-            <div class="upload-progress-shell" aria-hidden="true">
-              <div class="upload-progress-bar" data-upload-progress-bar></div>
-            </div>
-            <div class="upload-file-list" data-upload-file-list></div>
-          </div>
-          <div class="button-row compact-button-row">
-            <button type="button" id="album-track-trigger">Dateien auswählen</button>
-            <button type="submit" class="primary" id="album-add-submit">Titel hinzufügen</button>
-          </div>
-        </form>
-        <button type="button" class="secondary-back" data-edit-back>Zurück</button>
-      </div>
     </div>
   </dialog>
 

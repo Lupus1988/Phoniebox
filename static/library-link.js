@@ -21,6 +21,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const editRemove = document.getElementById("album-edit-remove");
   const editAdd = document.getElementById("album-edit-add");
   const trackList = document.getElementById("album-track-list");
+  const removeSelectedButton = document.getElementById("album-remove-selected");
+  const trackSelectionStatus = document.getElementById("album-track-selection-status");
   const addTracksForm = document.getElementById("album-add-tracks-form");
   const addTracksAlbumId = document.getElementById("album-add-id");
   const trackInput = document.getElementById("album-track-input");
@@ -218,16 +220,91 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function renderUploadError(root, files, message) {
+    if (!(root instanceof HTMLElement)) {
+      return;
+    }
+    const normalizedFiles = Array.from(files || []);
+    if (!normalizedFiles.length) {
+      root.hidden = true;
+      return;
+    }
+
+    renderUploadTracker(root, normalizedFiles, 0, false);
+    const title = root.querySelector("[data-upload-title]");
+    const summary = root.querySelector("[data-upload-summary]");
+    const bar = root.querySelector("[data-upload-progress-bar]");
+    const list = root.querySelector("[data-upload-file-list]");
+
+    if (title) {
+      title.textContent = "Upload fehlgeschlagen";
+    }
+    if (summary) {
+      summary.textContent = message || "Der Upload konnte nicht abgeschlossen werden.";
+    }
+    if (bar instanceof HTMLElement) {
+      bar.style.width = "0%";
+    }
+    if (list instanceof HTMLElement) {
+      for (const state of list.querySelectorAll(".upload-file-state")) {
+        state.textContent = "Fehler";
+      }
+    }
+  }
+
+  function renderUploadFallback(root, files, message) {
+    renderUploadTracker(root, files, 1, true);
+    if (!(root instanceof HTMLElement)) {
+      return;
+    }
+    const title = root.querySelector("[data-upload-title]");
+    const summary = root.querySelector("[data-upload-summary]");
+    if (title) {
+      title.textContent = "Standard-Upload wird gestartet";
+    }
+    if (summary) {
+      summary.textContent = message || "Der Browser-Upload war instabil. Standard-Upload läuft weiter.";
+    }
+  }
+
+  function extractUploadErrorMessage(request) {
+    const fallback = request.status >= 400
+      ? `Der Upload wurde vom Server abgelehnt (${request.status}).`
+      : "Der Upload konnte nicht abgeschlossen werden.";
+    const raw = String(request.responseText || "").trim();
+    if (!raw) {
+      return fallback;
+    }
+    try {
+      const payload = JSON.parse(raw);
+      if (payload && typeof payload.message === "string" && payload.message.trim()) {
+        return payload.message.trim();
+      }
+    } catch (_error) {
+      // Ignore and try a coarse HTML/text extraction below.
+    }
+    const condensed = raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (condensed) {
+      return condensed.slice(0, 220);
+    }
+    return fallback;
+  }
+
   function bindUploadProgress(form, fileInput, statusRoot, submitButton, validate) {
     if (!(form instanceof HTMLFormElement) || !(fileInput instanceof HTMLInputElement)) {
       return;
     }
+
+    let fallbackSubmitting = false;
 
     fileInput.addEventListener("change", () => {
       renderUploadTracker(statusRoot, fileInput.files, 0, false);
     });
 
     form.addEventListener("submit", (event) => {
+      if (fallbackSubmitting) {
+        return;
+      }
       if (typeof validate === "function" && !validate()) {
         event.preventDefault();
         return;
@@ -242,6 +319,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const request = new XMLHttpRequest();
       request.open(form.method || "POST", form.action || window.location.pathname);
+      request.setRequestHeader("X-Requested-With", "XMLHttpRequest");
       request.upload.addEventListener("progress", (progressEvent) => {
         if (!progressEvent.lengthComputable) {
           return;
@@ -249,15 +327,98 @@ document.addEventListener("DOMContentLoaded", () => {
         renderUploadTracker(statusRoot, files, progressEvent.loaded / progressEvent.total, false);
       });
       request.addEventListener("load", () => {
-        renderUploadTracker(statusRoot, files, 1, true);
-        window.setTimeout(() => window.location.reload(), 260);
+        let payload = null;
+        try {
+          payload = JSON.parse(request.responseText || "{}");
+        } catch (_error) {
+          payload = null;
+        }
+        if (request.status >= 200 && request.status < 300 && (!payload || payload.ok !== false)) {
+          renderUploadTracker(statusRoot, files, 1, true);
+          window.setTimeout(() => window.location.reload(), 260);
+          return;
+        }
+        submitButton?.removeAttribute("disabled");
+        renderUploadError(statusRoot, files, extractUploadErrorMessage(request));
       });
       request.addEventListener("error", () => {
-        submitButton?.removeAttribute("disabled");
-        renderUploadTracker(statusRoot, files, 0, false);
+        fallbackSubmitting = true;
+        renderUploadFallback(statusRoot, files, "Browser-Upload fehlgeschlagen. Standard-Upload wird gestartet.");
+        window.setTimeout(() => {
+          HTMLFormElement.prototype.submit.call(form);
+        }, 120);
       });
       request.send(new FormData(form));
     });
+  }
+
+  function prettyTrackLabel(track) {
+    const parts = String(track || "").split("/");
+    const leaf = parts[parts.length - 1] || "";
+    return leaf.replaceAll("_", " ");
+  }
+
+  function selectedTrackPaths() {
+    if (!(trackList instanceof HTMLElement)) {
+      return [];
+    }
+    return Array.from(trackList.querySelectorAll('input[type="checkbox"][data-track-path]:checked'))
+      .map((entry) => entry.dataset.trackPath || "")
+      .filter(Boolean);
+  }
+
+  function syncTrackSelectionState() {
+    const selected = selectedTrackPaths();
+    if (removeSelectedButton instanceof HTMLButtonElement) {
+      removeSelectedButton.disabled = selected.length === 0;
+      removeSelectedButton.textContent = selected.length > 0 ? `Ausgewählte entfernen (${selected.length})` : "Ausgewählte entfernen";
+    }
+    if (trackSelectionStatus instanceof HTMLElement) {
+      trackSelectionStatus.textContent = selected.length > 0 ? `${selected.length} Titel ausgewählt` : "Keine Titel ausgewählt";
+    }
+  }
+
+  async function removeSelectedTracks(album) {
+    const selected = selectedTrackPaths();
+    if (!album?.id || !selected.length) {
+      syncTrackSelectionState();
+      return;
+    }
+
+    if (removeSelectedButton instanceof HTMLButtonElement) {
+      removeSelectedButton.disabled = true;
+    }
+
+    const formData = new FormData();
+    formData.append("action", "remove_tracks");
+    formData.append("album_id", album.id);
+    for (const track of selected) {
+      formData.append("track_path", track);
+    }
+
+    try {
+      const response = await fetch("/library", {
+        method: "POST",
+        headers: {"X-Requested-With": "XMLHttpRequest"},
+        body: formData,
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.ok === false) {
+        if (trackSelectionStatus instanceof HTMLElement) {
+          trackSelectionStatus.textContent = payload?.message || "Titel konnten nicht entfernt werden.";
+        }
+        syncTrackSelectionState();
+        return;
+      }
+      activeAlbum.track_entries = (activeAlbum.track_entries || []).filter((track) => !selected.includes(track));
+      activeAlbum.track_count = Math.max(0, Number(activeAlbum.track_count || 0) - selected.length);
+      renderTrackList(activeAlbum);
+    } catch (_error) {
+      if (trackSelectionStatus instanceof HTMLElement) {
+        trackSelectionStatus.textContent = "Titel konnten nicht entfernt werden.";
+      }
+      syncTrackSelectionState();
+    }
   }
 
   function renderTrackList(album) {
@@ -277,30 +438,44 @@ document.addEventListener("DOMContentLoaded", () => {
       const row = document.createElement("div");
       row.className = "track-row";
 
+      const selection = document.createElement("label");
+      selection.className = "track-select";
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.dataset.trackPath = track;
+      checkbox.addEventListener("change", syncTrackSelectionState);
+
+      const nameWrap = document.createElement("div");
+      nameWrap.className = "track-name-wrap";
+
       const name = document.createElement("span");
-      name.className = "mono";
-      name.textContent = track;
+      name.className = "track-display-name";
+      name.textContent = prettyTrackLabel(track);
+
+      const raw = document.createElement("span");
+      raw.className = "mono track-raw-name";
+      raw.textContent = track;
+
+      nameWrap.appendChild(name);
+      nameWrap.appendChild(raw);
+      selection.appendChild(checkbox);
+      selection.appendChild(nameWrap);
 
       const remove = document.createElement("button");
       remove.type = "button";
       remove.textContent = "Entfernen";
-      remove.addEventListener("click", () => {
-        const form = document.createElement("form");
-        form.method = "post";
-        form.className = "hidden-form";
-        form.innerHTML = `
-          <input type="hidden" name="action" value="remove_track">
-          <input type="hidden" name="album_id" value="${album.id}">
-          <input type="hidden" name="track_path" value="${track}">
-        `;
-        document.body.appendChild(form);
-        form.submit();
+      remove.addEventListener("click", async () => {
+        checkbox.checked = true;
+        syncTrackSelectionState();
+        await removeSelectedTracks(album);
       });
 
-      row.appendChild(name);
+      row.appendChild(selection);
       row.appendChild(remove);
       trackList.appendChild(row);
     }
+    syncTrackSelectionState();
   }
 
   function openEditModal(albumId) {
@@ -516,6 +691,9 @@ document.addEventListener("DOMContentLoaded", () => {
     renameNameInput?.focus();
   });
   bindUploadProgress(addTracksForm, trackInput, addUploadStatus, addSubmitButton);
+  removeSelectedButton?.addEventListener("click", async () => {
+    await removeSelectedTracks(activeAlbum);
+  });
   for (const button of document.querySelectorAll("[data-edit-back]")) {
     button.addEventListener("click", () => showEditSection("home"));
   }
