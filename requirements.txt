@@ -1,5 +1,6 @@
 Flask>=3.0,<4.0
 gunicorn>=23.0,<24.0
+mutagen>=1.47,<2.0
 # Keep the RPi.GPIO API on newer Raspberry Pi OS / kernel versions via lgpio.
 # Reader-specific packages are installed on demand from the setup workflow.
 rpi-lgpio

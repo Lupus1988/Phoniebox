@@ -8,26 +8,46 @@ document.addEventListener("DOMContentLoaded", () => {
   if (readerForm) {
     const installedReader = (readerForm.dataset.installedReader || "NONE").trim();
     const typeSelect = readerForm.querySelector("[data-reader-type-select]");
-    const installButton = readerForm.querySelector("[data-reader-install-button]");
-    const uninstallButton = readerForm.querySelector("[data-reader-uninstall-button]");
+    const actionButton = readerForm.querySelector("[data-reader-action-button]");
+    const actionInput = readerForm.querySelector("[data-reader-action-input]");
+    const installBadge = readerForm.querySelector("[data-reader-install-badge]");
+    const installed = installedReader !== "NONE";
 
-    const syncReaderButtons = () => {
+    const syncReaderAction = () => {
       if (!(typeSelect instanceof HTMLSelectElement)) {
         return;
       }
       const selectedType = (typeSelect.value || "NONE").trim();
-      if (installButton instanceof HTMLButtonElement) {
-        installButton.disabled = selectedType === "NONE" || selectedType === installedReader;
+      if (actionInput instanceof HTMLInputElement) {
+        actionInput.value = installed ? "uninstall" : "install";
       }
-      if (uninstallButton instanceof HTMLButtonElement) {
-        uninstallButton.disabled = installedReader === "NONE";
+      if (installBadge instanceof HTMLElement) {
+        installBadge.textContent = installed ? "Reader installiert" : "Kein Reader installiert";
+        installBadge.classList.toggle("is-ready", installed);
+        installBadge.classList.toggle("is-warning", !installed);
+      }
+      if (actionButton instanceof HTMLButtonElement) {
+        actionButton.textContent = installed ? "Reader deinstallieren" : "Reader installieren";
+        actionButton.classList.toggle("primary", !installed);
+        actionButton.classList.toggle("danger", installed);
+        actionButton.disabled = !installed && selectedType === "NONE";
       }
     };
 
     if (typeSelect instanceof HTMLSelectElement) {
-      typeSelect.addEventListener("change", syncReaderButtons);
+      typeSelect.addEventListener("change", syncReaderAction);
     }
-    syncReaderButtons();
+    if (actionButton instanceof HTMLButtonElement) {
+      actionButton.addEventListener("click", (event) => {
+        if (!installed) {
+          return;
+        }
+        if (!window.confirm("Reader wirklich deinstallieren?")) {
+          event.preventDefault();
+        }
+      });
+    }
+    syncReaderAction();
   }
 
   function emptyLabel(slot) {

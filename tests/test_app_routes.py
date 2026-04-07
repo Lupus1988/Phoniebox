@@ -2,7 +2,9 @@ import unittest
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import ANY, patch
+
+import app as app_module
 
 from app import (
     app,
@@ -68,7 +70,7 @@ class AppRoutesTest(unittest.TestCase):
 
         body = response.get_data(as_text=True)
         self.assertEqual(response.status_code, 200)
-        self.assertIn("RC522 bereit.", body)
+        self.assertIn("Reader installiert", body)
         self.assertNotIn("Soll nicht sichtbar sein.", body)
         self.assertNotIn("Interne Notiz", body)
 
@@ -83,8 +85,9 @@ class AppRoutesTest(unittest.TestCase):
 
         body = response.get_data(as_text=True)
         self.assertEqual(response.status_code, 200)
-        self.assertIn("RC522 nicht erkannt.", body)
-        self.assertIn("Der Chip antwortet nicht über SPI.", body)
+        self.assertIn("Kein Reader installiert", body)
+        self.assertNotIn("RC522 nicht erkannt.", body)
+        self.assertNotIn("Der Chip antwortet nicht über SPI.", body)
 
     def test_api_endpoints_render(self):
         for path in ("/api/runtime", "/api/audio", "/api/hardware"):
@@ -138,17 +141,34 @@ class AppRoutesTest(unittest.TestCase):
         play_sound.assert_called_once_with("test")
 
     def test_led_blink_endpoint_uses_selected_pin(self):
-        with patch("app.LEDController") as led_controller:
-            led_controller.return_value.blink_led.return_value = True
+        with patch("app.save_json") as save_json:
             response = self.client.post("/api/setup/led-blink", json={"pin": "GPIO12", "brightness": 55})
         self.assertEqual(response.status_code, 200)
-        led_controller.return_value.blink_led.assert_called_once_with(
-            "GPIO12",
-            brightness=55,
-            repeats=3,
-            on_seconds=0.22,
-            off_seconds=0.18,
+        save_json.assert_called_once_with(
+            app_module.LED_PREVIEW_FILE,
+            {
+                "id": ANY,
+                "pin": "GPIO12",
+                "brightness": 55,
+                "repeats": 3,
+                "on_seconds": 0.22,
+                "off_seconds": 0.18,
+                "status": "pending",
+                "requested_at": ANY,
+            },
         )
+
+    def test_button_detect_start_uses_available_gpio_baseline(self):
+        setup = default_setup()
+
+        with patch("app.load_setup", return_value=setup), patch("app.sample_gpio_levels", return_value={"GPIO17": 1}):
+            response = self.client.post("/api/setup/button-detect/start")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "listening")
+        self.assertEqual(payload["baseline"], {"GPIO17": 1})
 
     def test_cross_role_pin_errors_detect_button_led_overlap(self):
         setup = default_setup()

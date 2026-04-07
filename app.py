@@ -21,7 +21,7 @@ BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from hardware.gpio import GPIO_PINS, GPIO_TO_BOARD_PIN, gpio_display_label, sample_gpio_levels_sysfs
+from hardware.gpio import GPIO_PINS, GPIO_TO_BOARD_PIN, gpio_display_label, sample_gpio_levels_pinctrl, sample_gpio_levels_sysfs
 from hardware.leds import LEDController
 from hardware.pins import potential_system_pins, reserved_system_pins
 from runtime.service import RuntimeService
@@ -40,6 +40,7 @@ RUNTIME_FILE = DATA_DIR / "runtime_state.json"
 LINK_SESSION_FILE = DATA_DIR / "rfid_link_session.json"
 READER_STATUS_FILE = DATA_DIR / "reader_status.json"
 BUTTON_DETECT_FILE = DATA_DIR / "button_detect.json"
+LED_PREVIEW_FILE = DATA_DIR / "led_preview.json"
 AUDIO_PROFILE_DIR = DATA_DIR / "generated" / "audio"
 READER_GUIDE_DIR = BASE_DIR / "assets" / "reader-guides"
 AUDIO_GUIDE_DIR = BASE_DIR / "assets" / "audio-guides"
@@ -1069,7 +1070,7 @@ def apply_reader_install_action(data, action, selected_type):
 
 def build_audio_runtime_config(audio_setup, settings):
     config = dict(audio_setup or {})
-    config["playback_backend"] = "mpg123"
+    config["playback_backend"] = "mpv"
     config["mixer_control"] = "auto"
     config["preferred_output"] = "auto"
     config["mono_downmix"] = False
@@ -1137,6 +1138,9 @@ def sample_gpio_levels(gpio_names):
             values = result.stdout.strip().split()
             if len(values) == len(gpio_names):
                 return {name: int(value == "1") for name, value in zip(gpio_names, values)}
+    pinctrl_sample = sample_gpio_levels_pinctrl(gpio_names)
+    if pinctrl_sample:
+        return pinctrl_sample
     sysfs_sample = sample_gpio_levels_sysfs(gpio_names)
     if sysfs_sample:
         return sysfs_sample
@@ -2410,9 +2414,20 @@ def api_setup_led_blink():
     brightness = to_int(payload.get("brightness", request.form.get("brightness", 100)), 100, 0, 100)
     if not pin:
         return jsonify({"ok": False, "details": ["Kein LED-PIN ausgewählt."]}), 400
-    controller = LEDController()
-    ok = controller.blink_led(pin, brightness=brightness, repeats=3, on_seconds=0.22, off_seconds=0.18)
-    controller.cleanup()
+    save_json(
+        LED_PREVIEW_FILE,
+        {
+            "id": secrets.token_hex(6),
+            "pin": pin,
+            "brightness": brightness,
+            "repeats": 3,
+            "on_seconds": 0.22,
+            "off_seconds": 0.18,
+            "status": "pending",
+            "requested_at": time.time(),
+        },
+    )
+    ok = True
     if not ok:
         return jsonify({"ok": False, "details": [f"LED-Test für {pin} konnte nicht gestartet werden."]}), 503
     return jsonify({"ok": True, "details": [f"LED-Test für {pin} gestartet."]})

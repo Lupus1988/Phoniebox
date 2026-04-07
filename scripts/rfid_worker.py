@@ -102,28 +102,28 @@ def save_reader_status(configured_type, ready, message, details=None):
 def ensure_spi_pinmux():
     try:
         result = subprocess.run(
-            ["pinctrl", "-e", "set", "7-11", "a0", "pn"],
+            ["pinctrl", "get", "7-11"],
             check=False,
             capture_output=True,
             text=True,
         )
     except OSError as exc:
         return {
-            "ok": False,
-            "message": f"SPI-Pinmux konnte nicht gesetzt werden: {exc}",
-            "details": ["`pinctrl` ist nicht verfügbar."],
+            "ok": True,
+            "message": f"SPI-Pinmux konnte nicht geprüft werden: {exc}",
+            "details": ["`pinctrl` ist nicht verfügbar; nutze bestehenden Kernel-/SPI-Zustand."],
         }
     if result.returncode != 0:
         details = [line.strip() for line in (result.stderr or result.stdout or "").splitlines() if line.strip()]
         return {
-            "ok": False,
-            "message": "SPI-Pinmux konnte nicht gesetzt werden.",
-            "details": details or ["Unbekannter pinctrl-Fehler."],
+            "ok": True,
+            "message": "SPI-Pinmux konnte nicht geprüft werden.",
+            "details": details or ["Unbekannter pinctrl-Fehler; nutze bestehenden Kernel-/SPI-Zustand."],
         }
     details = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
     return {
         "ok": True,
-        "message": "SPI-Pinmux auf SPI0 gesetzt.",
+        "message": "SPI-Pinmux geprüft.",
         "details": details,
     }
 
@@ -492,12 +492,16 @@ class RC522Reader(BaseReader):
             return
         self.reader_config = probe["config"]
         try:
-            self.reader = PiRc522ReaderBackend(**self.reader_config)
+            self.reader = LowLevelRC522Backend(
+                spi_bus=self.reader_config.get("spi_bus", 0),
+                spi_device=self.reader_config.get("spi_device", 0),
+                rst_pin=self.reader_config.get("rst_pin", 22),
+            )
         except Exception as exc:
             self.reader = None
             self.status_message = f"RC522-Treiber konnte nicht gestartet werden: {exc}"
             self.status_details = [
-                "Der Chip antwortet zwar über SPI, der Python-Reader konnte aber nicht geöffnet werden.",
+                "Der Chip antwortet zwar über SPI, der Reader konnte aber nicht geöffnet werden.",
                 *probe.get("details", []),
                 "Erwartete Verdrahtung: CE0/GPIO8, RST/GPIO22, IRQ/GPIO18.",
             ]

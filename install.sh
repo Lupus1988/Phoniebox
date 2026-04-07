@@ -24,7 +24,13 @@ ensure_hardware_groups() {
   local -a groups=(gpio spi input)
   local -a users=()
   local candidate
-  for candidate in "${SUDO_USER:-}" "$(logname 2>/dev/null || true)" "$(id -un 2>/dev/null || true)"; do
+  for candidate in \
+    "${SUDO_USER:-}" \
+    "${USER:-}" \
+    "${LOGNAME:-}" \
+    "$(logname 2>/dev/null || true)" \
+    "$(who -m 2>/dev/null | awk '{print $1}' || true)" \
+    "$(id -un 2>/dev/null || true)"; do
     [ -n "$candidate" ] || continue
     [ "$candidate" = "root" ] && continue
     case " ${users[*]} " in
@@ -32,6 +38,23 @@ ensure_hardware_groups() {
     esac
     users+=("$candidate")
   done
+
+  while IFS=: read -r username _ uid _ _ home shell; do
+    [ -n "$username" ] || continue
+    [ "$username" = "root" ] && continue
+    [ "${uid:-0}" -ge 1000 ] || continue
+    case "$shell" in
+      */false|*/nologin|"") continue ;;
+    esac
+    case "$home" in
+      /home/*) ;;
+      *) continue ;;
+    esac
+    case " ${users[*]} " in
+      *" $username "*) continue ;;
+    esac
+    users+=("$username")
+  done < <(getent passwd)
 
   [ ${#users[@]} -gt 0 ] || return 0
 
@@ -68,7 +91,7 @@ sudo mkdir -p "$APP_DIR" "$BIN_DIR"
 sudo cp -a "$SOURCE_DIR"/. "$APP_DIR"/
 
 sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip python3-lgpio network-manager avahi-daemon alsa-utils mpg123
+sudo apt-get install -y python3 python3-venv python3-pip python3-lgpio network-manager avahi-daemon alsa-utils mpv mpg123
 ensure_hardware_groups
 
 # Reader-specific buses are enabled by the setup workflow when the user actually installs

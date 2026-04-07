@@ -22,18 +22,24 @@
   <section class="setup-hero-grid">
     <form method="post" class="panel-box setup-save-card" data-reader-form data-installed-reader="{{ reader_management.installed_type }}">
       <input type="hidden" name="section" value="reader">
+      <input type="hidden" name="reader_action" value="{{ 'uninstall' if reader_management.installed_type != 'NONE' else 'install' }}" data-reader-action-input>
       <div class="panel-box-head">
         <h3>RFID-Reader</h3>
-        <span>{{ reader_management.installed_option.label }}</span>
       </div>
       <div class="form-grid compact">
-        <label>
+        <label class="reader-select-row">
           <span>Ziel-Reader</span>
-          <select name="reader_type" data-reader-type-select>
-            {% for option in reader_options %}
-              <option value="{{ option.id }}" {% if reader_management.target_type == option.id %}selected{% endif %}>{{ option.label }}</option>
-            {% endfor %}
-          </select>
+          <div class="reader-select-inline">
+            <select name="reader_type" data-reader-type-select>
+              {% for option in reader_options %}
+                <option value="{{ option.id }}" {% if reader_management.target_type == option.id %}selected{% endif %}>{{ option.label }}</option>
+              {% endfor %}
+            </select>
+            <span
+              class="reader-install-badge {% if reader_management.installed_type != 'NONE' %}is-ready{% else %}is-warning{% endif %}"
+              data-reader-install-badge
+            >{% if reader_management.installed_type != 'NONE' %}Reader installiert{% else %}Kein Reader installiert{% endif %}</span>
+          </div>
         </label>
         {% if reader_option.id not in ["USB", "NONE"] %}
         <label class="full">
@@ -42,25 +48,13 @@
         </label>
         {% endif %}
       </div>
-      <p class="page-copy">Installiert: {{ reader_management.installed_option.label }} · Ausgewählt: {{ reader_management.target_option.label }}</p>
-      {% if reader_option.id != "NONE" %}
-        <p class="page-copy">Treiber: {{ reader_option.driver }} · Transport: {{ reader_option.transport }}</p>
-      {% endif %}
-      <div class="reader-status-box {% if reader_status.ready %}is-ready{% else %}is-warning{% endif %}">
-        <strong>Reader-Status</strong>
-        <p>{{ reader_management.message }}</p>
-        <p>{{ reader_status.message or ("Reader bereit." if reader_status.ready else "Noch keine Reader-Diagnose verfügbar.") }}</p>
-        {% if (not reader_status.ready) and reader_status.details %}
-          <ul class="plain-list compact-plain-list">
-            {% for detail in reader_status.details %}
-              <li>{{ detail }}</li>
-            {% endfor %}
-          </ul>
-        {% endif %}
-      </div>
       <div class="setup-action-row">
-        <button class="primary setup-save-button" type="submit" name="reader_action" value="install" data-reader-install-button {% if not reader_management.can_install %}disabled{% endif %}>Reader installieren</button>
-        <button class="button-like setup-save-button" type="submit" name="reader_action" value="uninstall" data-reader-uninstall-button {% if not reader_management.can_uninstall %}disabled{% endif %}>Reader deinstallieren</button>
+        <button
+          class="setup-save-button {% if reader_management.installed_type != 'NONE' %}danger{% else %}primary{% endif %}"
+          type="submit"
+          data-reader-action-button
+          {% if reader_management.installed_type == 'NONE' and reader_management.target_type == 'NONE' %}disabled{% endif %}
+        >{% if reader_management.installed_type != 'NONE' %}Reader deinstallieren{% else %}Reader installieren{% endif %}</button>
       </div>
     </form>
 
@@ -68,9 +62,6 @@
       <input type="hidden" name="section" value="audio">
       <div class="panel-box-head">
         <h3>Audio-Ausgabe</h3>
-        <span>
-          {% if setup_data.audio.output_mode == "analog_jack" %}Interne Soundkarte{% elif setup_data.audio.output_mode == "i2s_dac" %}I2S-Soundkarte{% else %}USB-Soundkarte{% endif %}
-        </span>
       </div>
       <div class="form-grid compact">
         <label>
@@ -99,14 +90,14 @@
         {% endif %}
       </div>
       <ul class="plain-list">
-        {% if audio_environment.recommended_external_card %}
-          <li>Pi Zero 2 W erkannt: USB-DAC oder I2S-HAT als Standardpfad einplanen.</li>
-        {% endif %}
-        {% for note in audio_environment.notes %}
-          <li>{{ note }}</li>
+        <li>Gerät erkannt: {{ audio_environment.device_model }}</li>
+        {% if audio_environment.has_analog_audio %}
+          <li>Onboard-Soundkarte vorhanden.</li>
+        {% elif audio_environment.recommended_external_card %}
+          <li>Keine Onboard-Soundkarte erkannt. USB-Soundkarte empfohlen.</li>
         {% else %}
-          <li>Keine zusätzlichen Audio-Hinweise.</li>
-        {% endfor %}
+          <li>Keine Onboard-Soundkarte erkannt.</li>
+        {% endif %}
       </ul>
       <div class="setup-action-row">
         <button class="primary setup-save-button" type="submit">Soundkarte speichern</button>

@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import patch
+from subprocess import CompletedProcess
 
 from scripts import rfid_worker
 
@@ -17,6 +18,27 @@ class FakeBackend:
 
 
 class ProbeRC522BackendTest(unittest.TestCase):
+    def test_ensure_spi_pinmux_only_inspects_current_state(self):
+        completed = CompletedProcess(
+            args=["pinctrl", "get", "7-11"],
+            returncode=0,
+            stdout="7: a0\n8: a0\n",
+            stderr="",
+        )
+
+        with patch.object(rfid_worker.subprocess, "run", return_value=completed) as run_mock:
+            result = rfid_worker.ensure_spi_pinmux()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["message"], "SPI-Pinmux geprüft.")
+        self.assertEqual(result["details"], ["7: a0", "8: a0"])
+        run_mock.assert_called_once_with(
+            ["pinctrl", "get", "7-11"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
     def test_probe_returns_detected_config(self):
         backend = FakeBackend(0x92)
 

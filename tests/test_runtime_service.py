@@ -97,6 +97,7 @@ class RuntimeServiceTest(unittest.TestCase):
             },
         )
         write_json(self.data_dir / "runtime_state.json", service_module.default_runtime_state())
+        write_json(self.data_dir / "button_detect.json", service_module.default_button_detect())
 
         self.patchers = [
             patch.object(service_module, "PLAYER_FILE", self.data_dir / "player_state.json"),
@@ -104,9 +105,11 @@ class RuntimeServiceTest(unittest.TestCase):
             patch.object(service_module, "SETTINGS_FILE", self.data_dir / "settings.json"),
             patch.object(service_module, "SETUP_FILE", self.data_dir / "setup.json"),
             patch.object(service_module, "RUNTIME_FILE", self.data_dir / "runtime_state.json"),
+            patch.object(service_module, "BUTTON_DETECT_FILE", self.data_dir / "button_detect.json"),
             patch.object(audio_module, "BASE_DIR", self.base_dir),
             patch.object(playback_module, "BASE_DIR", self.base_dir),
             patch.object(playback_module.shutil, "which", return_value=None),
+            patch.object(service_module, "pick_track_duration", return_value=180),
             patch.object(service_module, "set_wifi_radio", return_value={"ok": True, "details": ["ok"]}),
             patch.object(service_module, "wifi_radio_enabled", return_value=True),
             patch.object(service_module.subprocess, "run"),
@@ -140,6 +143,128 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertIn("03 bonus", queued["player"]["queue"])
         self.assertEqual(sought["player"]["position_seconds"], 37)
         self.assertEqual(cleared["player"]["queue"], [])
+
+    def test_remove_rfid_stop_resets_position_and_session(self):
+        started = self.service.assign_album_by_rfid("1234567890")
+        self.service.seek(37)
+
+        removed = self.service.remove_rfid_tag()
+
+        self.assertTrue(started["ok"])
+        self.assertEqual(removed["runtime"]["playback_state"], "stopped")
+        self.assertEqual(removed["player"]["position_seconds"], 0)
+        self.assertEqual(removed["runtime"]["active_rfid_uid"], "")
+        self.assertEqual(removed["runtime"]["playback_session"]["state"], "stopped")
+        self.assertFalse(removed["player"]["is_playing"])
+
+    def test_remove_rfid_pause_uses_settings_and_preserves_position(self):
+        write_json(
+            self.data_dir / "settings.json",
+            {
+                "max_volume": 85,
+                "volume_step": 5,
+                "sleep_timer_step": 5,
+                "rfid_read_action": "play",
+                "rfid_remove_action": "pause",
+            },
+        )
+        self.service.assign_album_by_rfid("1234567890")
+        self.service.seek(37)
+
+        removed = self.service.remove_rfid_tag()
+
+        self.assertEqual(removed["runtime"]["playback_state"], "paused")
+        self.assertEqual(removed["player"]["position_seconds"], 37)
+        self.assertEqual(removed["runtime"]["active_rfid_uid"], "")
+        self.assertEqual(removed["runtime"]["playback_session"]["state"], "paused")
+        self.assertFalse(removed["player"]["is_playing"])
+
+    def test_repeated_presence_rfid_scan_does_not_reload_same_album(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {
+                    "type": "RC522",
+                    "connection_hint": "",
+                },
+                "buttons": [],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        with patch.object(self.service, "load_album_into_player", wraps=self.service.load_album_into_player) as load_album:
+            first = self.service.assign_album_by_rfid("1234567890")
+            second = self.service.assign_album_by_rfid("1234567890")
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertEqual(load_album.call_count, 1)
+        self.assertEqual(second["runtime"]["active_rfid_uid"], "1234567890")
+
+    def test_presence_rfid_resumes_paused_same_album_instead_of_reloading(self):
+        write_json(
+            self.data_dir / "settings.json",
+            {
+                "max_volume": 85,
+                "volume_step": 5,
+                "sleep_timer_step": 5,
+                "rfid_read_action": "play",
+                "rfid_remove_action": "pause",
+            },
+        )
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {
+                    "type": "RC522",
+                    "connection_hint": "",
+                },
+                "buttons": [],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        self.service.assign_album_by_rfid("1234567890")
+        self.service.seek(37)
+        self.service.remove_rfid_tag()
+
+        with patch.object(self.service, "load_album_into_player", wraps=self.service.load_album_into_player) as load_album:
+            resumed = self.service.assign_album_by_rfid("1234567890")
+
+        self.assertTrue(resumed["ok"])
+        self.assertEqual(load_album.call_count, 0)
+        self.assertEqual(resumed["runtime"]["playback_state"], "playing")
+        self.assertEqual(resumed["runtime"]["active_album_id"], "album-1")
+        self.assertEqual(resumed["runtime"]["active_rfid_uid"], "1234567890")
+        self.assertEqual(resumed["player"]["position_seconds"], 37)
+        self.assertEqual(resumed["runtime"]["playback_session"]["position_seconds"], 37)
+
+    def test_sync_playback_session_updates_current_track_from_mpv_playlist_position(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        runtime_state = self.service.ensure_runtime()
+        player = self.service.load_player()
+        runtime_state["playback_state"] = "playing"
+        runtime_state["playback_session"] = {
+            **runtime_state["playback_session"],
+            "backend": "mpv",
+            "state": "playing",
+            "current_index": 1,
+            "position_seconds": 12,
+            "duration_seconds": 222,
+        }
+
+        with patch.object(self.service.playback, "sync_session", return_value=dict(runtime_state["playback_session"])):
+            with patch.object(service_module, "pick_track_duration", return_value=0):
+                runtime_state, player, session_finished = self.service._sync_playback_session(runtime_state, player)
+
+        self.assertFalse(session_finished)
+        self.assertEqual(player["current_track_index"], 1)
+        self.assertEqual(player["current_track"], "02 weiter")
+        self.assertEqual(player["queue"], [])
+        self.assertEqual(player["duration_seconds"], 222)
+        self.assertEqual(player["position_seconds"], 12)
 
     def test_reader_behavior_comes_from_settings_only(self):
         write_json(
@@ -423,6 +548,13 @@ class RuntimeServiceTest(unittest.TestCase):
 
         self.assertEqual(result["player"]["volume"], 45)
         self.assertEqual(result["runtime"]["last_event"], "Hardwaretasten deaktiviert")
+
+    @patch.object(service_module, "sample_gpio_levels_pinctrl", return_value={"GPIO17": 0})
+    @patch.object(service_module, "GPIO", None)
+    def test_read_gpio_levels_uses_pinctrl_fallback_when_gpio_backend_missing(self, _sample_pinctrl):
+        levels = self.service._read_gpio_levels(["GPIO17"])
+
+        self.assertEqual(levels, {"GPIO17": 0})
 
     def test_power_hold_uses_smooth_power_effect_metadata(self):
         write_json(

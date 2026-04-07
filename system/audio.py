@@ -146,7 +146,7 @@ def detect_audio_environment():
     if not cards:
         notes.append("Keine ALSA-Soundkarten erkannt.")
     if is_pi_zero_2w and not (has_usb or has_i2s_hat):
-        notes.append("Pi Zero 2 W erkannt. Für Audio ist meist eine USB- oder I2S-Soundkarte nötig.")
+        notes.append("Pi Zero 2 W erkannt.")
     if has_usb:
         notes.append("USB-Audio erkannt.")
     if has_i2s_hat:

@@ -13,7 +13,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from hardware.gpio import SysfsGPIOInput, gpio_name_to_bcm
+from hardware.gpio import SysfsGPIOInput, gpio_name_to_bcm, sample_gpio_levels_pinctrl
 
 
 def sample_with_rpi(gpio_names):
@@ -40,6 +40,8 @@ def main(argv):
         sampled = sample_with_rpi(gpio_names)
     except Exception:
         sampled = {}
+    if not sampled:
+        sampled = sample_gpio_levels_pinctrl(gpio_names)
     if not sampled:
         sampled = SysfsGPIOInput().sample(gpio_names)
     print(json.dumps(sampled, ensure_ascii=False))

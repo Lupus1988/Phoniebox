@@ -9,6 +9,25 @@ class PlaybackControllerTest(unittest.TestCase):
     def setUp(self):
         self.controller = playback_module.PlaybackController()
 
+    def test_build_command_for_mpv_uses_start_time_and_volume(self):
+        command = self.controller._build_command("mpv", "/tmp/test.mp3", position_seconds=37, volume=50)
+
+        self.assertEqual(command[:4], ["mpv", "--no-video", "--really-quiet", "--audio-display=no"])
+        self.assertIn("--cache=no", command)
+        self.assertIn("--audio-buffer=0.03", command)
+        self.assertIn("--demuxer-readahead-secs=0", command)
+        self.assertIn("--prefetch-playlist=no", command)
+        self.assertIn("--volume=50", command)
+        self.assertIn("--start=37", command)
+        self.assertEqual(command[-1], "/tmp/test.mp3")
+
+    def test_build_playlist_command_for_mpv_uses_playlist_start(self):
+        command = self.controller._build_mpv_playlist_command("/tmp/test.m3u", current_index=2, position_seconds=11, volume=50)
+
+        self.assertIn("--playlist-start=2", command)
+        self.assertIn("--start=11", command)
+        self.assertIn("--playlist=/tmp/test.m3u", command)
+
     def test_terminate_known_process_reaps_registered_handle(self):
         process = Mock()
         process.pid = 4321
@@ -40,6 +59,91 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertEqual(process.wait.call_args_list[1].kwargs["timeout"], 0.5)
         self.assertEqual(signal_group.call_args_list[2].args, (process.pid, signal.SIGKILL))
         self.assertNotIn(process.pid, self.controller._processes)
+
+    def test_set_volume_restarts_mpg123_from_current_position(self):
+        session = {
+            "backend": "mpg123",
+            "state": "playing",
+            "pid": 1234,
+            "position_seconds": 41,
+            "started_at": 100.0,
+            "volume": 45,
+        }
+
+        def fake_launch(current):
+            current["state"] = "playing"
+            current["pid"] = 5678
+            current["started_at"] = 200.0
+            return current
+
+        with patch.object(self.controller, "sync_session", return_value=dict(session)) as sync_session:
+            with patch.object(self.controller, "_terminate_process_group") as terminate_group:
+                with patch.object(self.controller, "_launch", side_effect=fake_launch) as launch:
+                    updated = self.controller.set_volume(dict(session), 52)
+
+        sync_session.assert_called_once()
+        terminate_group.assert_called_once_with(1234)
+        launch.assert_called_once()
+        self.assertEqual(updated["volume"], 52)
+        self.assertEqual(updated["pid"], 5678)
+        self.assertEqual(updated["state"], "playing")
+        self.assertEqual(updated["position_seconds"], 41)
+
+    def test_build_command_for_mpg123_uses_frame_skip_for_resume(self):
+        command = self.controller._build_command("mpg123", "/tmp/test.mp3", position_seconds=37, volume=50)
+
+        self.assertEqual(command[:4], ["mpg123", "-q", "-f", "16384"])
+        self.assertIn("-k", command)
+        self.assertIn("1416", command)
+        self.assertEqual(command[-1], "/tmp/test.mp3")
+
+    def test_set_volume_uses_mpv_ipc_without_relaunch(self):
+        session = {
+            "backend": "mpv",
+            "state": "playing",
+            "pid": 1234,
+            "socket_path": "/tmp/phoniebox-mpv.sock",
+            "position_seconds": 41,
+            "started_at": 100.0,
+            "volume": 45,
+        }
+
+        with patch.object(self.controller, "sync_session", return_value=dict(session)) as sync_session:
+            with patch.object(self.controller, "_process_exists", return_value=True):
+                with patch.object(self.controller, "_mpv_request", return_value={"error": "success"}) as mpv_request:
+                    with patch.object(self.controller, "_terminate_process_group") as terminate_group:
+                        with patch.object(self.controller, "_launch") as launch:
+                            updated = self.controller.set_volume(dict(session), 52)
+
+        sync_session.assert_called_once()
+        mpv_request.assert_called_once_with(updated, ["set_property", "volume", 52])
+        terminate_group.assert_not_called()
+        launch.assert_not_called()
+        self.assertEqual(updated["volume"], 52)
+        self.assertEqual(updated["pid"], 1234)
+        self.assertEqual(updated["state"], "playing")
+
+    def test_next_track_uses_mpv_playlist_command_without_relaunch(self):
+        session = {
+            "backend": "mpv",
+            "state": "playing",
+            "pid": 1234,
+            "socket_path": "/tmp/phoniebox-mpv.sock",
+            "position_seconds": 4,
+            "current_index": 0,
+        }
+
+        with patch.object(
+            self.controller,
+            "sync_session",
+            side_effect=[dict(session), {**session, "current_index": 1}, {**session, "current_index": 1}],
+        ):
+            with patch.object(self.controller, "_process_exists", return_value=True):
+                with patch.object(self.controller, "_mpv_request", return_value={"error": "success"}) as mpv_request:
+                    updated = self.controller.next_track(dict(session))
+
+        mpv_request.assert_called_once_with(session, ["playlist-next", "force"])
+        self.assertEqual(updated["current_index"], 1)
 
 
 if __name__ == "__main__":

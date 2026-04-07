@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -115,3 +117,41 @@ class SysfsGPIOInput:
 
 def sample_gpio_levels_sysfs(gpio_names):
     return SysfsGPIOInput().sample([name for name in gpio_names if name])
+
+
+def sample_gpio_levels_pinctrl(gpio_names):
+    gpio_names = [name for name in gpio_names if name]
+    if not gpio_names or shutil.which("pinctrl") is None:
+        return {}
+
+    bcm_to_name = {}
+    bcm_list = []
+    for gpio_name in gpio_names:
+        bcm = gpio_name_to_bcm(gpio_name)
+        if bcm is None:
+            continue
+        bcm_text = str(bcm)
+        bcm_to_name[bcm_text] = gpio_name
+        bcm_list.append(bcm_text)
+    if not bcm_list:
+        return {}
+
+    result = subprocess.run(
+        ["pinctrl", "lev", ",".join(bcm_list)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return {}
+
+    values = result.stdout.strip().split()
+    if len(values) != len(bcm_list):
+        return {}
+
+    sampled = {}
+    for bcm_text, value in zip(bcm_list, values):
+        if value not in {"0", "1"}:
+            return {}
+        sampled[bcm_to_name[bcm_text]] = int(value)
+    return sampled

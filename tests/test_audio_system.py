@@ -91,7 +91,7 @@ class AudioSystemTest(unittest.TestCase):
                     "output_mode": "usb_dac",
                     "use_startup_volume": True,
                     "startup_volume": 55,
-                    "playback_backend": "mpg123",
+                    "playback_backend": "mpv",
                     "i2s_profile": "auto",
                 },
                 Path(temp_dir),

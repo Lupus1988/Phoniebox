@@ -138,12 +138,14 @@ def detect_audio(library_data, setup_data=None):
     audio_setup = setup_data.get("audio", {})
     audio_env = detect_audio_environment()
     backend = "python-playlist-core"
-    ready = bool(audio_env.get("cards")) or command_exists("mpg123") or command_exists("cvlc")
+    ready = bool(audio_env.get("cards")) or command_exists("mpv") or command_exists("mpg123") or command_exists("cvlc")
     notes = list(audio_env.get("notes", []))
-    if command_exists("mpg123"):
-        notes.append("mpg123 vorhanden, kann später als Playback-Backend dienen.")
+    if command_exists("mpv"):
+        notes.append("mpv als Playback-Backend verfügbar.")
+    elif command_exists("mpg123"):
+        notes.append("mpg123 als Fallback-Backend verfügbar.")
     elif command_exists("cvlc"):
-        notes.append("cvlc vorhanden, kann später als Playback-Backend dienen.")
+        notes.append("cvlc als Fallback-Backend verfügbar.")
     else:
         notes.append("Noch kein System-Playback-Backend gefunden. Softwarekern bleibt aber kompatibel.")
     return {
