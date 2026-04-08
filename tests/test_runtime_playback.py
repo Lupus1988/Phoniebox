@@ -3,11 +3,26 @@ import unittest
 from unittest.mock import Mock, patch
 
 from runtime import playback as playback_module
+from services.audio_backends import CurrentAudioBackend, MPDAudioBackend, create_audio_backend
 
 
 class PlaybackControllerTest(unittest.TestCase):
     def setUp(self):
         self.controller = playback_module.PlaybackController()
+
+    def test_audio_backend_factory_returns_current_backend_by_default(self):
+        backend = create_audio_backend()
+
+        self.assertIsInstance(backend, CurrentAudioBackend)
+
+    def test_audio_backend_factory_can_create_mpd_placeholder(self):
+        backend = create_audio_backend("mpd")
+
+        self.assertIsInstance(backend, MPDAudioBackend)
+        status = backend.status()
+        self.assertEqual(status["active_backend"], "mpd")
+        self.assertFalse(status["system_ready"])
+
 
     def test_build_command_for_mpv_uses_start_time_and_volume(self):
         command = self.controller._build_command("mpv", "/tmp/test.mp3", position_seconds=37, volume=50)

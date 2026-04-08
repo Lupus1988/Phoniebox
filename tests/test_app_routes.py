@@ -8,6 +8,7 @@ import app as app_module
 
 from app import (
     app,
+    create_app,
     collect_conflicts,
     cross_role_pin_errors,
     default_setup,
@@ -34,6 +35,16 @@ class AppRoutesTest(unittest.TestCase):
             response = self.client.get(path)
             self.assertEqual(response.status_code, 200, path)
 
+    def test_create_app_sets_secret_key_and_registers_blueprints(self):
+        application = create_app()
+
+        self.assertEqual(application.config["SECRET_KEY"], app_module.APP_CONFIG.secret_key)
+        self.assertIn("player_routes.player", application.view_functions)
+        self.assertIn("library", application.view_functions)
+        self.assertNotIn("settings", application.view_functions)
+        self.assertIn("settings", app.view_functions)
+
+
     def test_album_editor_page_renders(self):
         library_payload = {
             "albums": [
@@ -50,7 +61,7 @@ class AppRoutesTest(unittest.TestCase):
             ]
         }
 
-        with patch("app.load_library", return_value=library_payload), patch("app.refresh_album_metadata") as refresh_album:
+        with patch("routes.library.load_library", return_value=library_payload), patch("routes.library.refresh_album_metadata") as refresh_album:
             response = self.client.get("/library/album/album-1")
 
         self.assertEqual(response.status_code, 200)
@@ -97,6 +108,83 @@ class AppRoutesTest(unittest.TestCase):
     def test_player_snapshot_endpoint_renders(self):
         response = self.client.get("/api/player/snapshot")
         self.assertEqual(response.status_code, 200)
+
+    def test_player_post_xhr_returns_json_snapshot(self):
+        with patch(
+            "routes.player.handle_player_action",
+            return_value=({"ok": True, "player_state": {"current_album": "Test"}, "runtime_state": {}, "settings": {}}, 200),
+        ) as handle_action:
+            response = self.client.post(
+                "/player",
+                data={"action": "toggle_play"},
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["message"], "Playerstatus aktualisiert.")
+        handle_action.assert_called_once()
+
+    def test_settings_post_xhr_returns_json(self):
+        with patch("app.load_settings", return_value=app_module.default_settings()), patch("app.save_settings") as save_settings:
+            response = self.client.post(
+                "/settings",
+                data={"volume_step": "7", "max_volume": "85"},
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["message"], "Einstellungen gespeichert.")
+        self.assertEqual(payload["settings"]["volume_step"], 7)
+        self.assertEqual(payload["settings"]["max_volume"], 85)
+        save_settings.assert_called_once()
+
+    def test_api_settings_returns_stable_json_contract(self):
+        with patch("app.load_settings", return_value=app_module.default_settings()), patch("app.save_settings") as save_settings:
+            response = self.client.post(
+                "/api/settings",
+                json={"volume_step": 9, "max_volume": 88},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        payload = response.get_json()
+        self.assertEqual(set(["ok", "message", "settings"]).difference(payload.keys()), set())
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["message"], "Einstellungen gespeichert.")
+        self.assertEqual(payload["settings"]["volume_step"], 9)
+        self.assertEqual(payload["settings"]["max_volume"], 88)
+        save_settings.assert_called_once()
+
+    def test_library_save_album_xhr_returns_json_on_conflict(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+        library_payload = {
+            "albums": [
+                {"id": "album-1", "name": "Vorhanden", "folder": "media/albums/alt", "playlist": "", "track_count": 1, "rfid_uid": "", "cover_url": ""}
+            ]
+        }
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "routes.library.load_library", return_value=library_payload
+        ):
+            response = self.client.post(
+                "/library",
+                data={"action": "save_album", "album_id": "album-2", "name": "Vorhanden"},
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(response.is_json)
+        payload = response.get_json()
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["category"], "error")
+        self.assertIn("Albumname bereits vorhanden", payload["message"])
 
     def test_hotspot_password_warning_uses_current_security_value(self):
         setup = default_setup()
@@ -261,7 +349,7 @@ class AppRoutesTest(unittest.TestCase):
         runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
 
         with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
-            "app.load_library",
+            "routes.library.load_library",
             return_value={"albums": [{"id": "album-1", "name": "Test", "folder": "media/albums/test", "playlist": "", "track_count": 0, "rfid_uid": "", "cover_url": ""}]},
         ):
             response = self.client.post(
@@ -280,8 +368,8 @@ class AppRoutesTest(unittest.TestCase):
         library_payload = {"albums": [{"id": "album-1", "name": "Test", "folder": "media/albums/test", "playlist": "", "track_count": 0, "rfid_uid": "", "cover_url": ""}]}
 
         with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
-            "app.load_library", return_value=library_payload
-        ), patch("app.add_tracks_to_album") as add_tracks, patch("app.save_library") as save_library:
+            "routes.library.load_library", return_value=library_payload
+        ), patch("routes.library.add_tracks_to_album") as add_tracks, patch("routes.library.save_library") as save_library:
             response = self.client.post(
                 "/library",
                 data={"action": "add_tracks", "album_id": "album-1", "track_files": (BytesIO(b"fake"), "song.mp3")},
@@ -306,8 +394,8 @@ class AppRoutesTest(unittest.TestCase):
         library_payload = {"albums": [album]}
 
         with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
-            "app.load_library", return_value=library_payload
-        ), patch("app.remove_tracks_from_album", return_value=2) as remove_tracks, patch("app.save_library") as save_library:
+            "routes.library.load_library", return_value=library_payload
+        ), patch("routes.library.remove_tracks_from_album", return_value=2) as remove_tracks, patch("routes.library.save_library") as save_library:
             response = self.client.post(
                 "/library",
                 data={"action": "remove_tracks", "album_id": "album-1", "track_path": ["eins.mp3", "zwei.mp3"]},
@@ -324,8 +412,8 @@ class AppRoutesTest(unittest.TestCase):
         album = {"id": "album-1", "name": "Test", "folder": "media/albums/test", "playlist": "", "track_count": 2, "rfid_uid": "", "cover_url": ""}
         library_payload = {"albums": [album]}
 
-        with patch("app.load_library", return_value=library_payload), patch("app.reorder_album_tracks") as reorder_tracks, patch(
-            "app.save_library"
+        with patch("routes.library.load_library", return_value=library_payload), patch("routes.library.reorder_album_tracks") as reorder_tracks, patch(
+            "routes.library.save_library"
         ) as save_library:
             response = self.client.post(
                 "/library/album/album-1",
@@ -342,8 +430,8 @@ class AppRoutesTest(unittest.TestCase):
         album = {"id": "album-1", "name": "Test", "folder": "media/albums/test", "playlist": "", "track_count": 2, "rfid_uid": "", "cover_url": ""}
         library_payload = {"albums": [album]}
 
-        with patch("app.load_library", return_value=library_payload), patch("app.rename_track_in_album") as rename_track, patch(
-            "app.save_library"
+        with patch("routes.library.load_library", return_value=library_payload), patch("routes.library.rename_track_in_album") as rename_track, patch(
+            "routes.library.save_library"
         ) as save_library:
             response = self.client.post(
                 "/library/album/album-1",

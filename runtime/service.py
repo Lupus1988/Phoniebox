@@ -24,7 +24,7 @@ from hardware.gpio import GPIO_TO_BOARD_PIN, SysfsGPIOInput, gpio_display_label,
 from hardware.manager import detect_hardware
 from hardware.pins import filter_reserved_gpio_names, reserved_system_pins
 from runtime.audio import build_track_queue, load_playlist_entries, pick_track_duration, track_title_from_entry
-from runtime.playback import PlaybackController
+from services.audio_backends import create_audio_backend
 from system.networking import set_wifi_radio, wifi_radio_enabled
 
 DATA_DIR = BASE_DIR / "data"
@@ -142,7 +142,8 @@ class RuntimeService:
 
     def __init__(self):
         self.runtime_path = RUNTIME_FILE
-        self.playback = PlaybackController()
+        self.audio_backend = create_audio_backend()
+        self.playback = self.audio_backend
         self._gpio_ready = False
         self._gpio_backend = None
         self._configured_gpio_pins = set()

@@ -5,7 +5,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   const seekSlider = document.getElementById("player-seek-slider");
   const seekBubble = document.getElementById("player-seek-bubble");
+  const statusNode = document.getElementById("player-action-status");
   let pollTimer = null;
+  let actionInFlight = false;
 
   function formatMmss(totalSeconds) {
     const safe = Math.max(0, Number(totalSeconds) || 0);
@@ -63,6 +65,49 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function setStatus(message, tone = "neutral") {
+    if (!statusNode) {
+      return;
+    }
+    statusNode.textContent = message || "";
+    statusNode.dataset.tone = tone;
+  }
+
+  function actionLabel(action) {
+    const labels = {
+      toggle_play: "Wiedergabe wird aktualisiert …",
+      prev: "Vorheriger Titel …",
+      next: "Nächster Titel …",
+      stop: "Wiedergabe wird gestoppt …",
+      volume_down: "Lautstärke wird gesenkt …",
+      volume_up: "Lautstärke wird erhöht …",
+      mute: "Stummschaltung wird geändert …",
+      sleep_reset: "Sleeptimer wird zurückgesetzt …",
+      sleep_down: "Sleeptimer wird reduziert …",
+      sleep_up: "Sleeptimer wird erhöht …",
+      clear_queue: "Warteschlange wird geleert …",
+      seek: "Position wird gesetzt …",
+    };
+    return labels[action] || "Player wird aktualisiert …";
+  }
+
+  function extractError(payload, fallback) {
+    return payload?.error || payload?.message || fallback;
+  }
+
+  function setFormsDisabled(disabled) {
+    for (const form of forms) {
+      for (const field of form.elements) {
+        if (field instanceof HTMLElement) {
+          field.toggleAttribute("disabled", disabled);
+        }
+      }
+    }
+    if (seekSlider) {
+      seekSlider.toggleAttribute("disabled", disabled);
+    }
+  }
+
   function applySnapshot(payload) {
     const player = payload.player_state || {};
     const runtime = payload.runtime_state || {};
@@ -110,21 +155,38 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function submitPlayerForm(form, submitter) {
+    if (actionInFlight) {
+      return;
+    }
     const formData = new FormData(form);
     if (submitter?.name) {
       formData.set(submitter.name, submitter.value);
     }
     const payload = Object.fromEntries(formData.entries());
 
-    const response = await fetch("/api/player/action", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      return;
+    actionInFlight = true;
+    setFormsDisabled(true);
+    setStatus(actionLabel(payload.action), "busy");
+
+    try {
+      const response = await fetch("/api/player/action", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.ok === false) {
+        setStatus(extractError(result, "Aktion konnte nicht ausgeführt werden."), "error");
+        return;
+      }
+      applySnapshot(result);
+      setStatus(result.message || "Playerstatus aktualisiert.", "success");
+    } catch (_error) {
+      setStatus("Playeraktion fehlgeschlagen.", "error");
+    } finally {
+      actionInFlight = false;
+      setFormsDisabled(false);
     }
-    applySnapshot(await response.json());
   }
 
   async function pollSnapshot() {
@@ -174,20 +236,25 @@ document.addEventListener("DOMContentLoaded", () => {
         action: "seek",
         seek_position: Number(seekSlider.value || 0),
       };
+      setStatus(actionLabel(payload.action), "busy");
       const response = await fetch("/api/player/action", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(payload),
       });
-      if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.ok === false) {
+        setStatus(extractError(result, "Position konnte nicht gesetzt werden."), "error");
         return;
       }
-      applySnapshot(await response.json());
+      applySnapshot(result);
+      setStatus(result.message || "Position aktualisiert.", "success");
       hideBubble();
     });
 
     updateSeekVisuals(Number(seekSlider.value || 0), Number(seekSlider.max || 0));
   }
 
+  setStatus("Bereit.");
   pollTimer = window.setTimeout(pollSnapshot, 1000);
 });

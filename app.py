@@ -1,6 +1,8 @@
+import configparser
 import copy
 import io
 import json
+import services.library_service as library_service_module
 import os
 import secrets
 import shutil
@@ -9,7 +11,7 @@ import sys
 import time
 from pathlib import Path
 
-from flask import Flask, flash, jsonify, redirect, render_template, request, send_file, url_for
+from flask import Flask, flash, redirect, render_template, request, send_file, url_for
 from werkzeug.utils import secure_filename
 try:
     import gpiod
@@ -24,9 +26,50 @@ if str(BASE_DIR) not in sys.path:
 from hardware.gpio import GPIO_PINS, GPIO_TO_BOARD_PIN, gpio_display_label, sample_gpio_levels_pinctrl, sample_gpio_levels_sysfs
 from hardware.leds import LEDController
 from hardware.pins import potential_system_pins, reserved_system_pins
-from runtime.service import RuntimeService
+from config import load_config
+from routes import register_blueprints
+from services import runtime_service
+from services.library_service import (
+    add_tracks_to_album,
+    album_conflict,
+    album_editor_payload,
+    apply_link_uid,
+    create_empty_album,
+    default_link_session,
+    effective_track_entries,
+    finish_link_session,
+    import_album_folder,
+    library_storage_summary,
+    load_library,
+    load_link_session,
+    rename_track_in_album,
+    refresh_album_metadata,
+    remove_track_from_album,
+    remove_tracks_from_album,
+    reorder_album_tracks,
+    save_library,
+    save_link_session,
+    start_link_session,
+    track_rows,
+)
 from system.audio import apply_audio_profile, deploy_audio_profile, detect_audio_environment, i2s_profile_catalog
 from system.networking import apply_wifi_profile, ensure_hostname, fallback_hotspot_cycle
+from utils import (
+    album_editor_response,
+    format_mmss,
+    is_json_request,
+    json_error,
+    json_success,
+    load_json,
+    merge_defaults,
+    normalize_hotspot_security,
+    progress_percent,
+    safe_relative_path,
+    save_json,
+    slugify_name,
+    to_float,
+    to_int,
+)
 
 DATA_DIR = BASE_DIR / "data"
 MEDIA_DIR = BASE_DIR / "media"
@@ -36,6 +79,8 @@ LIBRARY_FILE = DATA_DIR / "library.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 SETUP_FILE = DATA_DIR / "setup.json"
 APPLY_REPORT_FILE = DATA_DIR / "last_apply_report.json"
+NM_CONNECTIONS_DIR = Path("/etc/NetworkManager/system-connections")
+WPA_SUPPLICANT_FILE = Path("/etc/wpa_supplicant/wpa_supplicant.conf")
 RUNTIME_FILE = DATA_DIR / "runtime_state.json"
 LINK_SESSION_FILE = DATA_DIR / "rfid_link_session.json"
 READER_STATUS_FILE = DATA_DIR / "reader_status.json"
@@ -44,16 +89,22 @@ LED_PREVIEW_FILE = DATA_DIR / "led_preview.json"
 AUDIO_PROFILE_DIR = DATA_DIR / "generated" / "audio"
 READER_GUIDE_DIR = BASE_DIR / "assets" / "reader-guides"
 AUDIO_GUIDE_DIR = BASE_DIR / "assets" / "audio-guides"
-HOTSPOT_SECURITY_CHOICES = {"open", "wpa-psk"}
 READER_NONE_ID = "NONE"
+APP_CONFIG = load_config()
 
-app = Flask(
-    __name__,
-    template_folder=str(BASE_DIR / "templates"),
-    static_folder=str(BASE_DIR / "static"),
-)
-app.secret_key = "phoniebox-panel-dev-secret"
-runtime_service = RuntimeService()
+def create_app():
+    application = Flask(
+        __name__,
+        template_folder=str(BASE_DIR / "templates"),
+        static_folder=str(BASE_DIR / "static"),
+    )
+    application.config["SECRET_KEY"] = APP_CONFIG.secret_key
+    register_blueprints(application)
+    return application
+
+
+app = create_app()
+app.secret_key = app.config["SECRET_KEY"]
 PWM_PINS = {"GPIO12", "GPIO13", "GPIO18", "GPIO19"}
 BUTTON_FUNCTIONS = [
     "Play/Pause",
@@ -142,400 +193,6 @@ READER_OPTIONS = [
     {"id": "PN532_SPI", "label": "PN532 (SPI)", "driver": "pn532", "transport": "spi"},
     {"id": "PN532_UART", "label": "PN532 (UART)", "driver": "pn532", "transport": "uart"},
 ]
-
-
-def load_json(path, default):
-    if not path.exists():
-        return default
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def save_json(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_name(f"{path.stem}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
-    with temp_path.open("w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=2, ensure_ascii=False)
-    temp_path.replace(path)
-
-
-def merge_defaults(data, defaults):
-    if not isinstance(defaults, dict):
-        return data if data is not None else defaults
-    result = dict(defaults)
-    if not isinstance(data, dict):
-        return result
-    for key, value in data.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = merge_defaults(value, result[key])
-        else:
-            result[key] = value
-    return result
-
-
-def slugify_name(value):
-    cleaned = secure_filename((value or "").strip())
-    return cleaned.replace("_", "-").lower() or f"album-{secrets.token_hex(4)}"
-
-
-def safe_relative_path(raw_name):
-    parts = []
-    for part in Path(raw_name).parts:
-        if part in {"", ".", ".."}:
-            continue
-        cleaned = secure_filename(part)
-        if cleaned:
-            parts.append(cleaned)
-    return Path(*parts) if parts else Path("datei")
-
-
-def is_audio_file(path):
-    return path.suffix.lower() in {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".aac", ".opus", ".oga", ".aif", ".aiff", ".m4b", ".mp4"}
-
-
-def is_cover_file(path):
-    return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
-
-
-def build_playlist(album_dir):
-    audio_files = sorted(
-        [path for path in album_dir.rglob("*") if path.is_file() and is_audio_file(path)],
-        key=lambda item: str(item.relative_to(album_dir)).lower(),
-    )
-    playlist_path = album_dir / "playlist.m3u"
-    playlist_lines = ["#EXTM3U"]
-    for track in audio_files:
-        playlist_lines.append(track.relative_to(album_dir).as_posix())
-    playlist_path.write_text("\n".join(playlist_lines) + "\n", encoding="utf-8")
-    return playlist_path, audio_files
-
-
-def list_album_audio_entries(album_dir):
-    return sorted(
-        [
-            path.relative_to(album_dir).as_posix()
-            for path in album_dir.rglob("*")
-            if path.is_file() and is_audio_file(path)
-        ],
-        key=str.lower,
-    )
-
-
-def write_playlist_entries(album_dir, entries):
-    playlist_path = album_dir / "playlist.m3u"
-    playlist_lines = ["#EXTM3U", *entries]
-    playlist_path.write_text("\n".join(playlist_lines) + "\n", encoding="utf-8")
-    return playlist_path
-
-
-def detect_cover(album_dir):
-    image_files = sorted([path for path in album_dir.rglob("*") if path.is_file() and is_cover_file(path)])
-    if not image_files:
-        return ""
-    preferred = next((path for path in image_files if path.stem.lower() in {"cover", "folder"}), image_files[0])
-    return preferred.relative_to(BASE_DIR).as_posix()
-
-
-def import_album_folder(files, album_name, rfid_uid=""):
-    if not files:
-        raise ValueError("Kein Ordnerinhalt hochgeladen.")
-
-    library_data = load_library()
-    requested_name = album_name.strip()
-    if any((album.get("name", "").strip().lower() == requested_name.lower()) for album in library_data.get("albums", [])):
-        raise ValueError("Albumname bereits vorhanden.")
-    album_slug = slugify_name(album_name)
-    album_dir = ALBUMS_DIR / album_slug
-    if album_dir.exists():
-        shutil.rmtree(album_dir)
-    album_dir.mkdir(parents=True, exist_ok=True)
-
-    raw_paths = [safe_relative_path(getattr(storage, "filename", "") or "") for storage in files]
-    root_prefix = None
-    if raw_paths:
-        first_parts = [path.parts[0] for path in raw_paths if len(path.parts) > 1]
-        if first_parts and len(first_parts) == len(raw_paths) and len(set(first_parts)) == 1:
-            root_prefix = first_parts[0]
-
-    for storage, raw_path in zip(files, raw_paths):
-        source_name = getattr(storage, "filename", "") or ""
-        relative_path = raw_path
-        if root_prefix and relative_path.parts and relative_path.parts[0] == root_prefix:
-            relative_path = Path(*relative_path.parts[1:]) if len(relative_path.parts) > 1 else Path(relative_path.name)
-        if str(relative_path) in {"", "."}:
-            relative_path = safe_relative_path(source_name)
-        target = album_dir / relative_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        storage.save(target)
-
-    playlist_path, audio_files = build_playlist(album_dir)
-    if not audio_files:
-        shutil.rmtree(album_dir, ignore_errors=True)
-        raise ValueError("Im hochgeladenen Ordner wurden keine Audiodateien gefunden.")
-
-    cover_url = detect_cover(album_dir)
-    album_entry = {
-        "id": f"album-{secrets.token_hex(4)}",
-        "name": album_name.strip() or album_slug,
-        "folder": album_dir.relative_to(BASE_DIR).as_posix(),
-        "playlist": playlist_path.relative_to(BASE_DIR).as_posix(),
-        "track_count": len(audio_files),
-        "rfid_uid": rfid_uid.strip(),
-        "cover_url": cover_url,
-    }
-
-    conflict = album_conflict(library_data["albums"], album_entry["id"], album_entry["rfid_uid"])
-    if conflict:
-        shutil.rmtree(album_dir, ignore_errors=True)
-        raise ValueError(f"RFID-Tag bereits mit {conflict['name']} verknüpft.")
-
-    library_data["albums"].append(album_entry)
-    save_library(library_data)
-    return album_entry
-
-
-def unique_album_dir(album_name):
-    base_slug = slugify_name(album_name)
-    album_dir = ALBUMS_DIR / base_slug
-    counter = 2
-    while album_dir.exists():
-        album_dir = ALBUMS_DIR / f"{base_slug}-{counter}"
-        counter += 1
-    album_dir.mkdir(parents=True, exist_ok=True)
-    return album_dir
-
-
-def write_empty_playlist(album_dir):
-    playlist_path = album_dir / "playlist.m3u"
-    playlist_path.write_text("#EXTM3U\n", encoding="utf-8")
-    return playlist_path
-
-
-def read_playlist_entries(album):
-    playlist_path = BASE_DIR / album.get("playlist", "")
-    if not playlist_path.exists():
-        return []
-    entries = []
-    for line in playlist_path.read_text(encoding="utf-8").splitlines():
-        item = line.strip()
-        if not item or item.startswith("#"):
-            continue
-        entries.append(item)
-    return entries
-
-
-def effective_track_entries(album):
-    album_dir = BASE_DIR / album.get("folder", "")
-    if not album_dir.exists():
-        return []
-
-    existing = list_album_audio_entries(album_dir)
-    existing_set = set(existing)
-    ordered = []
-    seen = set()
-
-    for entry in read_playlist_entries(album):
-        normalized = safe_relative_path(entry).as_posix()
-        if normalized in existing_set and normalized not in seen:
-            ordered.append(normalized)
-            seen.add(normalized)
-
-    for entry in existing:
-        if entry not in seen:
-            ordered.append(entry)
-            seen.add(entry)
-
-    return ordered
-
-
-def refresh_album_metadata(album):
-    album_dir = BASE_DIR / album.get("folder", "")
-    if not album_dir.exists():
-        return album
-    track_entries = effective_track_entries(album)
-    if track_entries:
-        playlist_path = write_playlist_entries(album_dir, track_entries)
-    else:
-        playlist_path = write_empty_playlist(album_dir)
-    album["playlist"] = playlist_path.relative_to(BASE_DIR).as_posix()
-    album["track_count"] = len(track_entries)
-    album["cover_url"] = detect_cover(album_dir)
-    album["track_entries"] = track_entries
-    return album
-
-
-def create_empty_album(album_name, rfid_uid=""):
-    library_data = load_library()
-    requested_name = album_name.strip()
-    if any((album.get("name", "").strip().lower() == requested_name.lower()) for album in library_data.get("albums", [])):
-        raise ValueError("Albumname bereits vorhanden.")
-    album_dir = unique_album_dir(album_name)
-    playlist_path = write_empty_playlist(album_dir)
-    album_entry = {
-        "id": f"album-{secrets.token_hex(4)}",
-        "name": album_name.strip() or album_dir.name,
-        "folder": album_dir.relative_to(BASE_DIR).as_posix(),
-        "playlist": playlist_path.relative_to(BASE_DIR).as_posix(),
-        "track_count": 0,
-        "rfid_uid": rfid_uid.strip(),
-        "cover_url": "",
-    }
-    conflict = album_conflict(library_data["albums"], album_entry["id"], album_entry["rfid_uid"])
-    if conflict:
-        shutil.rmtree(album_dir, ignore_errors=True)
-        raise ValueError(f"RFID-Tag bereits mit {conflict['name']} verknüpft.")
-    library_data["albums"].append(album_entry)
-    save_library(library_data)
-    return album_entry
-
-
-def add_tracks_to_album(album, files):
-    album_dir = BASE_DIR / album.get("folder", "")
-    album_dir.mkdir(parents=True, exist_ok=True)
-    valid_files = [item for item in files if getattr(item, "filename", "")]
-    if not valid_files:
-        raise ValueError("Keine Dateien ausgewählt.")
-
-    raw_paths = [safe_relative_path(getattr(storage, "filename", "") or "") for storage in valid_files]
-    root_prefix = None
-    if raw_paths:
-        first_parts = [path.parts[0] for path in raw_paths if len(path.parts) > 1]
-        if first_parts and len(first_parts) == len(raw_paths) and len(set(first_parts)) == 1:
-            root_prefix = first_parts[0]
-
-    saved_audio = 0
-    for storage, raw_path in zip(valid_files, raw_paths):
-        relative_path = raw_path
-        if root_prefix and relative_path.parts and relative_path.parts[0] == root_prefix:
-            relative_path = Path(*relative_path.parts[1:]) if len(relative_path.parts) > 1 else Path(relative_path.name)
-        if str(relative_path) in {"", "."}:
-            relative_path = safe_relative_path(getattr(storage, "filename", "") or "")
-        if not is_audio_file(relative_path):
-            continue
-        target = album_dir / relative_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        storage.save(target)
-        saved_audio += 1
-
-    if not saved_audio:
-        raise ValueError("Es wurden keine unterstützten Audiodateien hochgeladen.")
-    return refresh_album_metadata(album)
-
-
-def remove_tracks_from_album(album, track_paths):
-    requested = [item.strip() for item in (track_paths or []) if str(item or "").strip()]
-    if not requested:
-        raise ValueError("Keine Titel ausgewählt.")
-
-    removed = 0
-    for track_path in requested:
-        remove_track_from_album(album, track_path)
-        removed += 1
-    refresh_album_metadata(album)
-    return removed
-
-
-def remove_track_from_album(album, track_path):
-    album_dir = BASE_DIR / album.get("folder", "")
-    target = (album_dir / safe_relative_path(track_path)).resolve()
-    if not target.exists() or album_dir.resolve() not in target.parents:
-        raise ValueError("Titel konnte nicht gefunden werden.")
-    target.unlink(missing_ok=True)
-    current = target.parent
-    album_root = album_dir.resolve()
-    while current != album_root and current.exists():
-        try:
-            current.rmdir()
-        except OSError:
-            break
-        current = current.parent
-    return refresh_album_metadata(album)
-
-
-def rename_track_in_album(album, track_path, new_name):
-    requested_name = str(new_name or "").strip()
-    if not requested_name:
-        raise ValueError("Neuer Titelname fehlt.")
-
-    album_dir = (BASE_DIR / album.get("folder", "")).resolve()
-    source = (album_dir / safe_relative_path(track_path)).resolve()
-    if not source.exists() or album_dir not in source.parents:
-        raise ValueError("Titel konnte nicht gefunden werden.")
-    if not is_audio_file(source):
-        raise ValueError("Nur Audiodateien können umbenannt werden.")
-
-    cleaned_name = secure_filename(requested_name)
-    if not cleaned_name:
-        raise ValueError("Titelname ist ungültig.")
-    if Path(cleaned_name).suffix.lower() != source.suffix.lower():
-        cleaned_name = f"{Path(cleaned_name).stem or cleaned_name}{source.suffix.lower()}"
-    if Path(cleaned_name).name in {"", ".", ".."}:
-        raise ValueError("Titelname ist ungültig.")
-
-    target = source.with_name(cleaned_name)
-    if target == source:
-        return refresh_album_metadata(album)
-    if target.exists():
-        raise ValueError("Ein Titel mit diesem Namen existiert bereits.")
-
-    source.rename(target)
-
-    old_entry = source.relative_to(album_dir).as_posix()
-    new_entry = target.relative_to(album_dir).as_posix()
-    entries = [new_entry if entry == old_entry else entry for entry in effective_track_entries(album)]
-    write_playlist_entries(album_dir, entries)
-    return refresh_album_metadata(album)
-
-
-def reorder_album_tracks(album, ordered_paths):
-    current_entries = effective_track_entries(album)
-    if not current_entries:
-        return refresh_album_metadata(album)
-
-    normalized = []
-    seen = set()
-    current_set = set(current_entries)
-    for entry in ordered_paths or []:
-        candidate = safe_relative_path(entry).as_posix()
-        if candidate in current_set and candidate not in seen:
-            normalized.append(candidate)
-            seen.add(candidate)
-
-    if not normalized:
-        raise ValueError("Keine Reihenfolge übergeben.")
-
-    for entry in current_entries:
-        if entry not in seen:
-            normalized.append(entry)
-
-    album_dir = BASE_DIR / album.get("folder", "")
-    write_playlist_entries(album_dir, normalized)
-    return refresh_album_metadata(album)
-
-
-def track_display_name(track_path):
-    leaf = Path(track_path).name
-    return Path(leaf).stem.replace("_", " ")
-
-
-def track_rows(album):
-    rows = []
-    for index, track in enumerate(album.get("track_entries", []), start=1):
-        rows.append(
-            {
-                "index": index,
-                "path": track,
-                "filename": Path(track).name,
-                "display_name": track_display_name(track),
-            }
-        )
-    return rows
-
-
-def enrich_library_data(library_data):
-    for album in library_data.get("albums", []):
-        refresh_album_metadata(album)
-    return library_data
 
 
 def default_player():
@@ -675,17 +332,6 @@ def default_button_detect():
     }
 
 
-def default_link_session():
-    return {
-        "active": False,
-        "album_id": "",
-        "album_name": "",
-        "status": "idle",
-        "message": "",
-        "last_uid": "",
-    }
-
-
 def ensure_data_files():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     ALBUMS_DIR.mkdir(parents=True, exist_ok=True)
@@ -712,14 +358,6 @@ def save_player(data):
     save_json(PLAYER_FILE, data)
 
 
-def load_library():
-    return load_json(LIBRARY_FILE, default_library())
-
-
-def save_library(data):
-    save_json(LIBRARY_FILE, data)
-
-
 def format_storage_size(num_bytes):
     value = max(0, int(num_bytes or 0))
     units = ["B", "KB", "MB", "GB", "TB"]
@@ -733,35 +371,6 @@ def format_storage_size(num_bytes):
     return f"{value_float:.1f} {units[index]}"
 
 
-def library_storage_summary():
-    target_path = ALBUMS_DIR if ALBUMS_DIR.exists() else BASE_DIR
-    try:
-        usage = shutil.disk_usage(target_path)
-    except OSError:
-        return {
-            "total_bytes": 0,
-            "used_bytes": 0,
-            "free_bytes": 0,
-            "total_label": "Unbekannt",
-            "used_label": "Unbekannt",
-            "free_label": "Unbekannt",
-            "used_percent": 0,
-            "target_path": str(target_path),
-        }
-    total_bytes = int(usage.total)
-    used_bytes = int(usage.used)
-    free_bytes = int(usage.free)
-    used_percent = int(round((used_bytes / total_bytes) * 100)) if total_bytes > 0 else 0
-    return {
-        "total_bytes": total_bytes,
-        "used_bytes": used_bytes,
-        "free_bytes": free_bytes,
-        "total_label": format_storage_size(total_bytes),
-        "used_label": format_storage_size(used_bytes),
-        "free_label": format_storage_size(free_bytes),
-        "used_percent": max(0, min(100, used_percent)),
-        "target_path": str(target_path),
-    }
 
 
 def load_settings():
@@ -776,7 +385,8 @@ def load_setup():
     data = merge_defaults(load_json(SETUP_FILE, default_setup()), default_setup())
     original = copy.deepcopy(data)
     normalized = normalize_setup_data(data)
-    if normalized != original:
+    imported_wifi = import_active_wifi_into_setup(normalized)
+    if normalized != original or imported_wifi:
         save_setup(normalized)
     return normalized
 
@@ -879,38 +489,13 @@ def save_reader_status(configured_type, ready, message, details=None):
     )
 
 
-def is_xhr_request():
-    return request.headers.get("X-Requested-With", "").lower() == "xmlhttprequest"
-
-
-def library_action_response(ok, message, category="success", status_code=200):
-    if is_xhr_request():
-        return jsonify({"ok": bool(ok), "message": str(message or ""), "category": category}), status_code
-    flash(str(message or ""), category)
-    return redirect(url_for("library"))
-
-
-def album_editor_response(album_id, ok, message, category="success", status_code=200):
-    if is_xhr_request():
-        return jsonify({"ok": bool(ok), "message": str(message or ""), "category": category}), status_code
-    flash(str(message or ""), category)
-    return redirect(url_for("library_album", album_id=album_id))
-
-
-def album_editor_payload(album, message=""):
-    refresh_album_metadata(album)
-    return {
-        "ok": True,
-        "message": str(message or ""),
-        "album": {
-            "id": album.get("id", ""),
-            "name": album.get("name", ""),
-            "track_count": int(album.get("track_count", 0) or 0),
-            "rfid_uid": album.get("rfid_uid", ""),
-            "playlist": album.get("playlist", ""),
-        },
-        "track_rows": track_rows(album),
-    }
+def effective_track_entries(album):
+    original_base_dir = library_service_module.BASE_DIR
+    try:
+        library_service_module.BASE_DIR = BASE_DIR
+        return library_service_module.effective_track_entries(album)
+    finally:
+        library_service_module.BASE_DIR = original_base_dir
 
 
 def current_boot_timestamp():
@@ -1090,16 +675,8 @@ def save_apply_report(data):
     save_json(APPLY_REPORT_FILE, data)
 
 
-def load_link_session():
-    return load_json(LINK_SESSION_FILE, default_link_session())
-
-
 def load_reader_status():
     return merge_defaults(load_json(READER_STATUS_FILE, default_reader_status()), default_reader_status())
-
-
-def save_link_session(data):
-    save_json(LINK_SESSION_FILE, data)
 
 
 def load_button_detect():
@@ -1221,100 +798,6 @@ def button_detect_status_payload(setup_data=None):
     session["remaining_seconds"] = max(0, int(session["deadline_at"] - now + 0.999))
     return session
 
-def start_link_session(album):
-    session = {
-        "active": True,
-        "album_id": album.get("id", ""),
-        "album_name": album.get("name", ""),
-        "status": "waiting_for_uid",
-        "message": "Tag-scannen oder ID eingeben",
-        "last_uid": "",
-    }
-    save_link_session(session)
-    return session
-
-
-def finish_link_session(session, status, message, uid=""):
-    session["active"] = False
-    session["status"] = status
-    session["message"] = message
-    session["last_uid"] = uid
-    save_link_session(session)
-    return session
-
-
-def apply_link_uid(album_id, uid):
-    uid = uid.strip()
-    session = load_link_session()
-    library_data = load_library()
-    albums = library_data.get("albums", [])
-    target = next((album for album in albums if album["id"] == album_id), None)
-    if not target:
-        updated = finish_link_session(session, "error", "Album nicht mehr vorhanden.", uid)
-        return {"ok": False, "message": updated["message"], "link_session": updated}, 404
-    conflict = album_conflict(albums, target["id"], uid)
-    if conflict:
-        updated = finish_link_session(session, "conflict", "Tag bereits anderweitig verlinkt", uid)
-        return {"ok": False, "message": updated["message"], "link_session": updated}, 409
-    target["rfid_uid"] = uid
-    save_library(library_data)
-    updated = finish_link_session(session, "linked", f"Tag mit {target['name']} verknüpft", uid)
-    return {"ok": True, "linked_album": target, "link_session": updated}, 200
-
-
-def to_int(value, fallback, minimum=None, maximum=None):
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        number = fallback
-    if minimum is not None:
-        number = max(minimum, number)
-    if maximum is not None:
-        number = min(maximum, number)
-    return number
-
-
-def to_float(value, fallback, minimum=None, maximum=None):
-    try:
-        number = float(str(value).strip().replace(",", "."))
-    except (TypeError, ValueError):
-        number = float(fallback)
-    if minimum is not None:
-        number = max(float(minimum), number)
-    if maximum is not None:
-        number = min(float(maximum), number)
-    return number
-
-
-def normalize_hotspot_security(value):
-    security = (value or "open").strip().lower()
-    if security == "wpa2":
-        return "wpa-psk"
-    if security not in HOTSPOT_SECURITY_CHOICES:
-        return "open"
-    return security
-
-
-def format_mmss(total_seconds):
-    minutes = max(total_seconds, 0) // 60
-    seconds = max(total_seconds, 0) % 60
-    return f"{minutes:02d}:{seconds:02d}"
-
-
-def progress_percent(position, duration):
-    if duration <= 0:
-        return 0
-    return round((position / duration) * 100, 1)
-
-
-def album_conflict(albums, album_id, rfid_uid):
-    if not rfid_uid:
-        return None
-    for album in albums:
-        if album["id"] != album_id and album.get("rfid_uid", "").strip() == rfid_uid:
-            return album
-    return None
-
 
 def nmcli_available():
     return shutil.which("nmcli") is not None
@@ -1330,6 +813,105 @@ def run_nmcli(command):
     if result.returncode != 0:
         return None
     return result.stdout.strip()
+
+
+def detect_active_ssid():
+    active = run_nmcli(["nmcli", "-t", "-f", "ACTIVE,SSID", "dev", "wifi"])
+    if active:
+        for line in active.splitlines():
+            active_flag, ssid = (line.split(":", 1) + [""])[:2]
+            if active_flag == "yes" and ssid:
+                return ssid
+
+    result = subprocess.run(["iwgetid", "-r"], capture_output=True, text=True, check=False)
+    if result.returncode == 0:
+        return (result.stdout or "").strip()
+    return ""
+
+
+def find_password_in_nmconnections(ssid):
+    if not ssid or not NM_CONNECTIONS_DIR.exists():
+        return ""
+
+    for candidate in sorted(NM_CONNECTIONS_DIR.glob("*.nmconnection")):
+        parser = configparser.ConfigParser()
+        try:
+            parser.read(candidate, encoding="utf-8")
+        except configparser.Error:
+            continue
+        if parser.get("wifi", "ssid", fallback="") != ssid:
+            continue
+        password = parser.get("wifi-security", "psk", fallback="")
+        if password:
+            return password
+    return ""
+
+
+def find_password_in_wpa_supplicant(ssid):
+    if not ssid or not WPA_SUPPLICANT_FILE.exists():
+        return ""
+
+    current_ssid = None
+    current_psk = None
+    content = WPA_SUPPLICANT_FILE.read_text(encoding="utf-8", errors="ignore")
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if line.startswith("network={"):
+            current_ssid = None
+            current_psk = None
+            continue
+        if line == "}":
+            if current_ssid == ssid and current_psk:
+                return current_psk
+            current_ssid = None
+            current_psk = None
+            continue
+        if line.startswith("ssid="):
+            current_ssid = line.split("=", 1)[1].strip().strip('"')
+        if line.startswith("psk="):
+            current_psk = line.split("=", 1)[1].strip().strip('"')
+    return ""
+
+
+def find_current_wifi_password(ssid):
+    return find_password_in_nmconnections(ssid) or find_password_in_wpa_supplicant(ssid)
+
+
+def import_active_wifi_into_setup(setup_data):
+    wifi = setup_data.setdefault("wifi", {})
+    saved_networks = wifi.setdefault("saved_networks", [])
+    ssid = detect_active_ssid()
+    if not ssid:
+        return False
+
+    password = find_current_wifi_password(ssid)
+    existing = next((entry for entry in saved_networks if (entry.get("ssid") or "").strip() == ssid), None)
+    changed = False
+    if existing is None:
+        saved_networks.append(
+            {
+                "id": f"wifi-{secrets.token_hex(4)}",
+                "ssid": ssid,
+                "password": password,
+                "priority": 100,
+            }
+        )
+        changed = True
+    else:
+        if password and existing.get("password") != password:
+            existing["password"] = password
+            changed = True
+        if int(existing.get("priority", 10) or 10) < 100:
+            existing["priority"] = 100
+            changed = True
+
+    if wifi.get("mode") == "hotspot_only":
+        wifi["mode"] = "client_with_fallback_hotspot"
+        changed = True
+    if not wifi.get("fallback_hotspot", True):
+        wifi["fallback_hotspot"] = True
+        changed = True
+    return changed
 
 
 def get_wifi_snapshot():
@@ -1577,30 +1159,6 @@ def apply_network_setup(wifi_config):
     return report
 
 
-def build_player_context(snapshot):
-    player_state = dict(snapshot["player"])
-    runtime_state = snapshot["runtime"]
-    settings = snapshot["settings"]
-    sleep_step_minutes = max(1, int(settings.get("sleep_timer_step", 5)))
-    remaining_seconds = int(runtime_state.get("sleep_timer", {}).get("remaining_seconds", 0) or 0)
-    player_state["sleep_timer_minutes"] = remaining_seconds // 60
-    return {
-        "player_state": player_state,
-        "runtime_state": runtime_state,
-        "settings": settings,
-        "volume_percent": player_state["volume"],
-        "volume_muted": bool(player_state.get("muted", False)),
-        "volume_step": int(settings.get("volume_step", 5)),
-        "sleep_step_minutes": sleep_step_minutes,
-        "sleep_level": int(runtime_state.get("sleep_timer", {}).get("level", 0)),
-        "sleep_remaining_seconds": remaining_seconds,
-        "sleep_remaining_label": format_mmss(remaining_seconds),
-        "position_label": format_mmss(player_state["position_seconds"]),
-        "duration_label": format_mmss(player_state["duration_seconds"]),
-        "progress_percent": progress_percent(player_state["position_seconds"], player_state["duration_seconds"]),
-    }
-
-
 @app.context_processor
 def inject_shell():
     return {"nav_items": nav_items(), "active_path": request.path}
@@ -1608,7 +1166,7 @@ def inject_shell():
 
 def nav_items():
     return [
-        {"endpoint": "player", "label": "Player"},
+        {"endpoint": "player_routes.player", "label": "Player"},
         {"endpoint": "library", "label": "Bibliothek"},
         {"endpoint": "settings", "label": "Einstellungen"},
         {"endpoint": "setup", "label": "Setup"},
@@ -1654,51 +1212,6 @@ def inject_choices():
     }
 
 
-@app.route("/")
-def index():
-    return redirect(url_for("player"))
-
-
-@app.route("/player", methods=["GET", "POST"])
-def player():
-    snapshot = runtime_service.status()
-    player_state = snapshot["player"]
-    runtime_state = snapshot["runtime"]
-    settings = snapshot["settings"]
-
-    if request.method == "POST":
-        action = request.form.get("action", "").strip()
-        if action == "toggle_play":
-            runtime_service.toggle_playback()
-        elif action == "stop":
-            runtime_service.stop()
-        elif action == "prev":
-            runtime_service.previous_track()
-        elif action == "next":
-            runtime_service.next_track()
-        elif action == "volume_down":
-            runtime_service.set_volume(-settings["volume_step"])
-        elif action == "volume_up":
-            runtime_service.set_volume(settings["volume_step"])
-        elif action == "mute":
-            runtime_service.toggle_mute()
-        elif action == "sleep_down":
-            level = max(0, int(runtime_state.get("sleep_timer", {}).get("level", 0)) - 1)
-            runtime_service.set_sleep_level(level)
-        elif action == "sleep_up":
-            level = min(3, int(runtime_state.get("sleep_timer", {}).get("level", 0)) + 1)
-            runtime_service.set_sleep_level(level)
-        elif action == "seek":
-            runtime_service.seek(to_int(request.form.get("seek_position"), player_state.get("position_seconds", 0), 0))
-        elif action == "clear_queue":
-            runtime_service.clear_queue()
-        flash("Playerstatus aktualisiert.", "success")
-        return redirect(url_for("player"))
-
-    context = build_player_context(snapshot)
-    return render_template("player.html", **context)
-
-
 @app.route("/setup/reader-guide/<reader_type>")
 def download_reader_guide(reader_type):
     guide_path = reader_guide_path(reader_type)
@@ -1732,242 +1245,15 @@ def download_setup_logs():
     return send_file(content, as_attachment=True, download_name="phoniebox-setup-logs.txt", mimetype="text/plain")
 
 
-@app.route("/library", methods=["GET", "POST"])
-def library():
-    library_data = load_library()
-    if request.method == "POST":
-        action = request.form.get("action", "").strip()
-        albums = library_data["albums"]
-        if action == "import_album":
-            files = [item for item in request.files.getlist("album_files") if getattr(item, "filename", "")]
-            album_name = request.form.get("name", "").strip()
-            rfid_uid = request.form.get("rfid_uid", "").strip()
-            if not album_name:
-                return library_action_response(False, "Albumname ist erforderlich.", "error", 400)
-            try:
-                album_entry = import_album_folder(files, album_name, rfid_uid) if files else create_empty_album(album_name, rfid_uid)
-            except ValueError as exc:
-                return library_action_response(False, str(exc), "error", 400)
-            return library_action_response(
-                True,
-                f"Album {album_entry['name']} importiert und Playlist erzeugt." if files else f"Leeres Album {album_entry['name']} angelegt.",
-                "success",
-            )
-
-        if action == "save_album":
-            album_id = request.form.get("album_id", "").strip() or f"album-{secrets.token_hex(4)}"
-            name = request.form.get("name", "").strip() or "Neues Album"
-            folder = request.form.get("folder", "").strip()
-            rfid_uid = request.form.get("rfid_uid", "").strip()
-            cover_url = request.form.get("cover_url", "").strip()
-            name_conflict = next(
-                (
-                    album for album in albums
-                    if album.get("id") != album_id and album.get("name", "").strip().lower() == name.lower()
-                ),
-                None,
-            )
-            if name_conflict:
-                flash(f"Albumname bereits vorhanden: {name_conflict['name']}.", "error")
-                return redirect(url_for("library"))
-            conflict = album_conflict(albums, album_id, rfid_uid)
-            if conflict:
-                flash(f"RFID-Tag bereits mit {conflict['name']} verknüpft.", "error")
-                return redirect(url_for("library"))
-
-            existing = next((album for album in albums if album["id"] == album_id), None)
-            payload = {
-                "id": album_id,
-                "name": name,
-                "folder": folder,
-                "playlist": request.form.get("playlist", "").strip(),
-                "track_count": to_int(request.form.get("track_count"), 0, 0, 5000),
-                "rfid_uid": rfid_uid,
-                "cover_url": cover_url,
-            }
-            if existing:
-                existing.update(payload)
-                flash(f"Album {name} aktualisiert.", "success")
-            else:
-                albums.append(payload)
-                flash(f"Album {name} angelegt.", "success")
-            save_library(library_data)
-            return redirect(url_for("library"))
-
-        if action == "delete_album":
-            album_id = request.form.get("album_id", "").strip()
-            target_album = next((album for album in albums if album["id"] == album_id), None)
-            if target_album:
-                album_path = BASE_DIR / target_album.get("folder", "")
-                if album_path.exists() and ALBUMS_DIR in album_path.parents:
-                    shutil.rmtree(album_path, ignore_errors=True)
-            library_data["albums"] = [album for album in albums if album["id"] != album_id]
-            save_library(library_data)
-            flash("Album entfernt.", "success")
-            return redirect(url_for("library"))
-
-        if action == "unlink_rfid":
-            album_id = request.form.get("album_id", "").strip()
-            for album in albums:
-                if album["id"] == album_id:
-                    album["rfid_uid"] = ""
-                    break
-            save_library(library_data)
-            flash("RFID-Zuordnung entfernt.", "success")
-            return redirect(url_for("library"))
-
-        if action == "play_album":
-            album_id = request.form.get("album_id", "").strip()
-            result = runtime_service.load_album_by_id(album_id, autoplay=True)
-            flash(result["runtime"]["last_event"], "success" if result.get("ok") else "error")
-            return redirect(url_for("library"))
-
-        if action == "load_album":
-            album_id = request.form.get("album_id", "").strip()
-            result = runtime_service.load_album_by_id(album_id, autoplay=False)
-            flash(result["runtime"]["last_event"], "success" if result.get("ok") else "error")
-            return redirect(url_for("library"))
-
-        if action == "queue_album":
-            album_id = request.form.get("album_id", "").strip()
-            result = runtime_service.queue_album_by_id(album_id)
-            flash(result["runtime"]["last_event"], "success" if result.get("ok") else "error")
-            return redirect(url_for("library"))
-
-        if action == "add_tracks":
-            album_id = request.form.get("album_id", "").strip()
-            album = next((entry for entry in albums if entry["id"] == album_id), None)
-            if not album:
-                return library_action_response(False, "Album nicht gefunden.", "error", 404)
-            try:
-                add_tracks_to_album(album, request.files.getlist("track_files"))
-                save_library(library_data)
-            except ValueError as exc:
-                return library_action_response(False, str(exc), "error", 400)
-            return library_action_response(True, "Titel ergänzt.", "success")
-
-        if action == "remove_track":
-            album_id = request.form.get("album_id", "").strip()
-            track_path = request.form.get("track_path", "").strip()
-            album = next((entry for entry in albums if entry["id"] == album_id), None)
-            if not album:
-                return library_action_response(False, "Album nicht gefunden.", "error", 404)
-            try:
-                remove_track_from_album(album, track_path)
-                save_library(library_data)
-            except ValueError as exc:
-                return library_action_response(False, str(exc), "error", 400)
-            return library_action_response(True, "Titel entfernt.", "success")
-
-        if action == "remove_tracks":
-            album_id = request.form.get("album_id", "").strip()
-            album = next((entry for entry in albums if entry["id"] == album_id), None)
-            if not album:
-                return library_action_response(False, "Album nicht gefunden.", "error", 404)
-            try:
-                removed = remove_tracks_from_album(album, request.form.getlist("track_path"))
-                save_library(library_data)
-            except ValueError as exc:
-                return library_action_response(False, str(exc), "error", 400)
-            return library_action_response(True, f"{removed} Titel entfernt.", "success")
-
-    enrich_library_data(library_data)
-    return render_template(
-        "library.html",
-        library_data=library_data,
-        link_session=load_link_session(),
-        storage_summary=library_storage_summary(),
-    )
-
-
-@app.route("/library/album/<album_id>", methods=["GET", "POST"])
-def library_album(album_id):
-    library_data = load_library()
-    album = next((entry for entry in library_data.get("albums", []) if entry.get("id") == album_id), None)
-    if not album:
-        flash("Album nicht gefunden.", "error")
-        return redirect(url_for("library"))
-
-    if request.method == "POST":
-        action = request.form.get("action", "").strip()
-        try:
-            if action == "rename_album":
-                name = request.form.get("name", "").strip()
-                if not name:
-                    return album_editor_response(album_id, False, "Albumname ist erforderlich.", "error", 400)
-                conflict = next(
-                    (
-                        entry
-                        for entry in library_data["albums"]
-                        if entry.get("id") != album_id and entry.get("name", "").strip().lower() == name.lower()
-                    ),
-                    None,
-                )
-                if conflict:
-                    return album_editor_response(album_id, False, f"Albumname bereits vorhanden: {conflict['name']}.", "error", 400)
-                album["name"] = name
-                save_library(library_data)
-                if is_xhr_request():
-                    return jsonify(album_editor_payload(album, "Albumname aktualisiert."))
-                return album_editor_response(album_id, True, "Albumname aktualisiert.", "success")
-
-            if action == "add_tracks":
-                add_tracks_to_album(album, request.files.getlist("track_files"))
-                save_library(library_data)
-                if is_xhr_request():
-                    return jsonify(album_editor_payload(album, "Titel ergänzt."))
-                return album_editor_response(album_id, True, "Titel ergänzt.", "success")
-
-            if action == "remove_tracks":
-                removed = remove_tracks_from_album(album, request.form.getlist("track_path"))
-                save_library(library_data)
-                if is_xhr_request():
-                    return jsonify(album_editor_payload(album, f"{removed} Titel entfernt."))
-                return album_editor_response(album_id, True, f"{removed} Titel entfernt.", "success")
-
-            if action == "rename_track":
-                rename_track_in_album(
-                    album,
-                    request.form.get("track_path", "").strip(),
-                    request.form.get("new_name", "").strip(),
-                )
-                save_library(library_data)
-                if is_xhr_request():
-                    return jsonify(album_editor_payload(album, "Titel umbenannt."))
-                return album_editor_response(album_id, True, "Titel umbenannt.", "success")
-
-            if action == "reorder_tracks":
-                reorder_album_tracks(album, request.form.getlist("track_order"))
-                save_library(library_data)
-                if is_xhr_request():
-                    return jsonify(album_editor_payload(album, "Reihenfolge gespeichert."))
-                return album_editor_response(album_id, True, "Reihenfolge gespeichert.", "success")
-        except ValueError as exc:
-            return album_editor_response(album_id, False, str(exc), "error", 400)
-
-    refresh_album_metadata(album)
-    return render_template(
-        "album_editor.html",
-        album=album,
-        track_rows=track_rows(album),
-    )
-
-
-@app.route("/api/library/album/<album_id>")
-def api_library_album(album_id):
-    library_data = load_library()
-    album = next((entry for entry in library_data.get("albums", []) if entry.get("id") == album_id), None)
-    if not album:
-        return jsonify({"ok": False, "message": "Album nicht gefunden."}), 404
-    return jsonify(album_editor_payload(album))
-
-
 @app.route("/settings", methods=["GET", "POST"])
 def settings():
     data = load_settings()
     if request.method == "POST":
-        data = apply_settings_form(data, request.form)
+        source = request.get_json(silent=True) or request.form
+        data = apply_settings_form(data, source)
         save_settings(data)
+        if is_json_request():
+            return json_success("Einstellungen gespeichert.", settings=data)
         flash("Einstellungen gespeichert.", "success")
         return redirect(url_for("settings"))
     return render_template("settings.html", settings=data)
@@ -1991,7 +1277,7 @@ def api_settings():
     payload = request.get_json(silent=True) or {}
     data = apply_settings_form(data, payload)
     save_settings(data)
-    return jsonify({"ok": True, "settings": data})
+    return json_success("Einstellungen gespeichert.", settings=data)
 
 
 def collect_rows(prefix, columns):
@@ -2356,22 +1642,6 @@ def setup():
     )
 
 
-@app.route("/api/runtime")
-def api_runtime():
-    return jsonify(runtime_service.status())
-
-
-@app.route("/api/hardware")
-def api_hardware():
-    snapshot = runtime_service.status()
-    return jsonify(snapshot["runtime"]["hardware"].get("profile", {}))
-
-
-@app.route("/api/audio")
-def api_audio():
-    return jsonify(detect_audio_environment())
-
-
 @app.route("/api/setup/button-detect/start", methods=["POST"])
 def api_setup_button_detect_start():
     setup_data = load_setup()
@@ -2382,7 +1652,9 @@ def api_setup_button_detect_start():
         session["status"] = "unavailable"
         session["message"] = "Keine GPIO-Tasterkennung verfügbar."
         save_button_detect(session)
-        return jsonify({"ok": False, **session}), 503
+        payload = dict(session)
+        payload.pop("message", None)
+        return json_error(session["message"], status_code=503, **payload)
 
     now = time.time()
     session = {
@@ -2398,13 +1670,17 @@ def api_setup_button_detect_start():
         "remaining_seconds": 15,
     }
     save_button_detect(session)
-    return jsonify({"ok": True, **session})
+    payload = dict(session)
+    payload.pop("message", None)
+    return json_success(session["message"], **payload)
 
 
 @app.route("/api/setup/button-detect/status")
 def api_setup_button_detect_status():
     session = button_detect_status_payload(load_setup())
-    return jsonify({"ok": True, **session})
+    payload = dict(session)
+    payload.pop("message", None)
+    return json_success(session.get("message", ""), **payload)
 
 
 @app.route("/api/setup/led-blink", methods=["POST"])
@@ -2413,7 +1689,7 @@ def api_setup_led_blink():
     pin = str(payload.get("pin", request.form.get("pin", ""))).strip()
     brightness = to_int(payload.get("brightness", request.form.get("brightness", 100)), 100, 0, 100)
     if not pin:
-        return jsonify({"ok": False, "details": ["Kein LED-PIN ausgewählt."]}), 400
+        return json_error("Kein LED-PIN ausgewählt.", status_code=400, details=["Kein LED-PIN ausgewählt."])
     save_json(
         LED_PREVIEW_FILE,
         {
@@ -2429,177 +1705,10 @@ def api_setup_led_blink():
     )
     ok = True
     if not ok:
-        return jsonify({"ok": False, "details": [f"LED-Test für {pin} konnte nicht gestartet werden."]}), 503
-    return jsonify({"ok": True, "details": [f"LED-Test für {pin} gestartet."]})
-
-
-@app.route("/api/runtime/tick", methods=["POST"])
-def api_runtime_tick():
-    payload = request.get_json(silent=True) or {}
-    elapsed = to_int(payload.get("elapsed", request.form.get("elapsed", 1)), 1, 1, 60)
-    return jsonify(runtime_service.tick(elapsed))
-
-
-@app.route("/api/runtime/rfid", methods=["POST"])
-def api_runtime_rfid():
-    payload = request.get_json(silent=True) or {}
-    uid = str(payload.get("uid", request.form.get("uid", ""))).strip()
-    session = load_link_session()
-    if session.get("active") and uid:
-        session["last_uid"] = uid
-        session["status"] = "uid_detected"
-        session["message"] = "Tag erkannt"
-        save_link_session(session)
-        return jsonify({"ok": True, "link_session": session})
-    result = runtime_service.assign_album_by_rfid(uid)
-    return jsonify(result), (200 if result.get("ok") else 404)
-
-
-@app.route("/api/runtime/rfid/remove", methods=["POST"])
-def api_runtime_rfid_remove():
-    return jsonify(runtime_service.remove_rfid_tag())
-
-
-@app.route("/api/runtime/audio-test", methods=["POST"])
-def api_runtime_audio_test():
-    result = runtime_service.play_system_sound("test")
-    return jsonify(result), (200 if result.get("ok") else 404)
-
-
-@app.route("/api/runtime/playback")
-def api_runtime_playback():
-    snapshot = runtime_service.status()
-    return jsonify(snapshot["runtime"].get("playback_session", {}))
-
-
-@app.route("/api/player/action", methods=["POST"])
-def api_player_action():
-    payload = request.get_json(silent=True) or {}
-    action = str(payload.get("action", request.form.get("action", ""))).strip()
-    snapshot = runtime_service.status()
-    runtime_state = snapshot["runtime"]
-    settings = snapshot["settings"]
-
-    if action == "toggle_play":
-        result = runtime_service.toggle_playback()
-    elif action == "stop":
-        result = runtime_service.stop()
-    elif action == "prev":
-        result = runtime_service.previous_track()
-    elif action == "next":
-        result = runtime_service.next_track()
-    elif action == "volume_down":
-        result = runtime_service.set_volume(-int(settings.get("volume_step", 5)))
-    elif action == "volume_up":
-        result = runtime_service.set_volume(int(settings.get("volume_step", 5)))
-    elif action == "mute":
-        result = runtime_service.toggle_mute()
-    elif action == "sleep_reset":
-        result = {"runtime": runtime_service.set_sleep_level(0), "player": runtime_service.load_player()}
-    elif action == "sleep_down":
-        level = max(0, int(runtime_state.get("sleep_timer", {}).get("level", 0)) - 1)
-        result = {"runtime": runtime_service.set_sleep_level(level), "player": runtime_service.load_player()}
-    elif action == "sleep_up":
-        level = min(3, int(runtime_state.get("sleep_timer", {}).get("level", 0)) + 1)
-        result = {"runtime": runtime_service.set_sleep_level(level), "player": runtime_service.load_player()}
-    elif action == "clear_queue":
-        result = runtime_service.clear_queue()
-    elif action == "seek":
-        position_seconds = to_int(payload.get("seek_position", request.form.get("seek_position", 0)), 0, 0)
-        result = runtime_service.seek(position_seconds)
-    else:
-        return jsonify({"ok": False, "message": "Unbekannte Player-Aktion."}), 400
-
-    updated_snapshot = runtime_service.status()
-    return jsonify({"ok": True, **build_player_context(updated_snapshot)})
-
-
-@app.route("/api/player/snapshot")
-def api_player_snapshot():
-    return jsonify({"ok": True, **build_player_context(runtime_service.status())})
-
-
-@app.route("/api/runtime/button", methods=["POST"])
-def api_runtime_button():
-    payload = request.get_json(silent=True) or {}
-    name = str(payload.get("name", request.form.get("name", ""))).strip()
-    press_type = str(payload.get("press_type", request.form.get("press_type", "kurz"))).strip()
-    held_seconds = payload.get("held_seconds", request.form.get("held_seconds"))
-    resolved_press_type = runtime_service.classify_press_type(held_seconds, press_type)
-    return jsonify(runtime_service.trigger_button(name, resolved_press_type))
-
-
-@app.route("/api/runtime/seek", methods=["POST"])
-def api_runtime_seek():
-    payload = request.get_json(silent=True) or {}
-    position_seconds = to_int(payload.get("position_seconds", request.form.get("position_seconds", 0)), 0, 0)
-    return jsonify(runtime_service.seek(position_seconds))
-
-
-@app.route("/api/runtime/reset", methods=["POST"])
-def api_runtime_reset():
-    return jsonify(runtime_service.reset_state())
-
-
-@app.route("/api/runtime/load-album", methods=["POST"])
-def api_runtime_load_album():
-    payload = request.get_json(silent=True) or {}
-    album_id = str(payload.get("album_id", request.form.get("album_id", ""))).strip()
-    raw_autoplay = payload.get("autoplay", request.form.get("autoplay", "false"))
-    if isinstance(raw_autoplay, bool):
-        autoplay = raw_autoplay
-    else:
-        autoplay = str(raw_autoplay).strip().lower() in {"1", "true", "on", "yes"}
-    result = runtime_service.load_album_by_id(album_id, autoplay=autoplay)
-    return jsonify(result), (200 if result.get("ok") else 404)
-
-
-@app.route("/api/runtime/queue-album", methods=["POST"])
-def api_runtime_queue_album():
-    payload = request.get_json(silent=True) or {}
-    album_id = str(payload.get("album_id", request.form.get("album_id", ""))).strip()
-    result = runtime_service.queue_album_by_id(album_id)
-    return jsonify(result), (200 if result.get("ok") else 404)
-
-
-@app.route("/api/library/link-session", methods=["POST"])
-def api_library_link_session_start():
-    payload = request.get_json(silent=True) or {}
-    album_id = str(payload.get("album_id", request.form.get("album_id", ""))).strip()
-    library_data = load_library()
-    album = next((entry for entry in library_data.get("albums", []) if entry["id"] == album_id), None)
-    if not album:
-        return jsonify({"ok": False, "message": "Album nicht gefunden."}), 404
-    return jsonify({"ok": True, "link_session": start_link_session(album)})
-
-
-@app.route("/api/library/link-session", methods=["GET"])
-def api_library_link_session_status():
-    return jsonify({"ok": True, "link_session": load_link_session()})
-
-
-@app.route("/api/library/link-session/confirm", methods=["POST"])
-def api_library_link_session_confirm():
-    payload = request.get_json(silent=True) or {}
-    album_id = str(payload.get("album_id", request.form.get("album_id", ""))).strip()
-    uid = str(payload.get("uid", request.form.get("uid", ""))).strip()
-    if not album_id:
-        return jsonify({"ok": False, "message": "Album nicht gefunden."}), 404
-    if not uid:
-        return jsonify({"ok": False, "message": "Tag-ID fehlt."}), 400
-    payload, status_code = apply_link_uid(album_id, uid)
-    return jsonify(payload), status_code
-
-
-@app.route("/api/library/link-session/cancel", methods=["POST"])
-def api_library_link_session_cancel():
-    session = load_link_session()
-    updated = finish_link_session(session, "cancelled", "Verlinkung abgebrochen.")
-    return jsonify({"ok": True, "link_session": updated})
+        return json_error(f"LED-Test für {pin} konnte nicht gestartet werden.", status_code=503, details=[f"LED-Test für {pin} konnte nicht gestartet werden."])
+    return json_success(f"LED-Test für {pin} gestartet.", details=[f"LED-Test für {pin} gestartet."])
 
 
 if __name__ == "__main__":
     ensure_data_files()
-    host = os.environ.get("PHONIEBOX_HOST", "0.0.0.0").strip() or "0.0.0.0"
-    port = int(os.environ.get("PHONIEBOX_PORT", "80"))
-    app.run(host=host, port=port, debug=False)
+    app.run(host=APP_CONFIG.host, port=APP_CONFIG.port, debug=False)

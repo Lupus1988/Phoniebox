@@ -35,16 +35,41 @@ Der Installer:
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
+export PHONIEBOX_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 python app.py
 ```
 
 Dann erreichbar unter `http://SERVER-IP` oder `http://phoniebox.local`.
+
+Konfiguration fuer sensible Werte laeuft ueber Umgebungsvariablen:
+
+```bash
+export PHONIEBOX_SECRET_KEY="zufaelliger-langer-geheimer-wert"
+export PHONIEBOX_HOST="0.0.0.0"
+export PHONIEBOX_PORT="80"
+```
+
+Bei systemd-Installationen liest `phoniebox-panel.service` zusaetzlich optional `/etc/default/phoniebox-panel`.
+Der Installer legt diese Datei beim ersten Lauf automatisch mit einem zufaellig generierten `PHONIEBOX_SECRET_KEY` an.
+Fehlt der Secret-Key trotzdem, startet die App weiter, verwendet aber nur einen fluechtigen Laufzeit-Schluessel. Das ist nur als Fallback gedacht und nicht fuer stabile produktive Sessions.
 
 Automatische Tests:
 
 ```bash
 python3 -m unittest discover -s tests
 ```
+
+Qualitaetsbasis fuer lokale Entwicklung:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+python3 -m pytest
+python3 -m ruff check .
+```
+
+Die vorhandene Testsuite bleibt weiterhin `unittest`-kompatibel; `pytest` dient hier als schlanker Runner mit derselben Testsammlung.
 
 ## Werkzustand
 

@@ -13,6 +13,32 @@ cleanup() {
 }
 trap cleanup EXIT
 
+ensure_panel_env_file() {
+  local env_file=/etc/default/phoniebox-panel
+  local current_secret=""
+  if sudo test -f "$env_file"; then
+    current_secret=$(sudo sed -n 's/^PHONIEBOX_SECRET_KEY=//p' "$env_file" | tail -n 1 | tr -d '"' | tr -d "'" | tr -d '[:space:]')
+  fi
+  if [ -n "$current_secret" ]; then
+    return 0
+  fi
+
+  local generated_secret
+  generated_secret=$(python3 - <<'EOF'
+import secrets
+print(secrets.token_hex(32))
+EOF
+)
+
+  sudo install -d -m 755 /etc/default
+  sudo tee "$env_file" >/dev/null <<EOF
+PHONIEBOX_SECRET_KEY="$generated_secret"
+PHONIEBOX_HOST=0.0.0.0
+PHONIEBOX_PORT=80
+EOF
+  sudo chmod 600 "$env_file"
+}
+
 has_remote_shell() {
   if [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_CLIENT:-}" ] || [ -n "${SSH_TTY:-}" ]; then
     return 0
@@ -93,6 +119,7 @@ sudo cp -a "$SOURCE_DIR"/. "$APP_DIR"/
 sudo apt-get update
 sudo apt-get install -y python3 python3-venv python3-pip python3-lgpio network-manager avahi-daemon alsa-utils mpv mpg123
 ensure_hardware_groups
+ensure_panel_env_file
 
 # Reader-specific buses are enabled by the setup workflow when the user actually installs
 # a concrete reader. Avoid broad hardware mutations during base installation.

@@ -152,6 +152,31 @@ textarea {
   line-height: 1.55;
 }
 
+
+.player-action-status,
+.settings-save-status {
+  min-height: 1.3rem;
+  transition: color 140ms ease;
+}
+
+.player-action-status[data-tone="busy"],
+.settings-save-status[data-tone="busy"] {
+  color: var(--accent);
+}
+
+.player-action-status[data-tone="success"],
+.settings-save-status[data-tone="success"] {
+  color: var(--success);
+}
+
+.player-action-status[data-tone="error"],
+.settings-save-status[data-tone="error"] {
+  color: var(--danger);
+}
+
+.transport-strip {
+  flex-wrap: wrap;
+}
 .modal-body h3 {
   color: var(--ink);
 }
@@ -486,7 +511,7 @@ textarea {
 .transport-strip {
   margin-top: 1rem;
   display: grid;
-  grid-template-columns: minmax(0, 78px) minmax(98px, 132px) minmax(0, 78px);
+  grid-template-columns: minmax(0, 72px) minmax(98px, 132px) minmax(0, 72px) minmax(0, 72px);
   justify-items: center;
   align-items: center;
   justify-content: start;
@@ -2238,8 +2263,8 @@ dialog[data-sleep-rotation-dialog]::backdrop {
 
   .transport-strip {
     margin-top: 0.7rem;
-    grid-template-columns: minmax(0, 56px) minmax(82px, 98px) minmax(0, 56px);
-    gap: 0.45rem;
+    grid-template-columns: minmax(0, 48px) minmax(82px, 98px) minmax(0, 48px) minmax(0, 48px);
+    gap: 0.4rem;
   }
 
   .transport-strip .transport-button {

@@ -123,6 +123,9 @@ class RuntimeServiceTest(unittest.TestCase):
             patcher.stop()
         self.temp_dir.cleanup()
 
+    def test_runtime_service_uses_audio_backend_factory(self):
+        self.assertIs(self.service.playback, self.service.audio_backend)
+
     def test_load_album_by_id_autoplay_populates_player(self):
         result = self.service.load_album_by_id("album-1", autoplay=True)
 

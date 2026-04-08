@@ -6,6 +6,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const startupToggle = form.elements.namedItem("use_startup_volume");
   const startupInput = form.elements.namedItem("startup_volume");
   const startupRow = form.querySelector("[data-startup-volume-row]");
+  const statusNode = document.getElementById("settings-save-status");
   const sleepRotationButton = document.querySelector("[data-sleep-rotation-info]");
   const sleepRotationDialog = document.querySelector("[data-sleep-rotation-dialog]");
 
@@ -28,6 +29,14 @@ document.addEventListener("DOMContentLoaded", () => {
     return Object.fromEntries(formData.entries());
   }
 
+  function setStatus(message, tone = "neutral") {
+    if (!(statusNode instanceof HTMLElement)) {
+      return;
+    }
+    statusNode.textContent = message || "";
+    statusNode.dataset.tone = tone;
+  }
+
   async function saveSettings() {
     if (inFlight) {
       pending = true;
@@ -37,25 +46,23 @@ document.addEventListener("DOMContentLoaded", () => {
     inFlight = true;
     pending = false;
     const payload = collectPayload();
-
-    for (const field of form.elements) {
-      if (field instanceof HTMLElement) {
-        field.disabled = true;
-      }
-    }
+    setStatus("Einstellungen werden gespeichert …", "busy");
 
     try {
-      await fetch("/api/settings", {
+      const response = await fetch("/api/settings", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(payload),
       });
-    } finally {
-      for (const field of form.elements) {
-        if (field instanceof HTMLElement) {
-          field.disabled = false;
-        }
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.ok === false) {
+        setStatus(result?.error || result?.message || "Einstellungen konnten nicht gespeichert werden.", "error");
+        return;
       }
+      setStatus(result.message || "Einstellungen gespeichert.", "success");
+    } catch (_error) {
+      setStatus("Einstellungen konnten nicht gespeichert werden.", "error");
+    } finally {
       syncStartupVolumeState();
       inFlight = false;
       if (pending) {
@@ -80,6 +87,13 @@ document.addEventListener("DOMContentLoaded", () => {
     startupToggle.addEventListener("change", syncStartupVolumeState);
   }
   form.addEventListener("change", scheduleSave);
+  form.addEventListener("input", (event) => {
+    if (event.target instanceof HTMLInputElement && event.target.type === "number") {
+      scheduleSave();
+    }
+  });
+
+  setStatus("Änderungen werden automatisch gespeichert.");
 
   if (sleepRotationButton instanceof HTMLButtonElement && sleepRotationDialog instanceof HTMLDialogElement) {
     sleepRotationButton.addEventListener("click", () => sleepRotationDialog.showModal());

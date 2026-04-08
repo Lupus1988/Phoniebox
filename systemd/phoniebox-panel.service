@@ -6,6 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/phoniebox-panel
+EnvironmentFile=-/etc/default/phoniebox-panel
 Environment=PYTHONUNBUFFERED=1
 Environment=PHONIEBOX_HOST=0.0.0.0
 Environment=PHONIEBOX_PORT=80

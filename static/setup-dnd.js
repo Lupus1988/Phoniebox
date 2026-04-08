@@ -51,7 +51,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function emptyLabel(slot) {
-    return slot.dataset.emptyLabel || "Funktion hierhin ziehen";
+    return slot.dataset.emptyLabel || "";
   }
 
   function applyToSlot(slot, value) {
