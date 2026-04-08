@@ -72,24 +72,8 @@
             {% endfor %}
           </select>
         </label>
-        {% if setup_data.audio.output_mode == "i2s_dac" %}
-        <label>
-          <span>I2S-Profil</span>
-          <select name="i2s_profile">
-            {% for option in audio_i2s_profile_options %}
-              <option value="{{ option.id }}" {% if setup_data.audio.i2s_profile == option.id %}selected{% endif %}>{{ option.label }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        {% endif %}
-        {% if setup_data.audio.output_mode == "i2s_dac" %}
-        <label class="full">
-          <span>Anschluss-Hinweis</span>
-          <a href="{{ url_for('download_audio_guide', output_mode=setup_data.audio.output_mode) }}">Anschlussplan für I2S-Soundkarte herunterladen</a>
-        </label>
-        {% endif %}
       </div>
-      <ul class="plain-list">
+      <ul class="plain-list setup-audio-info">
         <li>Gerät erkannt: {{ audio_environment.device_model }}</li>
         {% if audio_environment.has_analog_audio %}
           <li>Onboard-Soundkarte vorhanden.</li>
@@ -154,10 +138,6 @@
           <input type="checkbox" name="hardware_buttons_enabled" {% if setup_data.hardware_buttons_enabled %}checked{% endif %} data-hardware-buttons-toggle>
           <span>Hardwaretasten Aktiv</span>
         </label>
-      </div>
-      <div class="setup-note">
-        <p>Ein PIN kann für kurzen und langen Tastendruck getrennt verwendet werden. Reader- und Soundkarten-Pins haben Vorrang.</p>
-        <p>Wenn Hardwaretasten deaktiviert sind, bleiben Web-Panel und Setup nutzbar, GPIO-Tastendrücke werden aber ignoriert.</p>
       </div>
     </form>
 

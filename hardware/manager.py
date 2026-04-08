@@ -62,25 +62,13 @@ def detect_reader(setup_data):
         elif not (Path("/dev/spidev0.0").exists() or Path("/dev/spidev0.1").exists()):
             result["notes"].append("SPI-Gerät nicht sichtbar. Für echte Hardware später SPI aktivieren.")
         else:
-            result["notes"].append("RC522 ausgewählt. Referenzpfad: CE0/GPIO8, RST/GPIO22, IRQ/GPIO18.")
-    elif reader_type == "PN532_I2C":
-        result["driver"] = "pn532"
-        result["transport"] = "i2c"
-        result["ready"] = Path("/dev/i2c-1").exists()
-        if not result["ready"]:
-            result["notes"].append("Kein I2C-Gerät sichtbar. Für echte Hardware später I2C aktivieren.")
+            result["notes"].append("RC522 ausgewählt. Referenzpfad: CE0/GPIO8, RST/GPIO25.")
     elif reader_type == "PN532_SPI":
         result["driver"] = "pn532"
         result["transport"] = "spi"
         result["ready"] = Path("/dev/spidev0.0").exists() or Path("/dev/spidev0.1").exists()
         if not result["ready"]:
             result["notes"].append("Kein SPI-Gerät sichtbar. Für echte Hardware später SPI aktivieren.")
-    elif reader_type == "PN532_UART":
-        result["driver"] = "pn532"
-        result["transport"] = "uart"
-        result["ready"] = Path("/dev/ttyS0").exists() or Path("/dev/serial0").exists()
-        if not result["ready"]:
-            result["notes"].append("Kein UART-Gerät sichtbar. Für echte Hardware später serielle Schnittstelle aktivieren.")
     else:
         result["notes"].append("Unbekannter Reader-Typ.")
     return result

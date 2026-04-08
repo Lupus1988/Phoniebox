@@ -1,47 +1,33 @@
 def reserved_reader_pins(reader_type):
     reader_type = (reader_type or "").strip().upper()
-    if reader_type == "RC522":
-        return {"GPIO8", "GPIO9", "GPIO10", "GPIO11", "GPIO18", "GPIO22"}
-    if reader_type == "PN532_I2C":
-        return {"GPIO2", "GPIO3"}
-    if reader_type == "PN532_SPI":
-        return {"GPIO8", "GPIO9", "GPIO10", "GPIO11"}
-    if reader_type == "PN532_UART":
-        return {"GPIO14", "GPIO15"}
+    if reader_type in {"RC522", "PN532_SPI"}:
+        return {"GPIO8", "GPIO9", "GPIO10", "GPIO11", "GPIO25"}
     return set()
 
 
 def reserved_audio_pins(output_mode):
-    if (output_mode or "").strip() == "i2s_dac":
-        return {"GPIO18", "GPIO19", "GPIO20", "GPIO21"}
     return set()
 
 
 def reserved_system_pins(setup_data):
     setup_data = setup_data or {}
-    reader_type = setup_data.get("reader", {}).get("type", "")
-    output_mode = setup_data.get("audio", {}).get("output_mode", "")
-    return reserved_reader_pins(reader_type) | reserved_audio_pins(output_mode)
+    reader = setup_data.get("reader", {})
+    reader_type = reader.get("target_type") or reader.get("type", "")
+    return reserved_reader_pins(reader_type)
 
 
 def potential_reader_pins():
     return {
-        "GPIO2",
-        "GPIO3",
         "GPIO8",
         "GPIO9",
         "GPIO10",
         "GPIO11",
-        "GPIO14",
-        "GPIO15",
-        "GPIO18",
-        "GPIO22",
         "GPIO25",
     }
 
 
 def potential_audio_pins():
-    return {"GPIO18", "GPIO19", "GPIO20", "GPIO21"}
+    return set()
 
 
 def potential_system_pins():

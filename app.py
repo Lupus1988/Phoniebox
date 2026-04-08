@@ -52,7 +52,7 @@ from services.library_service import (
     start_link_session,
     track_rows,
 )
-from system.audio import apply_audio_profile, deploy_audio_profile, detect_audio_environment, i2s_profile_catalog
+from system.audio import apply_audio_profile, deploy_audio_profile, detect_audio_environment
 from system.networking import apply_wifi_profile, ensure_hostname, fallback_hotspot_cycle
 from utils import (
     album_editor_response,
@@ -189,9 +189,7 @@ READER_OPTIONS = [
     {"id": READER_NONE_ID, "label": "Kein Reader installiert", "driver": "-", "transport": "-"},
     {"id": "USB", "label": "USB-Reader", "driver": "hid/keyboard-reader", "transport": "usb"},
     {"id": "RC522", "label": "RC522", "driver": "mfrc522", "transport": "spi"},
-    {"id": "PN532_I2C", "label": "PN532 (I2C)", "driver": "pn532", "transport": "i2c"},
     {"id": "PN532_SPI", "label": "PN532 (SPI)", "driver": "pn532", "transport": "spi"},
-    {"id": "PN532_UART", "label": "PN532 (UART)", "driver": "pn532", "transport": "uart"},
 ]
 
 
@@ -250,7 +248,7 @@ def default_setup():
             "install_state": "not_installed",
             "needs_reboot": False,
             "last_action_message": "Noch kein Reader installiert.",
-            "connection_hint": "USB-Reader anstecken oder RC522 per SPI verdrahten",
+            "connection_hint": "USB-Reader anstecken oder Reader per SPI verdrahten",
         },
         "hardware_buttons_enabled": False,
         "button_long_press_seconds": 2,
@@ -281,7 +279,7 @@ def default_setup():
         "audio": {
             "output_mode": "usb_dac",
             "i2s_profile": "auto",
-            "connection_hint": "USB- oder I2S-Soundkarte anschließen und auswählen",
+            "connection_hint": "Onboard- oder USB-Soundkarte auswählen",
         },
         "wifi": {
             "mode": "hotspot_only",
@@ -411,7 +409,7 @@ def reader_requires_reboot(current_type, target_type):
     target_type = normalize_reader_type(target_type)
     if current_type == target_type:
         return False
-    return any(reader_type in {READER_NONE_ID, "RC522", "PN532_I2C", "PN532_SPI", "PN532_UART"} for reader_type in (current_type, target_type))
+    return any(reader_type in {READER_NONE_ID, "RC522", "PN532_SPI"} for reader_type in (current_type, target_type))
 
 
 def reader_transition_commands(target_type):
@@ -419,11 +417,6 @@ def reader_transition_commands(target_type):
     commands = []
     if target_type in {"RC522", "PN532_SPI"}:
         commands.append(["raspi-config", "nonint", "do_spi", "0"])
-    if target_type == "PN532_I2C":
-        commands.append(["raspi-config", "nonint", "do_i2c", "0"])
-    if target_type == "PN532_UART":
-        commands.append(["raspi-config", "nonint", "do_serial_cons", "1"])
-        commands.append(["raspi-config", "nonint", "do_serial_hw", "0"])
     return commands
 
 
@@ -432,9 +425,7 @@ def reader_runtime_cleanup_packages(target_type):
     profile_packages = {
         "USB": {"evdev"},
         "RC522": {"pi-rc522", "spidev"},
-        "PN532_I2C": {"adafruit-blinka", "adafruit-circuitpython-pn532", "smbus2"},
         "PN532_SPI": {"adafruit-blinka", "adafruit-circuitpython-pn532", "spidev"},
-        "PN532_UART": {"adafruit-blinka", "adafruit-circuitpython-pn532", "pyserial"},
     }
     keep = profile_packages.get(target_type, set())
     all_packages = set().union(*profile_packages.values())
@@ -457,15 +448,10 @@ def reader_runtime_commands(target_type):
         commands.append([python_bin, "-m", "pip", "install", "--upgrade", "spidev"])
         commands.append([python_bin, "-m", "pip", "install", "--upgrade", "rpi-lgpio"])
         commands.append([python_bin, "-m", "pip", "install", "--upgrade", "--force-reinstall", "--no-deps", "pi-rc522==2.3.0"])
-    elif target_type in {"PN532_I2C", "PN532_SPI", "PN532_UART"}:
+    elif target_type == "PN532_SPI":
         commands.append([python_bin, "-m", "pip", "install", "--upgrade", "adafruit-blinka>=8.0,<9.0"])
         commands.append([python_bin, "-m", "pip", "install", "--upgrade", "adafruit-circuitpython-pn532>=2.0,<3.0"])
-        if target_type == "PN532_I2C":
-            commands.append([python_bin, "-m", "pip", "install", "--upgrade", "smbus2"])
-        elif target_type == "PN532_SPI":
-            commands.append([python_bin, "-m", "pip", "install", "--upgrade", "spidev"])
-        elif target_type == "PN532_UART":
-            commands.append([python_bin, "-m", "pip", "install", "--upgrade", "pyserial"])
+        commands.append([python_bin, "-m", "pip", "install", "--upgrade", "spidev"])
 
     return commands
 
@@ -660,7 +646,7 @@ def build_audio_runtime_config(audio_setup, settings):
     config["preferred_output"] = "auto"
     config["mono_downmix"] = False
     config["external_soundcard_required"] = False
-    config["apply_boot_config"] = config.get("output_mode") == "i2s_dac"
+    config["apply_boot_config"] = False
     config["use_startup_volume"] = bool(settings.get("use_startup_volume", False))
     config["enable_audio_service"] = config["use_startup_volume"]
     config["startup_volume"] = to_int(settings.get("startup_volume"), 45, 0, 100)
@@ -1044,15 +1030,15 @@ def collect_conflicts(setup_data):
     for pin, by_press_type in button_pins.items():
         if pin in reserved:
             button_names = [name for names in by_press_type.values() for name in names]
-            warnings.append(f"Taste {', '.join(button_names)} muss neu zugeordnet werden. {pin} wird jetzt von Reader oder Soundkarte benötigt.")
+            warnings.append(f"Taste {', '.join(button_names)} muss neu zugeordnet werden. {pin} ist für Reader reserviert.")
         elif pin in potential:
             button_names = [name for names in by_press_type.values() for name in names]
-            warnings.append(f"Taste {', '.join(button_names)} sollte neu zugeordnet werden. {pin} ist grundsätzlich für Reader oder Soundkarten reserviert.")
+            warnings.append(f"Taste {', '.join(button_names)} sollte neu zugeordnet werden. {pin} ist grundsätzlich für Reader reserviert.")
     for pin, names in led_pins.items():
         if pin in reserved:
-            warnings.append(f"LED {', '.join(names)} muss neu zugeordnet werden. {pin} wird jetzt von Reader oder Soundkarte benötigt.")
+            warnings.append(f"LED {', '.join(names)} muss neu zugeordnet werden. {pin} ist für Reader reserviert.")
         elif pin in potential:
-            warnings.append(f"LED {', '.join(names)} sollte neu zugeordnet werden. {pin} ist grundsätzlich für Reader oder Soundkarten reserviert.")
+            warnings.append(f"LED {', '.join(names)} sollte neu zugeordnet werden. {pin} ist grundsätzlich für Reader reserviert.")
 
     wifi = setup_data.get("wifi", {})
     if normalize_hotspot_security(wifi.get("hotspot_security")) == "wpa-psk" and len(wifi.get("hotspot_password", "")) < 8:
@@ -1088,9 +1074,7 @@ def reader_guide_filename(reader_type):
     return {
         "USB": "usb-keyboard-reader.txt",
         "RC522": "rc522-spi.txt",
-        "PN532_I2C": "pn532-i2c.txt",
         "PN532_SPI": "pn532-spi.txt",
-        "PN532_UART": "pn532-uart.txt",
     }.get(reader_type, "usb-keyboard-reader.txt")
 
 
@@ -1099,29 +1083,19 @@ def reader_guide_path(reader_type):
 
 
 def audio_guide_filename(output_mode):
-    return {
-        "i2s_dac": "i2s-dac.txt",
-    }.get(output_mode, "")
+    return ""
 
 
 def audio_guide_path(output_mode):
-    filename = audio_guide_filename(output_mode)
-    return AUDIO_GUIDE_DIR / filename if filename else Path("")
+    return Path("")
 
 
 def audio_output_choices(environment=None):
     environment = environment or detect_audio_environment()
-    choices = [
-        {"id": "usb_dac", "label": "USB-Soundkarte"},
-        {"id": "i2s_dac", "label": "I2S-Soundkarte"},
-    ]
+    choices = [{"id": "usb_dac", "label": "USB-Soundkarte"}]
     if environment.get("has_analog_audio"):
-        choices.insert(1, {"id": "analog_jack", "label": "Interne Soundkarte"})
+        choices.insert(0, {"id": "analog_jack", "label": "Onboard-Soundkarte"})
     return choices
-
-
-def audio_i2s_profile_choices():
-    return i2s_profile_catalog()
 
 
 def network_targets(setup_data):
@@ -1207,7 +1181,6 @@ def inject_choices():
         "power_off_routine_options": power_routine_options("power_off"),
         "power_routine_options": power_routine_catalog(),
         "audio_output_options": audio_output_choices(audio_environment),
-        "audio_i2s_profile_options": audio_i2s_profile_choices(),
         "audio_environment": audio_environment,
     }
 
@@ -1465,13 +1438,9 @@ def setup():
         if section == "audio":
             audio = data["audio"]
             audio["output_mode"] = request.form.get("output_mode", audio.get("output_mode", "usb_dac")).strip() or "usb_dac"
-            if audio["output_mode"] == "i2s_dac":
-                audio["i2s_profile"] = request.form.get(
-                    "i2s_profile",
-                    audio.get("i2s_profile", "auto"),
-                ).strip() or "auto"
-            else:
-                audio["i2s_profile"] = "auto"
+            if audio["output_mode"] not in {"analog_jack", "usb_dac"}:
+                audio["output_mode"] = "usb_dac"
+            audio["i2s_profile"] = "auto"
             save_setup(data)
             audio_config = build_audio_runtime_config(audio, load_settings())
             apply_audio_profile(audio_config, AUDIO_PROFILE_DIR)

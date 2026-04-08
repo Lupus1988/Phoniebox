@@ -4,34 +4,6 @@ import subprocess
 from pathlib import Path
 
 
-I2S_PROFILE_OPTIONS = {
-    "auto": {
-        "label": "Automatisch / später auswählen",
-        "dtoverlay": "",
-        "notes": ["Noch kein fester I2S-HAT ausgewählt."],
-    },
-    "hifiberry-dac": {
-        "label": "HiFiBerry DAC / DAC+",
-        "dtoverlay": "dtoverlay=hifiberry-dac",
-        "notes": ["Typischer I2S-DAC ohne zusätzliche Buttons."],
-    },
-    "googlevoicehat": {
-        "label": "Google Voice HAT",
-        "dtoverlay": "dtoverlay=googlevoicehat-soundcard",
-        "notes": ["Audio-HAT mit zusätzlicher Voice-HAT-Unterstützung."],
-    },
-    "wm8960": {
-        "label": "WM8960 Audio HAT",
-        "dtoverlay": "dtoverlay=wm8960-soundcard",
-        "notes": ["Häufig bei kompakten Lautsprecher-/Mikrofon-HATs."],
-    },
-    "seeed-2mic": {
-        "label": "Seeed 2-Mic Voice Card",
-        "dtoverlay": "dtoverlay=seeed-2mic-voicecard",
-        "notes": ["Voicecard mit Mikrofon-Fokus."],
-    },
-}
-
 
 def command_exists(name):
     return shutil.which(name) is not None
@@ -137,20 +109,14 @@ def detect_audio_environment():
     has_analog = any(("bcm2835" in item or "headphones" in item or "analog" in item) for item in card_texts)
     has_hdmi = any("vc4hdmi" in item or "hdmi" in item for item in card_ids)
     has_usb = any("usb" in item or "audio" in item for item in card_ids)
-    has_i2s_hat = any(
-        token in item
-        for item in card_ids
-        for token in {"hifiberry", "seeed", "iqaudio", "sndrpihifiberry", "googlevoicehat", "adau", "wm8960"}
-    )
+    has_i2s_hat = False
     notes = []
     if not cards:
         notes.append("Keine ALSA-Soundkarten erkannt.")
-    if is_pi_zero_2w and not (has_usb or has_i2s_hat):
+    if is_pi_zero_2w and not has_usb:
         notes.append("Pi Zero 2 W erkannt.")
     if has_usb:
         notes.append("USB-Audio erkannt.")
-    if has_i2s_hat:
-        notes.append("I2S-/GPIO-Audio-HAT erkannt.")
     if has_analog:
         notes.append("Onboard-Analog-Audio erkannt.")
     return {
@@ -162,13 +128,10 @@ def detect_audio_environment():
         "has_i2s_audio": has_i2s_hat,
         "has_hdmi_audio": has_hdmi,
         "has_analog_audio": has_analog,
-        "recommended_external_card": is_pi_zero_2w and not (has_usb or has_i2s_hat),
+        "recommended_external_card": is_pi_zero_2w and not has_usb,
         "notes": notes,
     }
 
-
-def i2s_profile_catalog():
-    return [{"id": key, "label": value["label"]} for key, value in I2S_PROFILE_OPTIONS.items()]
 
 
 def _card_tokens(card):
@@ -187,8 +150,6 @@ def _card_matches_mode(card, mode):
         return "usb" in tokens or "audio" in tokens
     if mode == "analog_jack":
         return "bcm2835" in tokens or "analog" in tokens
-    if mode == "i2s_dac":
-        return any(token in tokens for token in {"hifiberry", "seeed", "iqaudio", "sndrpihifiberry", "googlevoicehat", "adau", "wm8960"})
     return False
 
 

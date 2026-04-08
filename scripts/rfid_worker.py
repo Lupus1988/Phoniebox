@@ -47,8 +47,8 @@ PANEL_PORT = int(os.environ.get("PHONIEBOX_PORT", "80"))
 RUNTIME_RFID_URL = f"http://127.0.0.1:{PANEL_PORT}/api/runtime/rfid"
 RUNTIME_RFID_REMOVE_URL = f"http://127.0.0.1:{PANEL_PORT}/api/runtime/rfid/remove"
 VALID_RC522_VERSION_REG_VALUES = {0x91, 0x92}
-RC522_PROBE_ORDER = ((0, 22), (0, 25), (1, 22), (1, 25))
-RC522_DEFAULT_IRQ_PIN = 18
+RC522_PROBE_ORDER = ((0, 25), (1, 25))
+RC522_DEFAULT_IRQ_PIN = None
 
 
 def load_setup():
@@ -572,26 +572,16 @@ class PN532Reader(BaseReader):
             import board
             import busio
             import digitalio
-            from adafruit_pn532.i2c import PN532_I2C
             from adafruit_pn532.spi import PN532_SPI
-            from adafruit_pn532.uart import PN532_UART
         except Exception:
             return
 
         try:
-            if transport == "i2c":
-                i2c = busio.I2C(board.SCL, board.SDA)
-                self.handles.append(i2c)
-                self.pn532 = PN532_I2C(i2c, debug=False)
-            elif transport == "spi":
+            if transport == "spi":
                 spi = busio.SPI(board.SCK, board.MOSI, board.MISO)
                 cs = digitalio.DigitalInOut(board.CE0)
                 self.handles.extend([spi, cs])
                 self.pn532 = PN532_SPI(spi, cs, debug=False)
-            elif transport == "uart":
-                uart = busio.UART(board.TX, board.RX, baudrate=115200, timeout=0.1)
-                self.handles.append(uart)
-                self.pn532 = PN532_UART(uart, debug=False)
             if self.pn532 is not None:
                 self.pn532.SAM_configuration()
                 self.ready = True
@@ -637,12 +627,8 @@ def build_reader(reader_type):
         return USBKeyboardReader()
     if reader_type == "RC522":
         return RC522Reader()
-    if reader_type == "PN532_I2C":
-        return PN532Reader("i2c")
     if reader_type == "PN532_SPI":
         return PN532Reader("spi")
-    if reader_type == "PN532_UART":
-        return PN532Reader("uart")
     return BaseReader()
 
 

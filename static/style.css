@@ -1773,9 +1773,18 @@ dialog[data-power-routine-dialog]::backdrop {
 
 .reader-select-inline {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(300px, 1.5fr) auto;
   gap: 0.7rem;
   align-items: center;
+}
+
+.reader-select-inline select {
+  width: 100%;
+  min-width: 0;
+}
+
+.setup-audio-info {
+  margin-top: 0.8rem;
 }
 
 .reader-install-badge {
@@ -1860,7 +1869,16 @@ dialog[data-power-routine-dialog]::backdrop {
 
 .mapping-table-head,
 .mapping-row {
-  grid-template-columns: 1fr 0.9fr 0.8fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr) minmax(0, 0.8fr);
+}
+
+.mapping-row > div {
+  min-width: 0;
+}
+
+.mapping-row select {
+  width: 100%;
+  min-width: 0;
 }
 
 .button-detect-grid {
@@ -2123,6 +2141,10 @@ dialog[data-sleep-rotation-dialog]::backdrop {
   .mapping-actions {
     display: grid;
     justify-content: stretch;
+  }
+
+  .reader-select-inline {
+    grid-template-columns: 1fr;
   }
 
   .library-storage-head,
