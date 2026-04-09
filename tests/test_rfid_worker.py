@@ -47,8 +47,8 @@ class ProbeRC522BackendTest(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["config"]["spi_device"], 0)
-        self.assertEqual(result["config"]["rst_pin"], 22)
-        self.assertEqual(result["config"]["irq_pin"], 18)
+        self.assertEqual(result["config"]["rst_pin"], 25)
+        self.assertIsNone(result["config"]["irq_pin"])
         self.assertTrue(backend.cleaned)
 
     def test_probe_cleans_failed_backend(self):

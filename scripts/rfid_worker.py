@@ -344,14 +344,23 @@ def probe_rc522_backend():
 
 
 class PiRc522ReaderBackend:
-    def __init__(self, spi_bus=0, spi_device=0, rst_pin=22, irq_pin=18):
+    def __init__(self, spi_bus=0, spi_device=0, rst_pin=25, irq_pin=RC522_DEFAULT_IRQ_PIN):
         from pirc522 import RFID
 
         self.spi_bus = spi_bus
         self.spi_device = spi_device
         self.rst_pin = rst_pin
         self.irq_pin = irq_pin
-        self.reader = RFID(bus=spi_bus, device=spi_device, speed=1_000_000, pin_rst=rst_pin, pin_ce=spi_device, pin_irq=irq_pin)
+        reader_kwargs = {
+            "bus": spi_bus,
+            "device": spi_device,
+            "speed": 1_000_000,
+            "pin_rst": rst_pin,
+            "pin_ce": spi_device,
+        }
+        if irq_pin is not None:
+            reader_kwargs["pin_irq"] = irq_pin
+        self.reader = RFID(**reader_kwargs)
 
     def read_uid(self):
         error, _tag_type = self.reader.request()
@@ -495,7 +504,7 @@ class RC522Reader(BaseReader):
             self.reader = LowLevelRC522Backend(
                 spi_bus=self.reader_config.get("spi_bus", 0),
                 spi_device=self.reader_config.get("spi_device", 0),
-                rst_pin=self.reader_config.get("rst_pin", 22),
+                rst_pin=self.reader_config.get("rst_pin", 25),
             )
         except Exception as exc:
             self.reader = None
@@ -503,14 +512,14 @@ class RC522Reader(BaseReader):
             self.status_details = [
                 "Der Chip antwortet zwar über SPI, der Reader konnte aber nicht geöffnet werden.",
                 *probe.get("details", []),
-                "Erwartete Verdrahtung: CE0/GPIO8, RST/GPIO22, IRQ/GPIO18.",
+                "Erwartete Verdrahtung: CE0/GPIO8, RST/GPIO25, IRQ unbenutzt.",
             ]
             return
         self.ready = True
         self.status_message = "RC522 bereit."
         self.status_details = [
             *probe.get("details", []),
-            "Erwartete Verdrahtung: CE0/GPIO8, RST/GPIO22, IRQ/GPIO18.",
+            "Erwartete Verdrahtung: CE0/GPIO8, RST/GPIO25, IRQ unbenutzt.",
         ]
 
     def _read_uid(self):
@@ -527,7 +536,7 @@ class RC522Reader(BaseReader):
             self.ready = True
             self.status_message = "RC522 bereit."
             self.status_details = [
-                "Erwartete Verdrahtung: CE0/GPIO8, RST/GPIO22, IRQ/GPIO18.",
+                "Erwartete Verdrahtung: CE0/GPIO8, RST/GPIO25, IRQ unbenutzt.",
             ]
         except Exception as exc:
             self.ready = False

@@ -138,7 +138,7 @@ class RuntimeService:
     HARDWARE_PROFILE_TTL_SECONDS = 5.0
     SLEEP_TIMER_FADE_SECONDS = 5.0
     SLEEP_TIMER_FADE_STEPS = 10
-    PRESENCE_READER_TYPES = {"RC522", "PN532_I2C", "PN532_SPI", "PN532_UART"}
+    PRESENCE_READER_TYPES = {"RC522", "PN532_SPI"}
 
     def __init__(self):
         self.runtime_path = RUNTIME_FILE

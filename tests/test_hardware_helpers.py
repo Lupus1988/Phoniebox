@@ -79,14 +79,14 @@ class HardwareHelpersTest(unittest.TestCase):
             "reader": {"type": "RC522"},
             "audio": {"output_mode": "usb_dac"},
             "leds": [
-                {"pin": "GPIO22", "brightness": 50},
+                {"pin": "GPIO25", "brightness": 50},
                 {"pin": "", "brightness": 30},
             ],
         }
 
         result = manager_module.detect_leds(setup)
 
-        self.assertTrue(any("GPIO22" in note for note in result["notes"]))
+        self.assertTrue(any("GPIO25" in note for note in result["notes"]))
         self.assertFalse(any(" , " in note for note in result["notes"]))
 
     def test_detect_reader_uses_reader_status_for_rc522(self):

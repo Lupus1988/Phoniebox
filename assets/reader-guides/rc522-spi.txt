@@ -14,9 +14,9 @@ Verdrahtung RC522 -> Raspberry Pi:
 - SCK       -> GPIO11 / Pin 23
 - MOSI      -> GPIO10 / Pin 19
 - MISO      -> GPIO9  / Pin 21
-- IRQ       -> GPIO18 / Pin 12
+- IRQ       -> nicht belegt
 - GND       -> GND    / Pin 6
-- RST       -> GPIO22 / Pin 15
+- RST       -> GPIO25 / Pin 22
 - 3.3V      -> 3V3    / Pin 1
 
 Kurzablauf:
@@ -26,4 +26,4 @@ Kurzablauf:
 4. In Phoniebox den Reader-Typ "RC522" waehlen.
 
 Reservierte Pins:
-- GPIO8, GPIO9, GPIO10, GPIO11, GPIO18, GPIO22
+- GPIO8, GPIO9, GPIO10, GPIO11, GPIO25

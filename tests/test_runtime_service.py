@@ -388,7 +388,7 @@ class RuntimeServiceTest(unittest.TestCase):
                 "audio": {"output_mode": "usb_dac"},
                 "hardware_buttons_enabled": True,
                 "buttons": [
-                    {"id": "btn-1", "name": "Play/Pause", "pin": "GPIO22", "press_type": "kurz"},
+                    {"id": "btn-1", "name": "Play/Pause", "pin": "GPIO25", "press_type": "kurz"},
                     {"id": "btn-2", "name": "Stopp", "pin": "GPIO17", "press_type": "kurz"},
                 ],
                 "leds": [],
@@ -409,7 +409,7 @@ class RuntimeServiceTest(unittest.TestCase):
                 "audio": {"output_mode": "usb_dac"},
                 "buttons": [],
                 "leds": [
-                    {"id": "led-1", "name": "Power", "pin": "GPIO22", "function": "power_on", "brightness": 50},
+                    {"id": "led-1", "name": "Power", "pin": "GPIO25", "function": "power_on", "brightness": 50},
                     {"id": "led-2", "name": "Wifi", "pin": "GPIO17", "function": "wifi_on", "brightness": 55},
                 ],
                 "wifi": {},

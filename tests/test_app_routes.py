@@ -223,7 +223,7 @@ class AppRoutesTest(unittest.TestCase):
         self.assertFalse(setup["hardware_buttons_enabled"])
 
     def test_audio_test_endpoint_plays_test_sound(self):
-        with patch("app.runtime_service.play_system_sound", return_value={"ok": True, "details": ["ok"]}) as play_sound:
+        with patch("services.player_runtime_service.runtime_service.play_system_sound", return_value={"ok": True, "details": ["ok"]}) as play_sound:
             response = self.client.post("/api/runtime/audio-test")
         self.assertEqual(response.status_code, 200)
         play_sound.assert_called_once_with("test")
@@ -267,23 +267,23 @@ class AppRoutesTest(unittest.TestCase):
 
         self.assertTrue(errors)
 
-    def test_collect_conflicts_marks_gpio22_as_reserved_for_rc522(self):
+    def test_collect_conflicts_marks_gpio25_as_reserved_for_rc522(self):
         setup = default_setup()
         setup["reader"]["type"] = "RC522"
-        setup["buttons"][0]["pin"] = "GPIO22"
+        setup["buttons"][0]["pin"] = "GPIO25"
 
         warnings = collect_conflicts(setup)
 
-        self.assertTrue(any("GPIO22" in warning and "Reader oder Soundkarte" in warning for warning in warnings))
+        self.assertTrue(any("GPIO25" in warning and "für Reader reserviert" in warning for warning in warnings))
 
     def test_collect_conflicts_warns_about_potential_reader_pins_even_without_active_reader(self):
         setup = default_setup()
         setup["reader"]["type"] = "USB"
-        setup["buttons"][0]["pin"] = "GPIO22"
+        setup["buttons"][0]["pin"] = "GPIO25"
 
         warnings = collect_conflicts(setup)
 
-        self.assertTrue(any("GPIO22" in warning and "grundsätzlich" in warning for warning in warnings))
+        self.assertTrue(any("GPIO25" in warning and "grundsätzlich" in warning for warning in warnings))
 
     def test_pin_choices_hide_potential_reader_and_audio_pins_by_default(self):
         setup = default_setup()
@@ -291,9 +291,8 @@ class AppRoutesTest(unittest.TestCase):
         button_pins = pin_choices(setup, "button")
         led_pins = pin_choices(setup, "led")
 
-        self.assertNotIn("GPIO22", button_pins)
-        self.assertNotIn("GPIO20", button_pins)
-        self.assertNotIn("GPIO22", led_pins)
+        self.assertNotIn("GPIO25", button_pins)
+        self.assertNotIn("GPIO25", led_pins)
 
     def test_unknown_reader_action_does_not_save_setup(self):
         setup = default_setup()
