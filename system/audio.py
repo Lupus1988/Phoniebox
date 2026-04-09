@@ -207,21 +207,12 @@ ctl.!default {{
 
 
 def build_boot_config(config):
-    mode = config.get("output_mode", "auto")
-    i2s_profile = I2S_PROFILE_OPTIONS.get(config.get("i2s_profile", "auto"), I2S_PROFILE_OPTIONS["auto"])
+    mode = config.get("output_mode", "usb_dac")
     lines = ["# Generiert durch Phoniebox Panel", "# Snippet für /boot/firmware/config.txt oder /boot/config.txt"]
     notes = []
     if mode == "analog_jack":
         lines.append("dtparam=audio=on")
         notes.append("Analog-Ausgang aktivieren.")
-    elif mode == "hdmi":
-        lines.append("hdmi_drive=2")
-        notes.append("HDMI-Audio erzwingen.")
-    elif mode == "i2s_dac":
-        lines.append("dtparam=audio=off")
-        if i2s_profile["dtoverlay"]:
-            lines.append(i2s_profile["dtoverlay"])
-        notes.extend(i2s_profile["notes"])
     else:
         lines.append("# Kein spezielles Boot-Overlay nötig.")
     return "\n".join(lines) + "\n", notes
@@ -256,9 +247,6 @@ def build_summary(snapshot, config):
         lines.append(f"Startlautstärke: {config.get('startup_volume', 45)}%")
     else:
         lines.append("Startlautstärke: letzte Lautstärke übernehmen")
-    if config.get("output_mode") == "i2s_dac":
-        profile = I2S_PROFILE_OPTIONS.get(config.get("i2s_profile", "auto"), I2S_PROFILE_OPTIONS["auto"])
-        lines.append(f"I2S-Profil: {profile['label']}")
     if snapshot.get("notes"):
         lines.append("")
         lines.append("Hinweise:")

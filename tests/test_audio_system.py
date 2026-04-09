@@ -127,6 +127,32 @@ class AudioSystemTest(unittest.TestCase):
             self.assertTrue((Path(target_root) / "etc" / "systemd" / "system" / "phoniebox-audio-init.service").exists())
             self.assertTrue((Path(target_root) / "boot" / "firmware" / "usercfg.txt").exists())
 
+    @patch.object(audio_module, "command_exists")
+    @patch.object(audio_module, "detect_audio_environment")
+    def test_apply_audio_profile_usb_dac_boot_config_no_longer_depends_on_i2s_profiles(self, mock_environment, mock_command_exists):
+        mock_environment.return_value = {
+            "device_model": "Raspberry Pi Zero 2 W Rev 1.0",
+            "cards": [{"card_index": "1", "card_id": "Device", "name": "USB DAC", "description": "USB Audio"}],
+            "playback_devices": [{"alsa_hw": "hw:1,0", "name": "USB DAC", "device_name": "USB Audio"}],
+            "notes": ["USB-Audio erkannt."],
+            "recommended_external_card": False,
+        }
+        mock_command_exists.return_value = False
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = audio_module.apply_audio_profile(
+                {
+                    "output_mode": "usb_dac",
+                    "use_startup_volume": False,
+                    "apply_boot_config": False,
+                },
+                Path(temp_dir),
+            )
+
+            self.assertTrue(result["ok"])
+            boot_config = (Path(temp_dir) / "boot-config.txt").read_text(encoding="utf-8")
+            self.assertIn("Kein spezielles Boot-Overlay nötig.", boot_config)
+
 
 if __name__ == "__main__":
     unittest.main()
