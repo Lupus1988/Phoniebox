@@ -3,6 +3,8 @@ document.addEventListener("DOMContentLoaded", () => {
   let selectedChip = null;
   let detectPollTimer = null;
   let readerRebootTimer = null;
+  let readerInstallTimer = null;
+  const readerRebootDialog = document.querySelector("[data-reader-reboot-dialog]");
 
   const readerForm = document.querySelector("[data-reader-form]");
   if (readerForm) {
@@ -12,6 +14,79 @@ document.addEventListener("DOMContentLoaded", () => {
     const actionInput = readerForm.querySelector("[data-reader-action-input]");
     const installBadge = readerForm.querySelector("[data-reader-install-badge]");
     const installed = installedReader !== "NONE";
+    const countdownNode = readerRebootDialog instanceof HTMLDialogElement
+      ? readerRebootDialog.querySelector("[data-reader-reboot-countdown]")
+      : null;
+    const titleNode = readerRebootDialog instanceof HTMLDialogElement
+      ? readerRebootDialog.querySelector("[data-reader-reboot-title]")
+      : null;
+    const copyNode = readerRebootDialog instanceof HTMLDialogElement
+      ? readerRebootDialog.querySelector("[data-reader-reboot-copy]")
+      : null;
+    const hintNode = readerRebootDialog instanceof HTMLDialogElement
+      ? readerRebootDialog.querySelector("[data-reader-reboot-hint]")
+      : null;
+    const progressBar = readerRebootDialog instanceof HTMLDialogElement
+      ? readerRebootDialog.querySelector("[data-reader-progress-bar]")
+      : null;
+    const progressLabel = readerRebootDialog instanceof HTMLDialogElement
+      ? readerRebootDialog.querySelector("[data-reader-progress-label]")
+      : null;
+    const refreshButton = readerRebootDialog instanceof HTMLDialogElement
+      ? readerRebootDialog.querySelector("[data-reader-reboot-refresh]")
+      : null;
+
+    function setReaderProgress(percent, {indeterminate = false, label = ""} = {}) {
+      if (progressBar instanceof HTMLElement) {
+        progressBar.style.width = `${Math.max(0, Math.min(percent, 100))}%`;
+        progressBar.classList.toggle("is-indeterminate", indeterminate);
+      }
+      if (progressLabel instanceof HTMLElement && label) {
+        progressLabel.textContent = label;
+      }
+    }
+
+    function startReaderInstallOverlay(action) {
+      if (!(readerRebootDialog instanceof HTMLDialogElement)) {
+        return;
+      }
+      if (readerInstallTimer) {
+        window.clearInterval(readerInstallTimer);
+        readerInstallTimer = null;
+      }
+      if (titleNode instanceof HTMLElement) {
+        titleNode.textContent = action === "uninstall" ? "Reader wird deinstalliert" : "Reader wird installiert";
+      }
+      if (countdownNode instanceof HTMLElement) {
+        countdownNode.textContent = "Installation läuft";
+      }
+      if (copyNode instanceof HTMLElement) {
+        copyNode.textContent = action === "uninstall"
+          ? "Die Reader-Konfiguration wird entfernt. Abhängigkeiten und Systemzustand werden aktualisiert."
+          : "Die Reader-Konfiguration wird eingerichtet. Abhängigkeiten und Systemzustand werden aktualisiert.";
+      }
+      if (hintNode instanceof HTMLElement) {
+        hintNode.textContent = "Dieser Schritt kann etwas dauern. Nach erfolgreicher Antwort folgt der Reboot-Countdown.";
+      }
+      if (refreshButton instanceof HTMLButtonElement) {
+        refreshButton.hidden = true;
+      }
+      let visualProgress = 12;
+      setReaderProgress(visualProgress, {
+        indeterminate: true,
+        label: "Systemvoraussetzungen werden vorbereitet.",
+      });
+      readerRebootDialog.showModal();
+      readerInstallTimer = window.setInterval(() => {
+        visualProgress = Math.min(78, visualProgress + 4);
+        setReaderProgress(visualProgress, {
+          indeterminate: true,
+          label: visualProgress < 40
+            ? "Systemvoraussetzungen werden geprüft."
+            : "Reader-Abhängigkeiten werden installiert.",
+        });
+      }, 900);
+    }
 
     const syncReaderAction = () => {
       if (!(typeSelect instanceof HTMLSelectElement)) {
@@ -47,6 +122,13 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       });
     }
+    readerForm.addEventListener("submit", () => {
+      const action = actionInput instanceof HTMLInputElement ? (actionInput.value || "").trim() : "";
+      if (!action) {
+        return;
+      }
+      startReaderInstallOverlay(action);
+    });
     syncReaderAction();
   }
 
@@ -375,11 +457,13 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  const readerRebootDialog = document.querySelector("[data-reader-reboot-dialog]");
   if (readerRebootDialog instanceof HTMLDialogElement) {
     const countdownNode = readerRebootDialog.querySelector("[data-reader-reboot-countdown]");
     const titleNode = readerRebootDialog.querySelector("[data-reader-reboot-title]");
     const copyNode = readerRebootDialog.querySelector("[data-reader-reboot-copy]");
+    const hintNode = readerRebootDialog.querySelector("[data-reader-reboot-hint]");
+    const progressBar = readerRebootDialog.querySelector("[data-reader-progress-bar]");
+    const progressLabel = readerRebootDialog.querySelector("[data-reader-progress-label]");
     const refreshButton = readerRebootDialog.querySelector("[data-reader-reboot-refresh]");
     const action = readerRebootDialog.dataset.action || "";
     const initialSeconds = Number.parseInt(readerRebootDialog.dataset.seconds || "0", 10);
@@ -387,6 +471,17 @@ document.addEventListener("DOMContentLoaded", () => {
     function renderReaderRebootCountdown(seconds) {
       if (countdownNode) {
         countdownNode.textContent = `Neustart in ${Math.max(seconds, 0)}S`;
+      }
+      if (progressBar instanceof HTMLElement && Number.isFinite(initialSeconds) && initialSeconds > 0) {
+        const elapsed = Math.max(0, initialSeconds - Math.max(seconds, 0));
+        const percent = (elapsed / initialSeconds) * 100;
+        progressBar.style.width = `${Math.max(8, Math.min(percent, 100))}%`;
+        progressBar.classList.remove("is-indeterminate");
+      }
+      if (progressLabel instanceof HTMLElement) {
+        progressLabel.textContent = seconds > 0
+          ? "Installation abgeschlossen. Das System startet für den Reader neu."
+          : "Neustart angestoßen. Die Seite kann jetzt neu geladen werden.";
       }
     }
 
@@ -406,6 +501,9 @@ document.addEventListener("DOMContentLoaded", () => {
       copyNode.textContent = action === "uninstall"
         ? "Die Reader-Konfiguration wird entfernt. Das System startet gleich neu."
         : "Die Reader-Konfiguration wird eingerichtet. Das System startet gleich neu.";
+    }
+    if (hintNode instanceof HTMLElement) {
+      hintNode.textContent = "Aktualisiere diese Seite nach einigen Sekunden.";
     }
     if (refreshButton instanceof HTMLButtonElement) {
       refreshButton.addEventListener("click", () => {
@@ -428,6 +526,9 @@ document.addEventListener("DOMContentLoaded", () => {
           readerRebootTimer = null;
           if (refreshButton instanceof HTMLButtonElement) {
             refreshButton.hidden = false;
+          }
+          if (hintNode instanceof HTMLElement) {
+            hintNode.textContent = "Sobald der Pi wieder erreichbar ist, diese Seite neu laden.";
           }
         }
       }, 1000);
