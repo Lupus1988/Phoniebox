@@ -118,18 +118,19 @@
               </select>
             </div>
             <div>
-              <select
-                name="button_press_type_{{ row.index }}"
-                data-button-press-type
-                {% if row.press_type_locked %}data-press-locked="1"{% endif %}
-                {% if not setup_data.hardware_buttons_enabled or row.press_type_locked %}disabled{% endif %}
-              >
-                {% for option in row.press_type_options %}
-                  <option value="{{ option }}" {% if row.press_type == option %}selected{% endif %}>{{ option }}</option>
-                {% endfor %}
-              </select>
               {% if row.press_type_locked %}
+                <span class="fixed-press-type">{{ row.press_type }}</span>
                 <input type="hidden" name="button_press_type_{{ row.index }}" value="lang">
+              {% else %}
+                <select
+                  name="button_press_type_{{ row.index }}"
+                  data-button-press-type
+                  {% if not setup_data.hardware_buttons_enabled %}disabled{% endif %}
+                >
+                  {% for option in row.press_type_options %}
+                    <option value="{{ option }}" {% if row.press_type == option %}selected{% endif %}>{{ option }}</option>
+                  {% endfor %}
+                </select>
               {% endif %}
             </div>
           </div>

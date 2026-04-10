@@ -1899,6 +1899,19 @@ dialog[data-power-routine-dialog]::backdrop {
   min-width: 0;
 }
 
+.fixed-press-type {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.5rem;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: lowercase;
+}
+
 .button-detect-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

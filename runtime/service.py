@@ -596,7 +596,8 @@ class RuntimeService:
                         "mode": "pending_off" if runtime_state.get("powered_on", True) else "pending_on",
                         "pin": pin,
                         "started_at": now,
-                        "threshold_seconds": routine["duration_seconds"],
+                        "trigger_seconds": float(self.button_long_press_seconds()),
+                        "threshold_seconds": float(routine["duration_seconds"]),
                         "routine_id": routine["id"],
                         "animation": routine["animation"],
                         "completed": False,
@@ -622,6 +623,18 @@ class RuntimeService:
                     )
                     hold = completed_hold
             if released:
+                if hold.get("pressed"):
+                    hold["seconds"] = max(0.0, now - float(hold.get("started_at", now)))
+                    trigger_seconds = max(0.0, float(hold.get("trigger_seconds", self.button_long_press_seconds()) or self.button_long_press_seconds()))
+                    threshold_seconds = max(trigger_seconds, float(hold.get("threshold_seconds", trigger_seconds) or trigger_seconds))
+                    # In der letzten Sekunde der Routine darf losgelassen werden.
+                    release_ready_seconds = max(trigger_seconds, threshold_seconds - 1.0)
+                    if not hold.get("completed") and hold.get("seconds", 0.0) >= release_ready_seconds:
+                        if runtime_state.get("powered_on", True):
+                            result = self.power_off(runtime_state=runtime_state, player=self.load_player())
+                        else:
+                            result = self.power_on(runtime_state=runtime_state, player=self.load_player())
+                        runtime_state = result["runtime"]
                 runtime_state["power_hold"] = merge_defaults({}, default_runtime_state()["power_hold"])
             else:
                 runtime_state["power_hold"] = hold
@@ -670,6 +683,7 @@ class RuntimeService:
     def poll_buttons_once(self, now=None):
         button_now = float(now if now is not None else time.monotonic())
         detect_now = float(now if now is not None else time.time())
+        long_press_threshold = float(self.button_long_press_seconds())
         setup = self.load_setup()
         detect_state = self.load_button_detect()
         if detect_state.get("active"):
@@ -711,7 +725,7 @@ class RuntimeService:
             level = levels.get(pin)
             if level is None:
                 continue
-            state = self._button_poll_state.setdefault(pin, {"pressed": False, "pressed_at": 0.0})
+            state = self._button_poll_state.setdefault(pin, {"pressed": False, "pressed_at": 0.0, "long_triggered": False})
             is_pressed = int(level) == self._button_active_level(setup, pin)
             if is_pressed:
                 pressed_now.append(pin)
@@ -721,19 +735,30 @@ class RuntimeService:
             level = levels.get(pin)
             if level is None:
                 continue
-            state = self._button_poll_state.setdefault(pin, {"pressed": False, "pressed_at": 0.0})
+            state = self._button_poll_state.setdefault(pin, {"pressed": False, "pressed_at": 0.0, "long_triggered": False})
             is_pressed = int(level) == self._button_active_level(setup, pin)
             if is_pressed and not state["pressed"]:
                 state["pressed"] = True
                 state["pressed_at"] = button_now
+                state["long_triggered"] = False
                 if self._is_power_hold_pin(setup, pin):
                     runtime_state = self.ensure_runtime()
                     self._update_power_hold_state(runtime_state, pin, button_now, released=False)
                 continue
             if is_pressed:
+                held_seconds = max(0.0, button_now - float(state.get("pressed_at", button_now)))
                 if self._is_power_hold_pin(setup, pin):
                     runtime_state = self.ensure_runtime()
                     self._update_power_hold_state(runtime_state, pin, button_now, released=False)
+                    runtime_state = self.ensure_runtime()
+                    hold_state = runtime_state.get("power_hold", {})
+                    trigger_seconds = float(hold_state.get("trigger_seconds", long_press_threshold) or long_press_threshold)
+                    if hold_state.get("completed") or held_seconds >= trigger_seconds:
+                        state["long_triggered"] = True
+                elif (not state.get("long_triggered", False)) and held_seconds >= long_press_threshold:
+                    if self._button_mapping_for_pin(setup, pin, "lang"):
+                        self.trigger_gpio_pin(pin, press_type="lang", held_seconds=held_seconds)
+                    state["long_triggered"] = True
                 continue
             if not state["pressed"]:
                 continue
@@ -745,16 +770,21 @@ class RuntimeService:
                 runtime_state = self.ensure_runtime()
                 hold_was_completed = bool(runtime_state.get("power_hold", {}).get("completed"))
                 self._update_power_hold_state(runtime_state, pin, button_now, released=True)
-                press_type = self.classify_press_type(held_seconds, "kurz")
-                if (not hold_was_completed) and press_type == "kurz" and self._button_mapping_for_pin(setup, pin, "kurz"):
+                if (not hold_was_completed) and held_seconds < long_press_threshold and self._button_mapping_for_pin(setup, pin, "kurz"):
                     self.trigger_gpio_pin(pin, press_type="kurz", held_seconds=held_seconds)
+                state["long_triggered"] = False
                 continue
             if held_seconds < 0.03:
+                state["long_triggered"] = False
                 continue
-            press_type = self.classify_press_type(held_seconds, "kurz")
-            if not self._button_mapping_for_pin(setup, pin, press_type):
+            if state.get("long_triggered", False):
+                state["long_triggered"] = False
                 continue
-            self.trigger_gpio_pin(pin, press_type=press_type, held_seconds=held_seconds)
+            if not self._button_mapping_for_pin(setup, pin, "kurz"):
+                state["long_triggered"] = False
+                continue
+            self.trigger_gpio_pin(pin, press_type="kurz", held_seconds=held_seconds)
+            state["long_triggered"] = False
 
     def poll_buttons_forever(self, interval_seconds=None):
         interval = float(interval_seconds if interval_seconds is not None else self.button_poll_interval_seconds())

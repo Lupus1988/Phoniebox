@@ -788,6 +788,85 @@ class RuntimeServiceTest(unittest.TestCase):
 
         self.assertTrue(any(call.args[0] == "GPIO19" and call.kwargs.get("press_type") == "kurz" for call in trigger_gpio_pin.call_args_list))
 
+    def test_long_press_triggers_while_button_is_still_held(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "hardware_buttons_enabled": True,
+                "button_long_press_seconds": 2,
+                "buttons": [{"id": "btn-1", "name": "Vor", "pin": "GPIO17", "press_type": "lang"}],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        with patch.object(self.service, "_read_gpio_levels", side_effect=[{"GPIO17": 0}, {"GPIO17": 0}, {"GPIO17": 1}]), patch.object(
+            self.service, "trigger_gpio_pin", wraps=self.service.trigger_gpio_pin
+        ) as trigger_gpio_pin:
+            self.service.poll_buttons_once(now=100.0)
+            self.service.poll_buttons_once(now=102.1)
+            self.service.poll_buttons_once(now=102.2)
+
+        lang_calls = [call for call in trigger_gpio_pin.call_args_list if call.args[0] == "GPIO17" and call.kwargs.get("press_type") == "lang"]
+        self.assertEqual(len(lang_calls), 1)
+
+    def test_power_long_press_completes_on_selected_routine_duration(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "hardware_buttons_enabled": True,
+                "button_long_press_seconds": 2,
+                "power_routines": {"power_on": "sleep_count_up_3", "power_off": "sleep_count_down_3"},
+                "buttons": [
+                    {"id": "btn-1", "name": "Sleep Timer +", "pin": "GPIO19", "press_type": "kurz"},
+                    {"id": "btn-2", "name": "Power on/off", "pin": "GPIO19", "press_type": "lang"},
+                ],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        with patch.object(self.service, "_read_gpio_levels", side_effect=[{"GPIO19": 0}, {"GPIO19": 0}]):
+            self.service.poll_buttons_once(now=100.0)
+            self.service.poll_buttons_once(now=102.9)
+
+        runtime_state = self.service.load_runtime()
+        self.assertTrue(runtime_state["powered_on"])
+
+        with patch.object(self.service, "_read_gpio_levels", return_value={"GPIO19": 0}):
+            self.service.poll_buttons_once(now=103.1)
+
+        runtime_state = self.service.load_runtime()
+        self.assertFalse(runtime_state["powered_on"])
+
+    def test_power_release_in_last_second_completes_for_off_and_on(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "hardware_buttons_enabled": True,
+                "button_long_press_seconds": 2,
+                "power_routines": {"power_on": "sleep_count_up_5", "power_off": "sleep_count_down_5"},
+                "buttons": [{"id": "btn-1", "name": "Power on/off", "pin": "GPIO19", "press_type": "lang"}],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        with patch.object(self.service, "_read_gpio_levels", side_effect=[{"GPIO19": 0}, {"GPIO19": 0}, {"GPIO19": 1}]):
+            self.service.poll_buttons_once(now=100.0)
+            self.service.poll_buttons_once(now=104.1)
+            self.service.poll_buttons_once(now=104.2)
+        self.assertFalse(self.service.load_runtime()["powered_on"])
+
+        with patch.object(self.service, "_read_gpio_levels", side_effect=[{"GPIO19": 0}, {"GPIO19": 0}, {"GPIO19": 1}]):
+            self.service.poll_buttons_once(now=200.0)
+            self.service.poll_buttons_once(now=204.1)
+            self.service.poll_buttons_once(now=204.2)
+        self.assertTrue(self.service.load_runtime()["powered_on"])
+
     def test_set_pressed_buttons_clears_stale_runtime_state_even_when_cache_matches(self):
         runtime_state = self.service.ensure_runtime()
         runtime_state["hardware"]["pressed_buttons"] = ["GPIO13"]

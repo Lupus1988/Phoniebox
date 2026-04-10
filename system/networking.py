@@ -64,6 +64,63 @@ def connection_exists(name):
     return name in result["output"].splitlines()
 
 
+def wifi_devices():
+    result = run_command(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device", "status"])
+    if not result["ok"]:
+        return []
+    devices = []
+    for line in result["output"].splitlines():
+        parts = line.split(":")
+        if len(parts) < 3:
+            continue
+        device, kind, state = parts[0].strip(), parts[1].strip(), parts[2].strip()
+        if device and kind == "wifi":
+            devices.append({"device": device, "state": state})
+    return devices
+
+
+def activate_hotspot_with_recovery(connection_name="phoniebox-hotspot"):
+    # First try the direct path.
+    first_try = run_command(["sudo", "nmcli", "connection", "up", connection_name])
+    if first_try["ok"]:
+        return {"ok": True, "details": [first_try["output"] or "Hotspot direkt aktiviert."]}
+
+    details = [first_try["output"] or "Hotspot-Aktivierung fehlgeschlagen."]
+    lower = (first_try["output"] or "").lower()
+    needs_recovery = any(
+        text in lower
+        for text in (
+            "no suitable device found",
+            "device is not available",
+            "not available",
+            "unmanaged",
+        )
+    )
+    if not needs_recovery:
+        return {"ok": False, "details": details}
+
+    # Self-heal for stale interface bindings (e.g. old wlan0 pinning).
+    run_command(["sudo", "nmcli", "radio", "wifi", "on"])
+    run_command(["sudo", "nmcli", "connection", "modify", connection_name, "connection.interface-name", ""])
+
+    candidates = [entry["device"] for entry in wifi_devices()]
+    if not candidates:
+        return {"ok": False, "details": details + ["Kein WLAN-Interface gefunden."]}
+
+    for device in candidates:
+        run_command(["sudo", "nmcli", "device", "set", device, "managed", "yes"])
+        run_command(["sudo", "nmcli", "device", "connect", device])
+        retry = run_command(["sudo", "nmcli", "connection", "up", connection_name, "ifname", device])
+        if retry["ok"]:
+            return {
+                "ok": True,
+                "details": details + [f"Hotspot auf {device} aktiviert."],
+            }
+        details.append(retry["output"] or f"Aktivierung auf {device} fehlgeschlagen.")
+
+    return {"ok": False, "details": details}
+
+
 def recreate_wifi_client(ssid, password, priority):
     details = []
     if not ssid:
@@ -201,11 +258,11 @@ def apply_mode(config):
     details = []
     mode = config.get("mode", "client_with_fallback_hotspot")
     if mode == "hotspot_only":
-        result = run_command(["sudo", "nmcli", "connection", "up", "phoniebox-hotspot"])
+        result = activate_hotspot_with_recovery("phoniebox-hotspot")
         if result["ok"]:
             details.append("Hotspot direkt aktiviert.")
         else:
-            details.append(f"Hotspot konnte nicht aktiviert werden: {result['output']}")
+            details.extend(result["details"])
         return {"ok": result["ok"], "details": details}
 
     run_command(["sudo", "nmcli", "connection", "down", "phoniebox-hotspot"])
@@ -276,9 +333,9 @@ def fallback_hotspot_cycle(config):
             "details": ["Eine aktive WLAN-Verbindung wurde erkannt."],
         }
 
-    result = run_command(["sudo", "nmcli", "connection", "up", "phoniebox-hotspot"])
+    result = activate_hotspot_with_recovery("phoniebox-hotspot")
     return {
-        "ok": result["ok"],
+        "ok": bool(result.get("ok")),
         "summary": "Fallback-Hotspot aktiviert." if result["ok"] else "Fallback-Hotspot konnte nicht aktiviert werden.",
-        "details": [result["output"] or "phoniebox-hotspot hochgefahren."],
+        "details": result.get("details", []) or ["phoniebox-hotspot hochgefahren."],
     }
