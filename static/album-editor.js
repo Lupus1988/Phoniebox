@@ -15,6 +15,9 @@ document.addEventListener("DOMContentLoaded", () => {
   let state = payloadNode ? JSON.parse(payloadNode.textContent) : {album: {id: albumId, name: "", track_count: 0}, track_rows: []};
   let draggedRow = null;
   let reorderInFlight = false;
+  const uploadSubmitButton = uploadForm instanceof HTMLFormElement
+    ? uploadForm.querySelector("button[type='submit']")
+    : null;
 
   if (!(appRoot instanceof HTMLElement) || !(tableBody instanceof HTMLElement) || !albumId) {
     return;
@@ -198,6 +201,59 @@ document.addEventListener("DOMContentLoaded", () => {
     return payload;
   }
 
+  async function postFormDataWithUploadProgress(formData, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `/library/album/${encodeURIComponent(albumId)}`);
+      xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+      xhr.upload.onprogress = (event) => {
+        if (typeof onProgress !== "function") {
+          return;
+        }
+        if (event.lengthComputable && event.total > 0) {
+          const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)));
+          onProgress(percent);
+          return;
+        }
+        onProgress(null);
+      };
+      xhr.onload = () => {
+        let payload = {};
+        try {
+          payload = JSON.parse(xhr.responseText || "{}");
+        } catch (_error) {
+          payload = {};
+        }
+        if (xhr.status < 200 || xhr.status >= 300 || payload.ok === false) {
+          reject(new Error(payload?.message || "Upload fehlgeschlagen."));
+          return;
+        }
+        resolve(payload);
+      };
+      xhr.onerror = () => reject(new Error("Upload fehlgeschlagen."));
+      xhr.send(formData);
+    });
+  }
+
+  function selectedUploadFiles() {
+    if (!(uploadForm instanceof HTMLFormElement)) {
+      return [];
+    }
+    const inputs = Array.from(uploadForm.querySelectorAll("input[type='file'][name='track_files']"));
+    const files = [];
+    for (const input of inputs) {
+      if (!(input instanceof HTMLInputElement) || !input.files) {
+        continue;
+      }
+      for (const file of Array.from(input.files)) {
+        if (file instanceof File && file.name) {
+          files.push(file);
+        }
+      }
+    }
+    return files;
+  }
+
   async function submitRename(form) {
     if (!(form instanceof HTMLFormElement)) {
       return;
@@ -271,19 +327,44 @@ document.addEventListener("DOMContentLoaded", () => {
 
   uploadForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (!(trackInput instanceof HTMLInputElement) || !trackInput.files?.length) {
+    const files = selectedUploadFiles();
+    if (!files.length) {
       setStatus("Keine Dateien ausgewählt.", "error");
       return;
     }
-    setStatus("Lade Titel hoch …");
+    if (uploadSubmitButton instanceof HTMLButtonElement) {
+      uploadSubmitButton.disabled = true;
+    }
+    if (trackInput instanceof HTMLInputElement) {
+      trackInput.disabled = true;
+    }
+    setStatus("Lade Titel hoch … 0%");
     try {
-      const payload = await postFormData(new FormData(uploadForm));
-      if (trackInput) {
+      const data = new FormData();
+      data.append("action", "add_tracks");
+      for (const file of files) {
+        data.append("track_files", file);
+      }
+      const payload = await postFormDataWithUploadProgress(data, (percent) => {
+        if (typeof percent === "number") {
+          setStatus(`Lade Titel hoch … ${percent}%`);
+          return;
+        }
+        setStatus("Lade Titel hoch …");
+      });
+      if (trackInput instanceof HTMLInputElement) {
         trackInput.value = "";
       }
       applyPayload(payload, "Titel ergänzt");
     } catch (error) {
       setStatus(error.message || "Upload fehlgeschlagen.", "error");
+    } finally {
+      if (trackInput instanceof HTMLInputElement) {
+        trackInput.disabled = false;
+      }
+      if (uploadSubmitButton instanceof HTMLButtonElement) {
+        uploadSubmitButton.disabled = false;
+      }
     }
   });
 

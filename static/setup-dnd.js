@@ -66,10 +66,13 @@ document.addEventListener("DOMContentLoaded", () => {
           : "Die Reader-Konfiguration wird eingerichtet. Abhängigkeiten und Systemzustand werden aktualisiert.";
       }
       if (hintNode instanceof HTMLElement) {
-        hintNode.textContent = "Dieser Schritt kann etwas dauern. Nach erfolgreicher Antwort folgt der Reboot-Countdown.";
+        hintNode.textContent = "Dieser Schritt kann etwas dauern.";
       }
       if (refreshButton instanceof HTMLButtonElement) {
-        refreshButton.hidden = true;
+        refreshButton.disabled = true;
+      }
+      if (countdownNode instanceof HTMLElement) {
+        countdownNode.hidden = false;
       }
       let visualProgress = 12;
       setReaderProgress(visualProgress, {
@@ -314,7 +317,8 @@ document.addEventListener("DOMContentLoaded", () => {
         select.disabled = !enabled;
       }
       for (const select of buttonPressSelects) {
-        select.disabled = !enabled;
+        const locked = select.dataset.pressLocked === "1";
+        select.disabled = !enabled || locked;
       }
       if (longPressInput instanceof HTMLInputElement) {
         longPressInput.disabled = !enabled;
@@ -329,6 +333,15 @@ document.addEventListener("DOMContentLoaded", () => {
         const pinSelect = row.querySelector("[data-button-pin]");
         const pressSelect = row.querySelector("[data-button-press-type]");
         if (!(pinSelect instanceof HTMLSelectElement) || !(pressSelect instanceof HTMLSelectElement)) {
+          continue;
+        }
+        if (pressSelect.dataset.pressLocked === "1") {
+          for (const option of pressSelect.options) {
+            const keep = option.value === "lang";
+            option.hidden = !keep;
+            option.disabled = !keep;
+          }
+          pressSelect.value = "lang";
           continue;
         }
 
@@ -468,6 +481,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const action = readerRebootDialog.dataset.action || "";
     const initialSeconds = Number.parseInt(readerRebootDialog.dataset.seconds || "0", 10);
 
+    function syncRefreshAvailability(ready) {
+      if (refreshButton instanceof HTMLButtonElement) {
+        refreshButton.disabled = !ready;
+      }
+    }
+
     function renderReaderRebootCountdown(seconds) {
       if (countdownNode) {
         countdownNode.textContent = `Neustart in ${Math.max(seconds, 0)}S`;
@@ -481,7 +500,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (progressLabel instanceof HTMLElement) {
         progressLabel.textContent = seconds > 0
           ? "Installation abgeschlossen. Das System startet für den Reader neu."
-          : "Neustart angestoßen. Die Seite kann jetzt neu geladen werden.";
+          : "Neustart abgeschlossen.";
       }
     }
 
@@ -505,6 +524,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (hintNode instanceof HTMLElement) {
       hintNode.textContent = "Aktualisiere diese Seite nach einigen Sekunden.";
     }
+    syncRefreshAvailability(false);
     if (refreshButton instanceof HTMLButtonElement) {
       refreshButton.addEventListener("click", () => {
         window.location.assign("/setup");
@@ -524,12 +544,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (remainingSeconds <= 0) {
           window.clearInterval(readerRebootTimer);
           readerRebootTimer = null;
-          if (refreshButton instanceof HTMLButtonElement) {
-            refreshButton.hidden = false;
-          }
-          if (hintNode instanceof HTMLElement) {
-            hintNode.textContent = "Sobald der Pi wieder erreichbar ist, diese Seite neu laden.";
-          }
+          syncRefreshAvailability(true);
         }
       }, 1000);
     }

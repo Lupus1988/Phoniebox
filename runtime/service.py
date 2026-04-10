@@ -419,7 +419,7 @@ class RuntimeService:
                     if bcm in self._idle_low_gpio_pins:
                         try:
                             GPIO.cleanup(bcm)
-                        except RuntimeError:
+                        except Exception:
                             pass
                         self._idle_low_gpio_pins.discard(bcm)
                     if bcm not in self._configured_gpio_pins:
@@ -428,7 +428,7 @@ class RuntimeService:
                 for bcm in sorted(self._configured_gpio_pins - target_bcm):
                     try:
                         GPIO.cleanup(bcm)
-                    except RuntimeError:
+                    except Exception:
                         continue
 
                 self._configured_gpio_pins = target_bcm
@@ -491,14 +491,14 @@ class RuntimeService:
             try:
                 GPIO.setup(bcm, GPIO.OUT, initial=GPIO.LOW)
                 GPIO.output(bcm, GPIO.LOW)
-            except RuntimeError:
+            except Exception:
                 target_bcm.discard(bcm)
                 continue
 
         for bcm in sorted(self._idle_low_gpio_pins - target_bcm):
             try:
                 GPIO.cleanup(bcm)
-            except RuntimeError:
+            except Exception:
                 continue
 
         self._idle_low_gpio_pins = target_bcm
@@ -554,9 +554,10 @@ class RuntimeService:
 
     def _set_pressed_buttons(self, pins):
         pins = sorted([pin for pin in pins if pin])
-        if pins == self._last_pressed_pins:
-            return
         runtime_state = self.ensure_runtime()
+        current = sorted([pin for pin in runtime_state.get("hardware", {}).get("pressed_buttons", []) if pin])
+        if pins == self._last_pressed_pins and pins == current:
+            return
         runtime_state["hardware"]["pressed_buttons"] = pins
         self.save_runtime(runtime_state)
         self._last_pressed_pins = pins
@@ -569,6 +570,15 @@ class RuntimeService:
                 continue
             return button.get("name", "")
         return ""
+
+    def _button_active_level(self, setup, pin):
+        configured = 0
+        per_pin = setup.get("button_active_levels", {})
+        if isinstance(per_pin, dict):
+            configured = per_pin.get(pin, configured)
+        configured = setup.get("button_active_level", configured)
+        normalized = str(configured).strip().lower()
+        return 1 if normalized in {"1", "high", "true"} else 0
 
     def _is_power_hold_pin(self, setup, pin):
         mapped = self._button_mapping_for_pin(setup, pin, "lang")
@@ -692,7 +702,19 @@ class RuntimeService:
             self._set_pressed_buttons([])
             return
 
-        pressed_now = [pin for pin, value in levels.items() if int(value) == 0]
+        for pin in list(self._button_poll_state):
+            if pin not in configured_pins:
+                self._button_poll_state.pop(pin, None)
+
+        pressed_now = []
+        for pin in configured_pins:
+            level = levels.get(pin)
+            if level is None:
+                continue
+            state = self._button_poll_state.setdefault(pin, {"pressed": False, "pressed_at": 0.0})
+            is_pressed = int(level) == self._button_active_level(setup, pin)
+            if is_pressed:
+                pressed_now.append(pin)
         self._set_pressed_buttons(pressed_now)
 
         for pin in configured_pins:
@@ -700,7 +722,7 @@ class RuntimeService:
             if level is None:
                 continue
             state = self._button_poll_state.setdefault(pin, {"pressed": False, "pressed_at": 0.0})
-            is_pressed = int(level) == 0
+            is_pressed = int(level) == self._button_active_level(setup, pin)
             if is_pressed and not state["pressed"]:
                 state["pressed"] = True
                 state["pressed_at"] = button_now
@@ -721,7 +743,11 @@ class RuntimeService:
             state["pressed_at"] = 0.0
             if self._is_power_hold_pin(setup, pin):
                 runtime_state = self.ensure_runtime()
+                hold_was_completed = bool(runtime_state.get("power_hold", {}).get("completed"))
                 self._update_power_hold_state(runtime_state, pin, button_now, released=True)
+                press_type = self.classify_press_type(held_seconds, "kurz")
+                if (not hold_was_completed) and press_type == "kurz" and self._button_mapping_for_pin(setup, pin, "kurz"):
+                    self.trigger_gpio_pin(pin, press_type="kurz", held_seconds=held_seconds)
                 continue
             if held_seconds < 0.03:
                 continue

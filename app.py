@@ -123,6 +123,7 @@ BUTTON_FUNCTIONS = [
     "Wifi on/off",
     "Power on/off",
 ]
+POWER_BUTTON_NAMES = {"Power on/off", "Sleep/Power"}
 LED_FUNCTIONS = ["power_on", "standby", "sleep_1", "sleep_2", "sleep_3", "wifi_on"]
 POWER_ROUTINE_OPTIONS = [
     {
@@ -530,6 +531,11 @@ def normalize_setup_data(data):
     reader["last_action_message"] = (reader.get("last_action_message") or "").strip() or (
         "Noch kein Reader installiert." if installed_type == READER_NONE_ID else f"{current_reader_option(installed_type)['label']} ist installiert."
     )
+    buttons = data.get("buttons", [])
+    if isinstance(buttons, list):
+        for button in buttons:
+            if button.get("name", "").strip() in POWER_BUTTON_NAMES:
+                button["press_type"] = "lang"
     return data
 
 
@@ -1366,6 +1372,8 @@ def default_button_rows():
 
 def available_press_types(rows, row_index):
     current = rows[row_index] if row_index < len(rows) else {}
+    if current.get("name", "").strip() in POWER_BUTTON_NAMES:
+        return ["lang"]
     current_pin = current.get("pin", "").strip()
     if not current_pin:
         return ["kurz", "lang"]
@@ -1402,6 +1410,7 @@ def button_mapping_rows(setup_data):
                 "press_type": button.get("press_type", "kurz") or "kurz",
                 "pin_options": pin_options,
                 "press_type_options": available_press_types(base_rows, index),
+                "press_type_locked": function_name in POWER_BUTTON_NAMES,
                 "pin_invalid": current_pin_invalid,
             }
         )
@@ -1443,6 +1452,8 @@ def setup():
                 pin = request.form.get(f"button_pin_{index}", "").strip()
                 function_name = BUTTON_FUNCTIONS[index] if index < len(BUTTON_FUNCTIONS) else ""
                 press_type = request.form.get(f"button_press_type_{index}", "kurz").strip() or "kurz"
+                if function_name in POWER_BUTTON_NAMES:
+                    press_type = "lang"
                 if pin and function_name:
                     new_buttons.append(
                         {

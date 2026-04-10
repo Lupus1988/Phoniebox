@@ -764,6 +764,41 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(result["player"]["volume"], 45)
         self.assertEqual(result["runtime"]["last_event"], "Hardwaretasten deaktiviert")
 
+    def test_short_press_still_triggers_when_pin_also_has_power_long_press(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "hardware_buttons_enabled": True,
+                "button_long_press_seconds": 2,
+                "buttons": [
+                    {"id": "btn-1", "name": "Sleep Timer +", "pin": "GPIO19", "press_type": "kurz"},
+                    {"id": "btn-2", "name": "Power on/off", "pin": "GPIO19", "press_type": "lang"},
+                ],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        with patch.object(self.service, "_read_gpio_levels", side_effect=[{"GPIO19": 0}, {"GPIO19": 1}]), patch.object(
+            self.service, "trigger_gpio_pin", wraps=self.service.trigger_gpio_pin
+        ) as trigger_gpio_pin:
+            self.service.poll_buttons_once(now=100.0)
+            self.service.poll_buttons_once(now=100.4)
+
+        self.assertTrue(any(call.args[0] == "GPIO19" and call.kwargs.get("press_type") == "kurz" for call in trigger_gpio_pin.call_args_list))
+
+    def test_set_pressed_buttons_clears_stale_runtime_state_even_when_cache_matches(self):
+        runtime_state = self.service.ensure_runtime()
+        runtime_state["hardware"]["pressed_buttons"] = ["GPIO13"]
+        self.service.save_runtime(runtime_state)
+        self.service._last_pressed_pins = []
+
+        self.service._set_pressed_buttons([])
+
+        refreshed = self.service.load_runtime()
+        self.assertEqual(refreshed["hardware"]["pressed_buttons"], [])
+
     def test_poll_buttons_releases_idle_low_outputs_while_button_detect_is_active(self):
         class FakeGPIO:
             BCM = "BCM"

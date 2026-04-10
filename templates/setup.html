@@ -118,11 +118,19 @@
               </select>
             </div>
             <div>
-              <select name="button_press_type_{{ row.index }}" data-button-press-type {% if not setup_data.hardware_buttons_enabled %}disabled{% endif %}>
+              <select
+                name="button_press_type_{{ row.index }}"
+                data-button-press-type
+                {% if row.press_type_locked %}data-press-locked="1"{% endif %}
+                {% if not setup_data.hardware_buttons_enabled or row.press_type_locked %}disabled{% endif %}
+              >
                 {% for option in row.press_type_options %}
                   <option value="{{ option }}" {% if row.press_type == option %}selected{% endif %}>{{ option }}</option>
                 {% endfor %}
               </select>
+              {% if row.press_type_locked %}
+                <input type="hidden" name="button_press_type_{{ row.index }}" value="lang">
+              {% endif %}
             </div>
           </div>
         {% endfor %}
@@ -358,6 +366,7 @@
       <div class="panel-box-head panel-box-head-stack">
         <h3 data-reader-reboot-title>Reader wird vorbereitet</h3>
         <span data-reader-reboot-countdown>Neustart in {{ reader_reboot_notice.seconds }}S</span>
+        <button type="button" class="button-like" data-reader-reboot-refresh disabled>Seite aktualisieren</button>
       </div>
       <div class="reader-progress-shell" aria-hidden="true">
         <div class="reader-progress-bar" data-reader-progress-bar></div>
@@ -365,7 +374,6 @@
       <p class="page-copy reader-progress-copy" data-reader-progress-label>Installationsfortschritt wird vorbereitet.</p>
       <p data-reader-reboot-copy>Das System startet gleich neu.</p>
       <p class="page-copy" data-reader-reboot-hint>Aktualisiere diese Seite nach einigen Sekunden.</p>
-      <button type="button" class="button-like" data-reader-reboot-refresh hidden>Seite aktualisieren</button>
     </article>
   </dialog>
 

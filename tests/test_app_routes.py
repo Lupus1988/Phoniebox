@@ -8,6 +8,7 @@ import app as app_module
 
 from app import (
     app,
+    BUTTON_FUNCTIONS,
     create_app,
     collect_conflicts,
     cross_role_pin_errors,
@@ -171,6 +172,31 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(payload["settings"]["volume_step"], 7)
         self.assertEqual(payload["settings"]["max_volume"], 85)
         save_settings.assert_called_once()
+
+    def test_setup_buttons_post_forces_power_press_type_to_lang(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+        captured = {}
+        payload = {"section": "buttons", "button_count": str(len(BUTTON_FUNCTIONS)), "hardware_buttons_enabled": "on", "button_long_press_seconds": "2"}
+        for index in range(len(BUTTON_FUNCTIONS)):
+            payload[f"button_pin_{index}"] = ""
+            payload[f"button_press_type_{index}"] = "kurz"
+        payload["button_pin_9"] = "GPIO17"
+        payload["button_press_type_9"] = "kurz"
+
+        def capture_save(data):
+            captured["setup"] = data
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "app.save_setup", side_effect=capture_save
+        ):
+            response = self.client.post("/setup", data=payload, follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+        saved_buttons = captured["setup"]["buttons"]
+        self.assertEqual(len(saved_buttons), 1)
+        self.assertEqual(saved_buttons[0]["name"], "Power on/off")
+        self.assertEqual(saved_buttons[0]["press_type"], "lang")
 
     def test_api_settings_returns_stable_json_contract(self):
         with patch("app.load_settings", return_value=app_module.default_settings()), patch("app.save_settings") as save_settings:
