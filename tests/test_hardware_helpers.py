@@ -74,6 +74,34 @@ class HardwareHelpersTest(unittest.TestCase):
             self.assertIn(18, controller._pwm)
             self.assertEqual(controller._pwm[18].duty, 40)
 
+    def test_led_controller_drives_inactive_pwm_pin_low_without_pwm(self):
+        fake_gpio = FakeGPIO()
+        with patch.object(leds_module, "GPIO", fake_gpio):
+            controller = leds_module.LEDController()
+            ok = controller.apply_leds(
+                [
+                    {"pin": "GPIO18", "brightness": 40, "is_on": False},
+                ]
+            )
+
+            self.assertTrue(ok)
+            self.assertNotIn(18, controller._pwm)
+            self.assertEqual(fake_gpio.outputs[18], fake_gpio.LOW)
+
+    def test_led_controller_returns_false_on_busy_pwm_pin(self):
+        class BusyGPIO(FakeGPIO):
+            def setup(self, pin, mode, initial=None):
+                if pin == 18:
+                    raise RuntimeError("GPIO busy")
+                super().setup(pin, mode, initial=initial)
+
+        fake_gpio = BusyGPIO()
+        with patch.object(leds_module, "GPIO", fake_gpio):
+            controller = leds_module.LEDController()
+            ok = controller.blink_led("GPIO18", brightness=40)
+
+        self.assertFalse(ok)
+
     def test_detect_leds_reports_reserved_pin_conflicts_without_blank_pwm_noise(self):
         setup = {
             "reader": {"type": "RC522"},

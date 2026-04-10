@@ -31,13 +31,18 @@ def consume_led_preview(controller):
             pass
         return False
 
-    ok = controller.blink_led(
-        pin,
-        brightness=int(preview.get("brightness", 100) or 100),
-        repeats=max(1, int(preview.get("repeats", 3) or 3)),
-        on_seconds=max(0.02, float(preview.get("on_seconds", 0.22) or 0.22)),
-        off_seconds=max(0.02, float(preview.get("off_seconds", 0.18) or 0.18)),
-    )
+    ok = False
+    for _ in range(8):
+        ok = controller.blink_led(
+            pin,
+            brightness=int(preview.get("brightness", 100) or 100),
+            repeats=max(1, int(preview.get("repeats", 3) or 3)),
+            on_seconds=max(0.02, float(preview.get("on_seconds", 0.22) or 0.22)),
+            off_seconds=max(0.02, float(preview.get("off_seconds", 0.18) or 0.18)),
+        )
+        if ok:
+            break
+        time.sleep(0.08)
     preview["status"] = "done" if ok else "error"
     preview["finished_at"] = time.time()
     LED_PREVIEW_FILE.write_text(json.dumps(preview, indent=2, ensure_ascii=False), encoding="utf-8")

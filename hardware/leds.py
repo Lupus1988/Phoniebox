@@ -51,15 +51,22 @@ class LEDController:
     def _ensure_output(self, bcm_pin):
         if not self.ensure_gpio():
             return False
-        GPIO.setup(bcm_pin, GPIO.OUT, initial=GPIO.LOW)
+        try:
+            GPIO.setup(bcm_pin, GPIO.OUT, initial=GPIO.LOW)
+        except Exception:
+            return False
         self._configured_pins.add(bcm_pin)
         return True
 
     def _ensure_pwm(self, bcm_pin):
         if bcm_pin not in self._pwm:
-            self._ensure_output(bcm_pin)
-            pwm = GPIO.PWM(bcm_pin, 200)
-            pwm.start(0)
+            if not self._ensure_output(bcm_pin):
+                return None
+            try:
+                pwm = GPIO.PWM(bcm_pin, 200)
+                pwm.start(0)
+            except Exception:
+                return None
             self._pwm[bcm_pin] = pwm
         return self._pwm[bcm_pin]
 
@@ -85,10 +92,12 @@ class LEDController:
             brightness = max(0, min(100, int(led.get("brightness", 0) or 0)))
             active = bool(led.get("is_on")) and brightness > 0
 
-            if bcm_pin in PWM_PINS and 0 < brightness < 100:
+            if bcm_pin in PWM_PINS and active and 0 < brightness < 100:
                 pwm = self._ensure_pwm(bcm_pin)
+                if pwm is None:
+                    continue
                 try:
-                    pwm.ChangeDutyCycle(brightness if active else 0)
+                    pwm.ChangeDutyCycle(brightness)
                 except RuntimeError:
                     continue
                 continue
@@ -136,6 +145,8 @@ class LEDController:
         try:
             if 0 < active_brightness < 100:
                 pwm = self._ensure_pwm(bcm_pin)
+                if pwm is None:
+                    return False
                 for _ in range(max(1, int(repeats))):
                     pwm.ChangeDutyCycle(active_brightness)
                     time.sleep(max(0.02, float(on_seconds)))

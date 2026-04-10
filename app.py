@@ -8,6 +8,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -17,13 +18,17 @@ try:
     import gpiod
 except ImportError:
     gpiod = None
+try:
+    import RPi.GPIO as GPIO
+except ImportError:
+    GPIO = None
 
 
 BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from hardware.gpio import GPIO_PINS, GPIO_TO_BOARD_PIN, gpio_display_label, sample_gpio_levels_pinctrl, sample_gpio_levels_sysfs
+from hardware.gpio import GPIO_PINS, GPIO_TO_BOARD_PIN, gpio_display_label, gpio_name_to_bcm, sample_gpio_levels_pinctrl, sample_gpio_levels_sysfs
 from hardware.leds import LEDController
 from hardware.pins import potential_system_pins, reserved_system_pins
 from config import load_config
@@ -237,6 +242,7 @@ def default_settings():
         "rfid_read_action": "play",
         "rfid_remove_action": "stop",
         "reader_mode": "album_load",
+        "performance_profile": "auto",
     }
 
 
@@ -673,6 +679,65 @@ def save_button_detect(data):
     save_json(BUTTON_DETECT_FILE, data)
 
 
+def set_gpio_poll_service_active(active):
+    try:
+        subprocess.run(
+            ["systemctl", "start" if active else "stop", "phoniebox-gpio-poll.service"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return True
+
+
+def restart_gpio_poll_service_later(delay_seconds=2.0):
+    timer = threading.Timer(max(0.1, float(delay_seconds)), lambda: set_gpio_poll_service_active(True))
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
+def prepare_button_detect_inputs(gpio_names):
+    gpio_names = [name for name in gpio_names if name]
+    if GPIO is None or not gpio_names:
+        return False
+    try:
+        GPIO.setwarnings(False)
+        GPIO.setmode(GPIO.BCM)
+        configured = False
+        for gpio_name in gpio_names:
+            bcm = gpio_name_to_bcm(gpio_name)
+            if bcm is None:
+                continue
+            try:
+                GPIO.setup(bcm, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            except Exception:
+                continue
+            configured = True
+        return configured
+    except Exception:
+        return False
+
+
+def release_button_detect_inputs(gpio_names):
+    gpio_names = [name for name in gpio_names if name]
+    if GPIO is None or not gpio_names:
+        return False
+    released = False
+    for gpio_name in gpio_names:
+        bcm = gpio_name_to_bcm(gpio_name)
+        if bcm is None:
+            continue
+        try:
+            GPIO.cleanup(bcm)
+            released = True
+        except Exception:
+            continue
+    return released
+
+
 def sample_gpio_levels(gpio_names):
     gpio_names = [name for name in gpio_names if name]
     helper_script = BASE_DIR / "scripts" / "gpio_sample.py"
@@ -755,6 +820,8 @@ def button_detection_candidates(setup_data):
 def button_detect_status_payload(setup_data=None):
     session = load_button_detect()
     if not session.get("active"):
+        release_button_detect_inputs(session.get("candidate_pins", []))
+        set_gpio_poll_service_active(True)
         return session
 
     now = time.time()
@@ -763,10 +830,13 @@ def button_detect_status_payload(setup_data=None):
         session["status"] = "timeout"
         session["message"] = "Keine Taste erkannt."
         save_button_detect(session)
+        release_button_detect_inputs(session.get("candidate_pins", []))
+        set_gpio_poll_service_active(True)
         return session
 
     setup_data = setup_data or load_setup()
     candidates = session.get("candidate_pins") or button_detection_candidates(setup_data)
+    prepare_button_detect_inputs(candidates)
     current_levels = sample_gpio_levels(candidates)
     baseline = session.get("baseline", {})
     for gpio_name in candidates:
@@ -779,6 +849,8 @@ def button_detect_status_payload(setup_data=None):
             session["detected_pin"] = str(GPIO_TO_BOARD_PIN.get(gpio_name, ""))
             session["message"] = gpio_display_label(gpio_name)
             save_button_detect(session)
+            release_button_detect_inputs(session.get("candidate_pins", []))
+            set_gpio_poll_service_active(True)
             return session
 
     session["remaining_seconds"] = max(0, int(session["deadline_at"] - now + 0.999))
@@ -1229,7 +1301,12 @@ def settings():
             return json_success("Einstellungen gespeichert.", settings=data)
         flash("Einstellungen gespeichert.", "success")
         return redirect(url_for("settings"))
-    return render_template("settings.html", settings=data)
+    return render_template(
+        "settings.html",
+        settings=data,
+        performance_profile_options=runtime_service.performance_profile_catalog(),
+        performance_profile_state=runtime_service.performance_profile(),
+    )
 
 
 def apply_settings_form(data, source):
@@ -1241,6 +1318,9 @@ def apply_settings_form(data, source):
     data["startup_volume"] = to_int(source.get("startup_volume"), data.get("startup_volume", 45), 0, 100)
     data["rfid_read_action"] = source.get("rfid_read_action", data["rfid_read_action"])
     data["rfid_remove_action"] = source.get("rfid_remove_action", data["rfid_remove_action"])
+    selected_profile = str(source.get("performance_profile", data.get("performance_profile", "auto")) or "auto").strip().lower()
+    valid_profiles = {"auto", "pi_zero2w", "standard", "pi4_plus", "dev"}
+    data["performance_profile"] = selected_profile if selected_profile in valid_profiles else "auto"
     return data
 
 
@@ -1615,16 +1695,7 @@ def setup():
 def api_setup_button_detect_start():
     setup_data = load_setup()
     candidates = button_detection_candidates(setup_data)
-    baseline = sample_gpio_levels(candidates)
-    if not baseline:
-        session = default_button_detect()
-        session["status"] = "unavailable"
-        session["message"] = "Keine GPIO-Tasterkennung verfügbar."
-        save_button_detect(session)
-        payload = dict(session)
-        payload.pop("message", None)
-        return json_error(session["message"], status_code=503, **payload)
-
+    set_gpio_poll_service_active(False)
     now = time.time()
     session = {
         "active": True,
@@ -1634,10 +1705,26 @@ def api_setup_button_detect_start():
         "message": "Warte auf Tastendruck.",
         "detected_gpio": "",
         "detected_pin": "",
-        "baseline": baseline,
+        "baseline": {},
         "candidate_pins": candidates,
         "remaining_seconds": 15,
     }
+    save_button_detect(session)
+    time.sleep(0.12)
+    prepare_button_detect_inputs(candidates)
+    time.sleep(0.12)
+    baseline = sample_gpio_levels(candidates)
+    if not baseline:
+        session = default_button_detect()
+        session["status"] = "unavailable"
+        session["message"] = "Keine GPIO-Tasterkennung verfügbar."
+        save_button_detect(session)
+        release_button_detect_inputs(candidates)
+        set_gpio_poll_service_active(True)
+        payload = dict(session)
+        payload.pop("message", None)
+        return json_error(session["message"], status_code=503, **payload)
+    session["baseline"] = baseline
     save_button_detect(session)
     payload = dict(session)
     payload.pop("message", None)
@@ -1659,6 +1746,12 @@ def api_setup_led_blink():
     brightness = to_int(payload.get("brightness", request.form.get("brightness", 100)), 100, 0, 100)
     if not pin:
         return json_error("Kein LED-PIN ausgewählt.", status_code=400, details=["Kein LED-PIN ausgewählt."])
+    detect_state = load_button_detect()
+    if detect_state.get("active"):
+        release_button_detect_inputs(detect_state.get("candidate_pins", []))
+        detect_state = default_button_detect()
+        save_button_detect(detect_state)
+    set_gpio_poll_service_active(False)
     save_json(
         LED_PREVIEW_FILE,
         {
@@ -1672,6 +1765,7 @@ def api_setup_led_blink():
             "requested_at": time.time(),
         },
     )
+    restart_gpio_poll_service_later(2.4)
     ok = True
     if not ok:
         return json_error(f"LED-Test für {pin} konnte nicht gestartet werden.", status_code=503, details=[f"LED-Test für {pin} konnte nicht gestartet werden."])

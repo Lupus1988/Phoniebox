@@ -3,7 +3,6 @@
   <section class="page-head">
     <div>
       <p class="kicker">Einstellungen</p>
-      <p id="settings-save-status" class="page-copy settings-save-status" aria-live="polite">Änderungen werden automatisch gespeichert.</p>
     </div>
   </section>
 
@@ -29,20 +28,33 @@
           <input type="number" name="sleep_timer_step" min="1" max="60" value="{{ settings.sleep_timer_step }}">
           <em>min.</em>
         </label>
-        <div class="checkbox-row settings-checkbox-row sleep-rotation-row">
-          <input type="checkbox" name="sleep_timer_button_rotation" {% if settings.sleep_timer_button_rotation %}checked{% endif %}>
-          <span>Rotierende Timertaste</span>
-          <button type="button" class="button-like routine-info-button settings-info-button" data-sleep-rotation-info>i</button>
-        </div>
+        <label>
+          <span>Geräteprofil</span>
+          <select name="performance_profile">
+            {% for option in performance_profile_options %}
+              <option value="{{ option.id }}" {% if settings.performance_profile == option.id %}selected{% endif %}>
+                {{ option.label }}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
+        <p class="form-note">Aktiv: {{ performance_profile_state.resolved_profile }}{% if performance_profile_state.device_model %} ({{ performance_profile_state.device_model }}){% endif %}</p>
         <label class="inline-field startup-volume-row" data-startup-volume-row>
           <span>Startlautstärke</span>
           <input type="number" name="startup_volume" min="0" max="100" value="{{ settings.startup_volume }}" {% if not settings.use_startup_volume %}disabled{% endif %}>
           <em>%</em>
         </label>
-        <label class="checkbox-row">
-          <input type="checkbox" name="use_startup_volume" {% if settings.use_startup_volume %}checked{% endif %}>
-          <span>Startlautstärke beim Einschalten verwenden</span>
-        </label>
+        <div class="player-checkbox-pair">
+          <label class="checkbox-row player-checkbox-row player-checkbox-row-left">
+            <span>Startlautstärke beim Einschalten verwenden</span>
+            <input type="checkbox" name="use_startup_volume" {% if settings.use_startup_volume %}checked{% endif %}>
+          </label>
+          <div class="checkbox-row settings-checkbox-row player-checkbox-row player-checkbox-row-right sleep-rotation-row">
+            <span>Rotierende Timertaste</span>
+            <input type="checkbox" name="sleep_timer_button_rotation" {% if settings.sleep_timer_button_rotation %}checked{% endif %}>
+            <button type="button" class="button-like routine-info-button settings-info-button player-settings-info-button" data-sleep-rotation-info>i</button>
+          </div>
+        </div>
       </div>
     </article>
 

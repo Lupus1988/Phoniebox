@@ -10,6 +10,7 @@ def build_player_context(snapshot):
     player_state = dict(snapshot["player"])
     runtime_state = snapshot["runtime"]
     settings = snapshot["settings"]
+    performance = snapshot.get("performance", {}) or {}
     sleep_step_minutes = max(1, int(settings.get("sleep_timer_step", 5)))
     remaining_seconds = int(runtime_state.get("sleep_timer", {}).get("remaining_seconds", 0) or 0)
     player_state["sleep_timer_minutes"] = remaining_seconds // 60
@@ -27,6 +28,9 @@ def build_player_context(snapshot):
         "position_label": format_mmss(player_state["position_seconds"]),
         "duration_label": format_mmss(player_state["duration_seconds"]),
         "progress_percent": progress_percent(player_state["position_seconds"], player_state["duration_seconds"]),
+        "player_poll_visible_ms": int(performance.get("player_poll_visible_ms", 1000) or 1000),
+        "player_poll_hidden_ms": int(performance.get("player_poll_hidden_ms", 3000) or 3000),
+        "performance_profile": performance,
     }
 
 
@@ -35,7 +39,7 @@ def get_runtime_snapshot():
 
 
 def get_player_snapshot():
-    return build_player_context(get_runtime_snapshot())
+    return build_player_context(runtime_service.player_snapshot())
 
 
 def get_hardware_profile():
@@ -81,7 +85,7 @@ def _execute_player_action(action, snapshot, seek_position=0):
 
 
 def handle_player_action(action, payload=None):
-    snapshot = get_runtime_snapshot()
+    snapshot = runtime_service.player_snapshot()
     result = _execute_player_action(action, snapshot, (payload or {}).get("seek_position", 0))
     if result is None:
         return {"ok": False, "message": "Unbekannte Player-Aktion."}, 400

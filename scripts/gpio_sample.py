@@ -26,8 +26,11 @@ def sample_with_rpi(gpio_names):
         bcm = gpio_name_to_bcm(gpio_name)
         if bcm is None:
             continue
-        GPIO.setup(bcm, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        sampled[gpio_name] = int(GPIO.input(bcm))
+        try:
+            GPIO.setup(bcm, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            sampled[gpio_name] = int(GPIO.input(bcm))
+        except Exception:
+            continue
     return sampled
 
 

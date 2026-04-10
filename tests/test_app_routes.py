@@ -16,6 +16,7 @@ from app import (
     ensure_data_files,
     normalize_setup_data,
     pin_choices,
+    prepare_button_detect_inputs,
     remove_tracks_from_album,
     reader_runtime_cleanup_packages,
     reader_runtime_commands,
@@ -84,6 +85,33 @@ class AppRoutesTest(unittest.TestCase):
         self.assertIn("Reader installiert", body)
         self.assertNotIn("Soll nicht sichtbar sein.", body)
         self.assertNotIn("Interne Notiz", body)
+
+    def test_prepare_button_detect_inputs_skips_failed_pin_and_continues(self):
+        class FakeGPIO:
+            BCM = "BCM"
+            IN = "IN"
+            PUD_UP = "PUD_UP"
+
+            def __init__(self):
+                self.setup_calls = []
+
+            def setwarnings(self, _flag):
+                return None
+
+            def setmode(self, _mode):
+                return None
+
+            def setup(self, pin, mode, pull_up_down=None):
+                self.setup_calls.append((pin, mode, pull_up_down))
+                if pin == 12:
+                    raise RuntimeError("busy")
+
+        fake_gpio = FakeGPIO()
+        with patch("app.GPIO", fake_gpio):
+            result = prepare_button_detect_inputs(["GPIO5", "GPIO12", "GPIO13"])
+
+        self.assertTrue(result)
+        self.assertEqual(fake_gpio.setup_calls, [(5, "IN", "PUD_UP"), (12, "IN", "PUD_UP"), (13, "IN", "PUD_UP")])
 
     def test_setup_page_shows_reader_details_when_reader_is_not_ready(self):
         runtime_snapshot = {"runtime": {"hardware": {"profile": {"reader": {"notes": ["Interne Notiz"]}}}}}
@@ -161,6 +189,19 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(payload["settings"]["max_volume"], 88)
         save_settings.assert_called_once()
 
+    def test_api_settings_accepts_performance_profile(self):
+        with patch("app.load_settings", return_value=app_module.default_settings()), patch("app.save_settings") as save_settings:
+            response = self.client.post(
+                "/api/settings",
+                json={"performance_profile": "pi_zero2w"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["settings"]["performance_profile"], "pi_zero2w")
+        save_settings.assert_called_once()
+
     def test_library_save_album_xhr_returns_json_on_conflict(self):
         setup = default_setup()
         runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
@@ -229,9 +270,13 @@ class AppRoutesTest(unittest.TestCase):
         play_sound.assert_called_once_with("test")
 
     def test_led_blink_endpoint_uses_selected_pin(self):
-        with patch("app.save_json") as save_json:
+        with patch("app.load_button_detect", return_value={"active": False}), patch("app.save_json") as save_json, patch(
+            "app.set_gpio_poll_service_active"
+        ) as set_gpio_poll, patch("app.restart_gpio_poll_service_later") as restart_gpio_poll:
             response = self.client.post("/api/setup/led-blink", json={"pin": "GPIO12", "brightness": 55})
         self.assertEqual(response.status_code, 200)
+        set_gpio_poll.assert_called_once_with(False)
+        restart_gpio_poll.assert_called_once()
         save_json.assert_called_once_with(
             app_module.LED_PREVIEW_FILE,
             {
@@ -246,10 +291,34 @@ class AppRoutesTest(unittest.TestCase):
             },
         )
 
+    def test_led_blink_endpoint_stops_active_button_detect(self):
+        detect_state = {
+            "active": True,
+            "status": "listening",
+            "candidate_pins": ["GPIO17"],
+            "baseline": {"GPIO17": 1},
+        }
+        with patch("app.load_button_detect", return_value=detect_state), patch("app.save_button_detect") as save_button_detect, patch(
+            "app.save_json"
+        ) as save_json, patch("app.set_gpio_poll_service_active") as set_gpio_poll, patch(
+            "app.restart_gpio_poll_service_later"
+        ) as restart_gpio_poll:
+            response = self.client.post("/api/setup/led-blink", json={"pin": "GPIO12", "brightness": 55})
+
+        self.assertEqual(response.status_code, 200)
+        save_button_detect.assert_called_once()
+        save_json.assert_called_once()
+        set_gpio_poll.assert_called_once_with(False)
+        restart_gpio_poll.assert_called_once()
+
     def test_button_detect_start_uses_available_gpio_baseline(self):
         setup = default_setup()
 
-        with patch("app.load_setup", return_value=setup), patch("app.sample_gpio_levels", return_value={"GPIO17": 1}):
+        with patch("app.load_setup", return_value=setup), patch("app.sample_gpio_levels", return_value={"GPIO17": 1}), patch(
+            "app.time.sleep"
+        ) as sleep_mock, patch("app.set_gpio_poll_service_active") as set_gpio_poll, patch(
+            "app.prepare_button_detect_inputs", return_value=True
+        ) as prepare_inputs:
             response = self.client.post("/api/setup/button-detect/start")
 
         self.assertEqual(response.status_code, 200)
@@ -257,6 +326,32 @@ class AppRoutesTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["status"], "listening")
         self.assertEqual(payload["baseline"], {"GPIO17": 1})
+        self.assertEqual(sleep_mock.call_count, 2)
+        set_gpio_poll.assert_called_once_with(False)
+        prepare_inputs.assert_called_once()
+
+    def test_button_detect_status_reprimes_candidates_before_sampling(self):
+        setup = default_setup()
+        session = {
+            "active": True,
+            "started_at": 100.0,
+            "deadline_at": 115.0,
+            "status": "listening",
+            "message": "Warte auf Tastendruck.",
+            "detected_gpio": "",
+            "detected_pin": "",
+            "baseline": {"GPIO17": 1},
+            "candidate_pins": ["GPIO17"],
+            "remaining_seconds": 15,
+        }
+
+        with patch("app.time.time", return_value=101.0), patch("app.load_button_detect", return_value=session), patch("app.load_setup", return_value=setup), patch(
+            "app.prepare_button_detect_inputs", return_value=True
+        ) as prepare_inputs, patch("app.sample_gpio_levels", return_value={"GPIO17": 1}):
+            response = self.client.get("/api/setup/button-detect/status")
+
+        self.assertEqual(response.status_code, 200)
+        prepare_inputs.assert_called_once_with(["GPIO17"])
 
     def test_cross_role_pin_errors_detect_button_led_overlap(self):
         setup = default_setup()

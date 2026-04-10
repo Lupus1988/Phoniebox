@@ -12,7 +12,7 @@ from runtime.service import RuntimeService
 
 def main():
     service = RuntimeService()
-    service.poll_buttons_forever()
+    service.poll_buttons_forever(interval_seconds=service.button_poll_interval_seconds())
     return 0
 
 

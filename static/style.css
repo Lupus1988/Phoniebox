@@ -1733,6 +1733,24 @@ dialog[data-power-routine-dialog]::backdrop {
   justify-self: end;
 }
 
+.player-settings-list .inline-field {
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) 5.2rem 2.4rem;
+}
+
+.player-settings-list .inline-field input[type="number"] {
+  justify-self: end;
+  width: 5.2rem;
+  text-align: right;
+}
+
+.player-checkbox-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  align-items: stretch;
+}
+
 .inline-field {
   grid-template-columns: 180px 100px auto;
   align-items: center;
@@ -1906,6 +1924,7 @@ dialog[data-power-routine-dialog]::backdrop {
 .detect-display strong {
   font-size: 1.02rem;
   line-height: 1.3;
+  min-height: 1.35rem;
 }
 
 .detect-head-timer {
@@ -2002,6 +2021,55 @@ dialog[data-power-routine-dialog]::backdrop {
 
 .settings-checkbox-row {
   width: 100%;
+}
+
+.player-checkbox-row {
+  width: 100%;
+  min-height: 2.7rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 14px auto;
+  gap: 0.42rem;
+  padding: 0.38rem 0.62rem;
+  border-width: 2px;
+  border-radius: 14px;
+  align-items: center;
+}
+
+.player-checkbox-row input {
+  width: 14px;
+  height: 14px;
+  justify-self: end;
+}
+
+.player-checkbox-row span {
+  min-width: 0;
+  text-align: right;
+  line-height: 1.2;
+}
+
+.player-checkbox-row-left {
+  grid-template-columns: minmax(0, 1fr) 14px;
+}
+
+.player-checkbox-row-left span {
+  text-align: left;
+}
+
+.player-checkbox-row-right {
+  grid-template-columns: minmax(0, 1fr) 14px auto;
+}
+
+.player-checkbox-row .settings-info-button {
+  margin-left: 0;
+}
+
+.player-settings-info-button {
+  min-width: 1.7rem;
+  min-height: 1.7rem;
+  padding: 0.1rem;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  line-height: 1;
 }
 
 .settings-info-button {

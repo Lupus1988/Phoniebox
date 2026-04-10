@@ -8,6 +8,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const statusNode = document.getElementById("player-action-status");
   let pollTimer = null;
   let actionInFlight = false;
+  let visiblePollMs = 1000;
+  let hiddenPollMs = 3000;
+
+  function nextPollDelay() {
+    return document.hidden ? hiddenPollMs : visiblePollMs;
+  }
 
   function formatMmss(totalSeconds) {
     const safe = Math.max(0, Number(totalSeconds) || 0);
@@ -113,6 +119,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const runtime = payload.runtime_state || {};
     const sleepLevel = payload.sleep_level ?? runtime.sleep_timer?.level ?? 0;
     const isPlaying = Boolean(player.is_playing);
+    visiblePollMs = Math.max(250, Number(payload.player_poll_visible_ms) || visiblePollMs);
+    hiddenPollMs = Math.max(750, Number(payload.player_poll_hidden_ms) || hiddenPollMs);
 
     const setText = (id, value) => {
       const el = document.getElementById(id);
@@ -197,7 +205,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       applySnapshot(await response.json());
     } finally {
-      pollTimer = window.setTimeout(pollSnapshot, 1000);
+      pollTimer = window.setTimeout(pollSnapshot, nextPollDelay());
     }
   }
 
@@ -256,5 +264,13 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   setStatus("Bereit.");
-  pollTimer = window.setTimeout(pollSnapshot, 1000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && !actionInFlight) {
+      if (pollTimer) {
+        window.clearTimeout(pollTimer);
+      }
+      pollTimer = window.setTimeout(pollSnapshot, 150);
+    }
+  });
+  pollTimer = window.setTimeout(pollSnapshot, nextPollDelay());
 });

@@ -106,6 +106,7 @@ class RuntimeServiceTest(unittest.TestCase):
             patch.object(service_module, "SETUP_FILE", self.data_dir / "setup.json"),
             patch.object(service_module, "RUNTIME_FILE", self.data_dir / "runtime_state.json"),
             patch.object(service_module, "BUTTON_DETECT_FILE", self.data_dir / "button_detect.json"),
+            patch.object(service_module, "LED_PREVIEW_FILE", self.data_dir / "led_preview.json"),
             patch.object(audio_module, "BASE_DIR", self.base_dir),
             patch.object(playback_module, "BASE_DIR", self.base_dir),
             patch.object(playback_module.shutil, "which", return_value=None),
@@ -401,6 +402,217 @@ class RuntimeServiceTest(unittest.TestCase):
 
         read_gpio.assert_called_once_with(["GPIO17"])
 
+    def test_sync_idle_low_outputs_drives_only_unused_available_pins_low(self):
+        class FakeGPIO:
+            BCM = "BCM"
+            IN = "IN"
+            OUT = "OUT"
+            LOW = 0
+            HIGH = 1
+            PUD_UP = "PUD_UP"
+
+            def __init__(self):
+                self.setup_calls = []
+                self.output_calls = []
+                self.cleanup_calls = []
+
+            def setwarnings(self, _flag):
+                return None
+
+            def setmode(self, _mode):
+                return None
+
+            def setup(self, pin, mode, pull_up_down=None, initial=None):
+                self.setup_calls.append((pin, mode, pull_up_down, initial))
+
+            def output(self, pin, value):
+                self.output_calls.append((pin, value))
+
+            def cleanup(self, pin):
+                self.cleanup_calls.append(pin)
+
+            def input(self, _pin):
+                return 1
+
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "buttons": [{"id": "btn-1", "name": "Play/Pause", "pin": "GPIO17", "press_type": "kurz"}],
+                "leds": [{"id": "led-1", "name": "Power", "pin": "GPIO12", "function": "power_on", "brightness": 50}],
+                "wifi": {},
+            },
+        )
+
+        fake_gpio = FakeGPIO()
+        with patch.object(service_module, "GPIO", fake_gpio):
+            self.service.poll_buttons_once(now=123.0)
+
+        output_low_pins = {pin for pin, value in fake_gpio.output_calls if value == 0}
+        self.assertIn(4, output_low_pins)
+        self.assertIn(13, output_low_pins)
+        self.assertNotIn(17, output_low_pins)
+        self.assertNotIn(12, output_low_pins)
+        self.assertNotIn(25, output_low_pins)
+
+    def test_sync_idle_low_outputs_excludes_pending_led_preview_pin(self):
+        class FakeGPIO:
+            BCM = "BCM"
+            IN = "IN"
+            OUT = "OUT"
+            LOW = 0
+            HIGH = 1
+            PUD_UP = "PUD_UP"
+
+            def __init__(self):
+                self.output_calls = []
+
+            def setwarnings(self, _flag):
+                return None
+
+            def setmode(self, _mode):
+                return None
+
+            def setup(self, _pin, _mode, pull_up_down=None, initial=None):
+                return None
+
+            def output(self, pin, value):
+                self.output_calls.append((pin, value))
+
+            def cleanup(self, _pin):
+                return None
+
+            def input(self, _pin):
+                return 1
+
+        write_json(
+            self.data_dir / "led_preview.json",
+            {"pin": "GPIO16", "status": "pending"},
+        )
+
+        fake_gpio = FakeGPIO()
+        with patch.object(service_module, "GPIO", fake_gpio):
+            self.service.poll_buttons_once(now=123.0)
+
+        output_low_pins = {pin for pin, value in fake_gpio.output_calls if value == 0}
+        self.assertNotIn(16, output_low_pins)
+
+    def test_sync_idle_low_outputs_does_not_reconfigure_already_synced_pins_each_cycle(self):
+        class FakeGPIO:
+            BCM = "BCM"
+            IN = "IN"
+            OUT = "OUT"
+            LOW = 0
+            HIGH = 1
+            PUD_UP = "PUD_UP"
+
+            def __init__(self):
+                self.setup_calls = []
+                self.output_calls = []
+
+            def setwarnings(self, _flag):
+                return None
+
+            def setmode(self, _mode):
+                return None
+
+            def setup(self, pin, mode, pull_up_down=None, initial=None):
+                self.setup_calls.append((pin, mode, pull_up_down, initial))
+
+            def output(self, pin, value):
+                self.output_calls.append((pin, value))
+
+            def cleanup(self, _pin):
+                return None
+
+            def input(self, _pin):
+                return 1
+
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "buttons": [],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        fake_gpio = FakeGPIO()
+        with patch.object(service_module, "GPIO", fake_gpio):
+            self.service.poll_buttons_once(now=100.0)
+            first_setup_calls = len(fake_gpio.setup_calls)
+            first_output_calls = len(fake_gpio.output_calls)
+            self.service.poll_buttons_once(now=101.0)
+
+        self.assertEqual(len(fake_gpio.setup_calls), first_setup_calls)
+        self.assertEqual(len(fake_gpio.output_calls), first_output_calls)
+
+    def test_poll_buttons_reconfigures_idle_low_pin_to_pullup_input_when_assigned(self):
+        class FakeGPIO:
+            BCM = "BCM"
+            IN = "IN"
+            OUT = "OUT"
+            LOW = 0
+            HIGH = 1
+            PUD_UP = "PUD_UP"
+
+            def __init__(self):
+                self.setup_calls = []
+                self.output_calls = []
+                self.cleanup_calls = []
+                self.inputs = {}
+
+            def setwarnings(self, _flag):
+                return None
+
+            def setmode(self, _mode):
+                return None
+
+            def setup(self, pin, mode, pull_up_down=None, initial=None):
+                self.setup_calls.append((pin, mode, pull_up_down, initial))
+
+            def output(self, pin, value):
+                self.output_calls.append((pin, value))
+
+            def cleanup(self, pin):
+                self.cleanup_calls.append(pin)
+
+            def input(self, pin):
+                return self.inputs.get(pin, 1)
+
+        fake_gpio = FakeGPIO()
+        with patch.object(service_module, "GPIO", fake_gpio):
+            write_json(
+                self.data_dir / "setup.json",
+                {
+                    "reader": {"type": "USB", "connection_hint": ""},
+                    "buttons": [],
+                    "leds": [],
+                    "wifi": {},
+                },
+            )
+            self.service.poll_buttons_once(now=100.0)
+
+            fake_gpio.setup_calls.clear()
+            fake_gpio.output_calls.clear()
+            fake_gpio.cleanup_calls.clear()
+
+            write_json(
+                self.data_dir / "setup.json",
+                {
+                    "reader": {"type": "USB", "connection_hint": ""},
+                    "hardware_buttons_enabled": True,
+                    "buttons": [{"id": "btn-1", "name": "Play/Pause", "pin": "GPIO17", "press_type": "kurz"}],
+                    "leds": [],
+                    "wifi": {},
+                },
+            )
+            self.service.poll_buttons_once(now=101.0)
+
+        self.assertIn(17, fake_gpio.cleanup_calls)
+        self.assertIn((17, "IN", "PUD_UP", None), fake_gpio.setup_calls)
+
     def test_update_led_status_ignores_reader_reserved_pins(self):
         write_json(
             self.data_dir / "setup.json",
@@ -551,6 +763,204 @@ class RuntimeServiceTest(unittest.TestCase):
 
         self.assertEqual(result["player"]["volume"], 45)
         self.assertEqual(result["runtime"]["last_event"], "Hardwaretasten deaktiviert")
+
+    def test_poll_buttons_releases_idle_low_outputs_while_button_detect_is_active(self):
+        class FakeGPIO:
+            BCM = "BCM"
+            IN = "IN"
+            OUT = "OUT"
+            LOW = 0
+            HIGH = 1
+            PUD_UP = "PUD_UP"
+
+            def __init__(self):
+                self.cleanup_calls = []
+
+            def setwarnings(self, _flag):
+                return None
+
+            def setmode(self, _mode):
+                return None
+
+            def setup(self, _pin, _mode, pull_up_down=None, initial=None):
+                return None
+
+            def output(self, _pin, _value):
+                return None
+
+            def cleanup(self, pin):
+                self.cleanup_calls.append(pin)
+
+            def input(self, _pin):
+                return 1
+
+        write_json(
+            self.data_dir / "button_detect.json",
+            {
+                "active": True,
+                "started_at": 100.0,
+                "deadline_at": 115.0,
+                "status": "listening",
+                "baseline": {},
+                "candidate_pins": ["GPIO17"],
+                "remaining_seconds": 15,
+            },
+        )
+
+        fake_gpio = FakeGPIO()
+        self.service._idle_low_gpio_pins = {13, 26}
+        with patch.object(service_module, "GPIO", fake_gpio), patch.object(self.service, "_sync_idle_low_outputs"):
+            self.service.poll_buttons_once(now=101.0)
+
+        self.assertEqual(sorted(fake_gpio.cleanup_calls), [13, 26])
+        self.assertEqual(self.service._idle_low_gpio_pins, set())
+
+    def test_poll_buttons_primes_detect_candidate_pins_to_pullup_inputs(self):
+        write_json(
+            self.data_dir / "button_detect.json",
+            {
+                "active": True,
+                "started_at": 100.0,
+                "deadline_at": 115.0,
+                "status": "listening",
+                "baseline": {},
+                "candidate_pins": ["GPIO13", "GPIO19", "GPIO26"],
+                "remaining_seconds": 15,
+            },
+        )
+
+        with patch.object(self.service, "_release_idle_low_outputs") as release_idle_low, patch.object(
+            self.service, "_poll_button_detection"
+        ) as poll_button_detection:
+            self.service.poll_buttons_once(now=101.0)
+
+        release_idle_low.assert_called_once_with()
+        poll_button_detection.assert_called_once()
+        detect_state, detect_now = poll_button_detection.call_args.args
+        self.assertTrue(detect_state.get("active"))
+        self.assertEqual(detect_state.get("candidate_pins"), ["GPIO13", "GPIO19", "GPIO26"])
+        self.assertEqual(detect_now, 101.0)
+
+    def test_poll_buttons_releases_stale_detect_inputs_before_idle_low_sync(self):
+        class FakeGPIO:
+            BCM = "BCM"
+            IN = "IN"
+            OUT = "OUT"
+            LOW = 0
+            HIGH = 1
+            PUD_UP = "PUD_UP"
+
+            def __init__(self):
+                self.cleanup_calls = []
+
+            def setwarnings(self, _flag):
+                return None
+
+            def setmode(self, _mode):
+                return None
+
+            def setup(self, _pin, _mode, pull_up_down=None, initial=None):
+                return None
+
+            def output(self, _pin, _value):
+                return None
+
+            def cleanup(self, pin):
+                self.cleanup_calls.append(pin)
+
+            def input(self, _pin):
+                return 1
+
+        fake_gpio = FakeGPIO()
+        self.service._configured_gpio_pins = {5, 6, 13, 19, 26}
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "hardware_buttons_enabled": False,
+                "buttons": [],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        with patch.object(service_module, "GPIO", fake_gpio), patch.object(self.service, "_sync_idle_low_outputs"):
+            self.service.poll_buttons_once(now=101.0)
+
+        self.assertEqual(sorted(fake_gpio.cleanup_calls), [5, 6, 13, 19, 26])
+        self.assertEqual(self.service._configured_gpio_pins, set())
+
+    @patch.object(service_module.time, "time", return_value=1000.0)
+    def test_button_detect_times_out_against_wall_clock(self, _time):
+        write_json(
+            self.data_dir / "button_detect.json",
+            {
+                "active": True,
+                "started_at": 980.0,
+                "deadline_at": 999.0,
+                "status": "listening",
+                "message": "Warte auf Tastendruck.",
+                "detected_gpio": "",
+                "detected_pin": "",
+                "baseline": {"GPIO17": 1},
+                "candidate_pins": ["GPIO17"],
+                "remaining_seconds": 15,
+            },
+        )
+
+        with patch.object(self.service, "_read_gpio_levels", return_value={"GPIO17": 1}):
+            self.service.poll_buttons_once()
+
+        session = self.service.load_button_detect()
+        self.assertFalse(session["active"])
+        self.assertEqual(session["status"], "timeout")
+
+    def test_player_snapshot_skips_hardware_refresh_and_policy(self):
+        with patch.object(self.service, "update_hardware_profile") as update_hardware_profile, patch.object(
+            self.service, "apply_wifi_policy"
+        ) as apply_wifi_policy:
+            snapshot = self.service.player_snapshot()
+
+        self.assertIn("runtime", snapshot)
+        self.assertIn("player", snapshot)
+        self.assertIn("settings", snapshot)
+        self.assertIn("performance", snapshot)
+        update_hardware_profile.assert_not_called()
+        apply_wifi_policy.assert_not_called()
+
+    def test_button_poll_interval_uses_configured_performance_profile(self):
+        write_json(
+            self.data_dir / "settings.json",
+            {
+                "max_volume": 85,
+                "volume_step": 5,
+                "sleep_timer_step": 5,
+                "rfid_read_action": "play",
+                "rfid_remove_action": "stop",
+                "performance_profile": "pi_zero2w",
+            },
+        )
+
+        interval = self.service.button_poll_interval_seconds()
+
+        self.assertAlmostEqual(interval, 0.07, places=3)
+
+    def test_performance_profile_falls_back_to_auto_for_invalid_setting(self):
+        write_json(
+            self.data_dir / "settings.json",
+            {
+                "max_volume": 85,
+                "volume_step": 5,
+                "sleep_timer_step": 5,
+                "rfid_read_action": "play",
+                "rfid_remove_action": "stop",
+                "performance_profile": "invalid-profile",
+            },
+        )
+
+        profile = self.service.performance_profile()
+
+        self.assertEqual(profile["selected_profile"], "auto")
 
     @patch.object(service_module, "sample_gpio_levels_pinctrl", return_value={"GPIO17": 0})
     @patch.object(service_module, "GPIO", None)

@@ -22,7 +22,7 @@ if str(BASE_DIR) not in sys.path:
 
 from hardware.gpio import GPIO_TO_BOARD_PIN, SysfsGPIOInput, gpio_display_label, sample_gpio_levels_pinctrl, sysfs_gpio_available
 from hardware.manager import detect_hardware
-from hardware.pins import filter_reserved_gpio_names, reserved_system_pins
+from hardware.pins import filter_reserved_gpio_names, potential_system_pins, reserved_system_pins
 from runtime.audio import build_track_queue, load_playlist_entries, pick_track_duration, track_title_from_entry
 from services.audio_backends import create_audio_backend
 from system.networking import set_wifi_radio, wifi_radio_enabled
@@ -34,6 +34,7 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 SETUP_FILE = DATA_DIR / "setup.json"
 RUNTIME_FILE = DATA_DIR / "runtime_state.json"
 BUTTON_DETECT_FILE = DATA_DIR / "button_detect.json"
+LED_PREVIEW_FILE = DATA_DIR / "led_preview.json"
 STATE_LOCK_FILE = DATA_DIR / "state.lock"
 
 
@@ -136,6 +137,33 @@ def default_button_detect():
 
 class RuntimeService:
     HARDWARE_PROFILE_TTL_SECONDS = 5.0
+    WIFI_STATE_TTL_SECONDS = 5.0
+    PERFORMANCE_PROFILES = {
+        "pi_zero2w": {
+            "label": "Raspberry Pi Zero 2 W",
+            "button_poll_interval_seconds": 0.07,
+            "player_poll_visible_ms": 1200,
+            "player_poll_hidden_ms": 3500,
+        },
+        "standard": {
+            "label": "Standard",
+            "button_poll_interval_seconds": 0.05,
+            "player_poll_visible_ms": 1000,
+            "player_poll_hidden_ms": 3000,
+        },
+        "pi4_plus": {
+            "label": "Raspberry Pi 4 / schneller",
+            "button_poll_interval_seconds": 0.035,
+            "player_poll_visible_ms": 850,
+            "player_poll_hidden_ms": 2200,
+        },
+        "dev": {
+            "label": "Entwicklungsmodus",
+            "button_poll_interval_seconds": 0.08,
+            "player_poll_visible_ms": 1400,
+            "player_poll_hidden_ms": 4000,
+        },
+    }
     SLEEP_TIMER_FADE_SECONDS = 5.0
     SLEEP_TIMER_FADE_STEPS = 10
     PRESENCE_READER_TYPES = {"RC522", "PN532_SPI"}
@@ -147,14 +175,100 @@ class RuntimeService:
         self._gpio_ready = False
         self._gpio_backend = None
         self._configured_gpio_pins = set()
+        self._idle_low_gpio_pins = set()
         self._button_poll_state = {}
         self._last_pressed_pins = []
         self._sysfs_gpio = SysfsGPIOInput()
         self._hardware_profile_cache = None
         self._hardware_profile_cached_at = 0.0
+        self._wifi_enabled_cache = True
+        self._wifi_enabled_cached_at = 0.0
+        self._device_model_cache = None
         self._state_lock = threading.RLock()
         self._state_lock_handle = None
         self._state_lock_depth = 0
+
+    def _wifi_radio_enabled_cached(self, force_refresh=False):
+        now = time.monotonic()
+        if not force_refresh and (now - self._wifi_enabled_cached_at) < self.WIFI_STATE_TTL_SECONDS:
+            return bool(self._wifi_enabled_cache)
+        enabled = wifi_radio_enabled()
+        self._wifi_enabled_cache = bool(enabled)
+        self._wifi_enabled_cached_at = now
+        return self._wifi_enabled_cache
+
+    def _device_model(self):
+        if self._device_model_cache is not None:
+            return self._device_model_cache
+        model = ""
+        for path in (Path("/proc/device-tree/model"), Path("/sys/firmware/devicetree/base/model")):
+            try:
+                raw = path.read_bytes()
+            except OSError:
+                continue
+            model = raw.replace(b"\x00", b"").decode("utf-8", errors="ignore").strip()
+            if model:
+                break
+        self._device_model_cache = model
+        return self._device_model_cache
+
+    def _auto_performance_profile_id(self):
+        model = self._device_model().lower()
+        if "zero 2" in model:
+            return "pi_zero2w"
+        if "raspberry pi 4" in model or "raspberry pi 5" in model:
+            return "pi4_plus"
+        if not model:
+            return "dev"
+        return "standard"
+
+    def performance_profile_catalog(self):
+        return [
+            {
+                "id": "auto",
+                "label": "Automatisch",
+                "description": "Profil passend zur erkannten Hardware wählen.",
+            },
+            {
+                "id": "pi_zero2w",
+                "label": "Pi Zero 2 W",
+                "description": "Schonenderes Polling für kleine Systeme.",
+            },
+            {
+                "id": "standard",
+                "label": "Standard",
+                "description": "Ausgewogen für typische Systeme.",
+            },
+            {
+                "id": "pi4_plus",
+                "label": "Pi 4 / schneller",
+                "description": "Aggressiveres Polling auf starken Systemen.",
+            },
+            {
+                "id": "dev",
+                "label": "Entwicklung",
+                "description": "Stabil und sparsam für Entwicklungsmaschinen.",
+            },
+        ]
+
+    def performance_profile(self):
+        settings = self.load_settings()
+        selected = str(settings.get("performance_profile", "auto") or "auto").strip().lower()
+        valid = {"auto", *self.PERFORMANCE_PROFILES.keys()}
+        if selected not in valid:
+            selected = "auto"
+        resolved = self._auto_performance_profile_id() if selected == "auto" else selected
+        preset = dict(self.PERFORMANCE_PROFILES.get(resolved, self.PERFORMANCE_PROFILES["standard"]))
+        return {
+            "selected_profile": selected,
+            "resolved_profile": resolved,
+            "device_model": self._device_model(),
+            **preset,
+        }
+
+    def button_poll_interval_seconds(self):
+        profile = self.performance_profile()
+        return float(profile.get("button_poll_interval_seconds", 0.05) or 0.05)
 
     def sound_path(self, sound_name):
         mapping = {
@@ -302,6 +416,12 @@ class RuntimeService:
                     if bcm is None:
                         continue
                     target_bcm.add(bcm)
+                    if bcm in self._idle_low_gpio_pins:
+                        try:
+                            GPIO.cleanup(bcm)
+                        except RuntimeError:
+                            pass
+                        self._idle_low_gpio_pins.discard(bcm)
                     if bcm not in self._configured_gpio_pins:
                         GPIO.setup(bcm, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
@@ -332,6 +452,82 @@ class RuntimeService:
             return True
 
         return False
+
+    def _available_idle_low_pins(self, setup):
+        assigned_button_pins = {button.get("pin", "").strip() for button in setup.get("buttons", []) if button.get("pin", "").strip()}
+        assigned_led_pins = {led.get("pin", "").strip() for led in setup.get("leds", []) if led.get("pin", "").strip()}
+        preview = load_json(LED_PREVIEW_FILE, {})
+        preview_pin = ""
+        if isinstance(preview, dict) and preview.get("status") == "pending":
+            preview_pin = str(preview.get("pin", "")).strip()
+        detect = self.load_button_detect()
+        detect_pins = set()
+        if detect.get("active"):
+            detect_pins = {str(pin).strip() for pin in detect.get("candidate_pins", []) if str(pin).strip()}
+        blocked = potential_system_pins() | assigned_button_pins | assigned_led_pins | detect_pins | ({preview_pin} if preview_pin else set())
+        return sorted(gpio_name for gpio_name in GPIO_TO_BOARD_PIN if gpio_name not in blocked)
+
+    def _sync_idle_low_outputs(self, setup):
+        if GPIO is None:
+            return
+        try:
+            if not self._gpio_ready:
+                GPIO.setwarnings(False)
+                GPIO.setmode(GPIO.BCM)
+                self._gpio_ready = True
+                self._gpio_backend = "rpi"
+        except Exception:
+            self._gpio_ready = False
+            return
+
+        target_bcm = set()
+        for gpio_name in self._available_idle_low_pins(setup):
+            bcm = self._gpio_name_to_bcm(gpio_name)
+            if bcm is None or bcm in self._configured_gpio_pins:
+                continue
+            target_bcm.add(bcm)
+            if bcm in self._idle_low_gpio_pins:
+                continue
+            try:
+                GPIO.setup(bcm, GPIO.OUT, initial=GPIO.LOW)
+                GPIO.output(bcm, GPIO.LOW)
+            except RuntimeError:
+                target_bcm.discard(bcm)
+                continue
+
+        for bcm in sorted(self._idle_low_gpio_pins - target_bcm):
+            try:
+                GPIO.cleanup(bcm)
+            except RuntimeError:
+                continue
+
+        self._idle_low_gpio_pins = target_bcm
+
+    def _release_idle_low_outputs(self):
+        if GPIO is None:
+            return
+        for bcm in sorted(self._idle_low_gpio_pins):
+            try:
+                GPIO.cleanup(bcm)
+            except Exception:
+                continue
+        self._idle_low_gpio_pins.clear()
+
+    def _release_unassigned_gpio_inputs(self, setup):
+        if GPIO is None or not self._configured_gpio_pins:
+            return
+        assigned_button_bcms = {
+            bcm
+            for bcm in (self._gpio_name_to_bcm(button.get("pin", "").strip()) for button in setup.get("buttons", []))
+            if bcm is not None
+        }
+        stale_bcms = sorted(self._configured_gpio_pins - assigned_button_bcms)
+        for bcm in stale_bcms:
+            try:
+                GPIO.cleanup(bcm)
+            except Exception:
+                continue
+            self._configured_gpio_pins.discard(bcm)
 
     def _read_gpio_levels(self, gpio_names):
         if not self._ensure_gpio_inputs(gpio_names):
@@ -462,13 +658,20 @@ class RuntimeService:
                 return
 
     def poll_buttons_once(self, now=None):
-        now = float(now if now is not None else time.monotonic())
+        button_now = float(now if now is not None else time.monotonic())
+        detect_now = float(now if now is not None else time.time())
+        setup = self.load_setup()
         detect_state = self.load_button_detect()
         if detect_state.get("active"):
-            self._poll_button_detection(detect_state, now)
-            return
+            self._release_idle_low_outputs()
+            self._poll_button_detection(detect_state, detect_now)
+            detect_state = self.load_button_detect()
+            if detect_state.get("active"):
+                return
+        self._release_unassigned_gpio_inputs(setup)
+        self._sync_idle_low_outputs(setup)
 
-        if not self.hardware_buttons_enabled():
+        if not bool(setup.get("hardware_buttons_enabled", True)):
             self._set_pressed_buttons([])
             self._button_poll_state.clear()
             runtime_state = self.ensure_runtime()
@@ -478,7 +681,6 @@ class RuntimeService:
                 self.save_runtime(runtime_state)
             return
 
-        setup = self.load_setup()
         configured_pins = sorted(
             filter_reserved_gpio_names(
                 {button.get("pin", "").strip() for button in setup.get("buttons", []) if button.get("pin", "").strip()},
@@ -501,25 +703,25 @@ class RuntimeService:
             is_pressed = int(level) == 0
             if is_pressed and not state["pressed"]:
                 state["pressed"] = True
-                state["pressed_at"] = now
+                state["pressed_at"] = button_now
                 if self._is_power_hold_pin(setup, pin):
                     runtime_state = self.ensure_runtime()
-                    self._update_power_hold_state(runtime_state, pin, now, released=False)
+                    self._update_power_hold_state(runtime_state, pin, button_now, released=False)
                 continue
             if is_pressed:
                 if self._is_power_hold_pin(setup, pin):
                     runtime_state = self.ensure_runtime()
-                    self._update_power_hold_state(runtime_state, pin, now, released=False)
+                    self._update_power_hold_state(runtime_state, pin, button_now, released=False)
                 continue
             if not state["pressed"]:
                 continue
 
-            held_seconds = max(0.0, now - float(state.get("pressed_at", now)))
+            held_seconds = max(0.0, button_now - float(state.get("pressed_at", button_now)))
             state["pressed"] = False
             state["pressed_at"] = 0.0
             if self._is_power_hold_pin(setup, pin):
                 runtime_state = self.ensure_runtime()
-                self._update_power_hold_state(runtime_state, pin, now, released=True)
+                self._update_power_hold_state(runtime_state, pin, button_now, released=True)
                 continue
             if held_seconds < 0.03:
                 continue
@@ -528,14 +730,15 @@ class RuntimeService:
                 continue
             self.trigger_gpio_pin(pin, press_type=press_type, held_seconds=held_seconds)
 
-    def poll_buttons_forever(self, interval_seconds=0.05):
+    def poll_buttons_forever(self, interval_seconds=None):
+        interval = float(interval_seconds if interval_seconds is not None else self.button_poll_interval_seconds())
         while True:
             try:
                 self.poll_buttons_once()
             except Exception:
-                time.sleep(max(0.1, interval_seconds))
+                time.sleep(max(0.1, interval))
                 continue
-            time.sleep(max(0.02, interval_seconds))
+            time.sleep(max(0.02, interval))
 
     def ensure_runtime(self):
         if not self.runtime_path.exists():
@@ -583,7 +786,12 @@ class RuntimeService:
     def apply_wifi_policy(self, runtime_state):
         desired = self._desired_wifi_state(runtime_state)
         result = set_wifi_radio(desired)
-        runtime_state["hardware"]["wifi_enabled"] = desired if result.get("ok") else wifi_radio_enabled()
+        if result.get("ok"):
+            self._wifi_enabled_cache = bool(desired)
+            self._wifi_enabled_cached_at = time.monotonic()
+            runtime_state["hardware"]["wifi_enabled"] = bool(desired)
+        else:
+            runtime_state["hardware"]["wifi_enabled"] = self._wifi_radio_enabled_cached(force_refresh=True)
         return runtime_state
 
     def toggle_wifi(self):
@@ -618,8 +826,21 @@ class RuntimeService:
         runtime_state["hardware"]["profile"]["audio"]["playback_backend"] = self.playback.status()["active_backend"]
         runtime_state["hardware"]["reader_type"] = runtime_state["hardware"]["profile"]["reader"].get("configured_type", "USB")
         runtime_state["hardware"]["reader_connected"] = runtime_state["hardware"]["profile"]["reader"].get("ready", False)
-        runtime_state["hardware"]["wifi_enabled"] = wifi_radio_enabled()
+        runtime_state["hardware"]["wifi_enabled"] = self._wifi_radio_enabled_cached()
         return runtime_state
+
+    def player_snapshot(self):
+        with self.state_transaction():
+            runtime_state = self.ensure_runtime()
+            player = self.load_player()
+            runtime_state = self._refresh_sleep_step(runtime_state)
+            runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
+            return {
+                "runtime": runtime_state,
+                "player": player,
+                "settings": self.load_settings(),
+                "performance": self.performance_profile(),
+            }
 
     def update_led_status(self, runtime_state):
         setup = self.load_setup()
@@ -1498,13 +1719,11 @@ class RuntimeService:
             runtime_state = self._refresh_sleep_step(runtime_state)
             runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
             runtime_state = self.update_hardware_profile(runtime_state)
-            runtime_state = self.apply_wifi_policy(runtime_state)
             runtime_state = self.update_led_status(runtime_state)
-            self.save_player(player)
-            self.save_runtime(runtime_state)
             return {
                 "runtime": runtime_state,
                 "player": player,
                 "settings": self.load_settings(),
                 "setup": self.load_setup(),
+                "performance": self.performance_profile(),
             }
