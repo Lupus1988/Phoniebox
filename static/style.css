@@ -1923,6 +1923,39 @@ dialog[data-power-routine-dialog]::backdrop {
   margin-top: 0;
 }
 
+.hotspot-action-row {
+  gap: 1.3rem;
+}
+
+.hotspot-action-row .setup-save-button {
+  margin-right: auto;
+}
+
+.wifi-auto-off-wrap {
+  display: grid;
+  justify-items: start;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.wifi-auto-off-wrap > span {
+  display: block;
+  width: min(100%, 17rem);
+  text-align: left;
+}
+
+.wifi-auto-off-field {
+  width: min(100%, 17rem) !important;
+  min-width: 0 !important;
+  grid-template-columns: 18px minmax(0, 1fr) auto !important;
+}
+
+.wifi-auto-off-field input[type="number"] {
+  min-height: 2.1rem;
+  width: 100%;
+  text-align: right;
+}
+
 .reader-select-row {
   gap: 0.45rem;
 }

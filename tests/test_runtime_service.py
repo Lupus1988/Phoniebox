@@ -794,7 +794,7 @@ class RuntimeServiceTest(unittest.TestCase):
                 "leds": [{"id": "led-1", "name": "Wifi", "pin": "GPIO12", "function": "wifi_on", "brightness": 55}],
                 "power_routines": {"power_on": "sleep_count_up_5", "power_off": "sleep_count_down_5"},
                 "audio": {"output_mode": "usb_dac", "i2s_profile": "auto"},
-                "wifi": {"allow_button_toggle": True},
+                "wifi": {},
             },
         )
 
@@ -805,6 +805,114 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(first["runtime"]["last_event"], "Wifi aus")
         self.assertTrue(second["runtime"]["wifi_enabled"])
         self.assertEqual(second["runtime"]["last_event"], "Wifi an")
+
+    def test_auto_wifi_off_triggers_after_inactivity_threshold(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "buttons": [],
+                "leds": [],
+                "power_routines": {"power_on": "sleep_count_up_5", "power_off": "sleep_count_down_5"},
+                "audio": {"output_mode": "usb_dac", "i2s_profile": "auto"},
+                "wifi": {"auto_wifi_off_enabled": True, "auto_wifi_off_minutes": 1},
+            },
+        )
+        state = self.service.ensure_runtime()
+        state["powered_on"] = True
+        state["playback_state"] = "paused"
+        state["wifi_enabled"] = True
+        state["last_wifi_activity_at"] = int(service_module.time.time()) - 120
+        self.service.save_runtime(state)
+
+        result = self.service.tick(elapsed_seconds=1)
+
+        self.assertFalse(result["runtime"]["wifi_enabled"])
+        self.assertEqual(result["runtime"]["last_event"], "WiFi automatisch aus nach 1 Min Inaktivität")
+
+    def test_power_on_forces_wifi_enabled_after_auto_wifi_off(self):
+        state = self.service.ensure_runtime()
+        state["powered_on"] = False
+        state["playback_state"] = "stopped"
+        state["wifi_enabled"] = False
+        self.service.save_runtime(state)
+
+        result = self.service.power_on()
+
+        self.assertTrue(result["runtime"]["powered_on"])
+        self.assertTrue(result["runtime"]["wifi_enabled"])
+
+    def test_wifi_button_can_reenable_wifi_after_auto_wifi_off(self):
+        state = self.service.ensure_runtime()
+        state["powered_on"] = True
+        state["wifi_enabled"] = False
+        self.service.save_runtime(state)
+
+        result = self.service.trigger_button("Wifi on/off", press_type="kurz")
+
+        self.assertTrue(result["runtime"]["wifi_enabled"])
+        self.assertEqual(result["runtime"]["last_event"], "Wifi an")
+
+    def test_wifi_is_switched_off_in_standby(self):
+        state = self.service.ensure_runtime()
+        state["powered_on"] = False
+        state["playback_state"] = "stopped"
+        state["wifi_enabled"] = True
+        self.service.save_runtime(state)
+
+        result = self.service.tick(elapsed_seconds=1)
+
+        self.assertFalse(result["runtime"]["wifi_enabled"])
+
+    def test_auto_wifi_off_does_not_run_while_in_standby(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "buttons": [],
+                "leds": [],
+                "power_routines": {"power_on": "sleep_count_up_5", "power_off": "sleep_count_down_5"},
+                "audio": {"output_mode": "usb_dac", "i2s_profile": "auto"},
+                "wifi": {"auto_wifi_off_enabled": True, "auto_wifi_off_minutes": 1},
+            },
+        )
+        state = self.service.ensure_runtime()
+        state["powered_on"] = False
+        state["playback_state"] = "stopped"
+        state["wifi_enabled"] = True
+        state["last_activity_at"] = int(service_module.time.time()) - 120
+        self.service.save_runtime(state)
+
+        result = self.service.tick(elapsed_seconds=1)
+
+        self.assertFalse(result["runtime"]["wifi_enabled"])
+        self.assertNotEqual(result["runtime"]["last_event"], "WiFi automatisch aus nach 1 Min Inaktivität")
+
+    def test_auto_wifi_off_uses_dedicated_wifi_activity_timer(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "buttons": [],
+                "leds": [],
+                "power_routines": {"power_on": "sleep_count_up_5", "power_off": "sleep_count_down_5"},
+                "audio": {"output_mode": "usb_dac", "i2s_profile": "auto"},
+                "wifi": {"auto_wifi_off_enabled": True, "auto_wifi_off_minutes": 1},
+            },
+        )
+        state = self.service.ensure_runtime()
+        now = int(service_module.time.time())
+        state["powered_on"] = True
+        state["playback_state"] = "paused"
+        state["wifi_enabled"] = True
+        state["last_activity_at"] = now
+        state["last_wifi_activity_at"] = now - 120
+        self.service.save_runtime(state)
+
+        result = self.service.tick(elapsed_seconds=1)
+
+        self.assertFalse(result["runtime"]["wifi_enabled"])
+        self.assertEqual(result["runtime"]["last_event"], "WiFi automatisch aus nach 1 Min Inaktivität")
 
     def test_hardware_volume_buttons_use_configured_step_size(self):
         write_json(
@@ -1219,6 +1327,7 @@ class RuntimeServiceTest(unittest.TestCase):
             "mode": "pending_on",
             "pin": "GPIO17",
             "started_at": 10.0,
+            "trigger_seconds": 2.0,
             "threshold_seconds": 5.0,
             "routine_id": "power_flicker_up_5",
             "animation": "power_flicker_up",
@@ -1230,7 +1339,46 @@ class RuntimeServiceTest(unittest.TestCase):
         power_led = next(entry for entry in runtime_state["led_status"] if entry["name"] == "Power")
         self.assertTrue(power_led["is_on"])
         self.assertEqual(power_led["effect"], "power_ramp_up")
-        self.assertEqual(power_led["effect_progress"], 0.5)
+        self.assertAlmostEqual(power_led["effect_progress"], 1.0 / 6.0, places=3)
+
+    def test_power_hold_does_not_show_routine_leds_before_trigger_threshold(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "buttons": [],
+                "leds": [
+                    {"id": "led-1", "name": "Power", "pin": "GPIO12", "function": "power_on", "brightness": 50},
+                    {"id": "led-2", "name": "Sleep 1/3", "pin": "GPIO13", "function": "sleep_1", "brightness": 30},
+                    {"id": "led-3", "name": "Sleep 2/3", "pin": "GPIO16", "function": "sleep_2", "brightness": 30},
+                    {"id": "led-4", "name": "Sleep 3/3", "pin": "GPIO20", "function": "sleep_3", "brightness": 30},
+                ],
+                "power_routines": {"power_on": "sleep_count_up_5", "power_off": "sleep_count_down_5"},
+                "wifi": {},
+            },
+        )
+        runtime_state = self.service.ensure_runtime()
+        runtime_state["powered_on"] = True
+        runtime_state["sleep_timer"]["level"] = 0
+        runtime_state["power_hold"] = {
+            "pressed": True,
+            "seconds": 1.0,
+            "mode": "pending_off",
+            "pin": "GPIO19",
+            "started_at": 10.0,
+            "trigger_seconds": 2.0,
+            "threshold_seconds": 5.0,
+            "routine_id": "sleep_count_down_5",
+            "animation": "sleep_count_down",
+            "completed": False,
+        }
+
+        runtime_state = self.service.update_led_status(runtime_state)
+        led_map = {entry["name"]: entry for entry in runtime_state["led_status"]}
+
+        self.assertFalse(led_map["Sleep 1/3"]["is_on"])
+        self.assertFalse(led_map["Sleep 2/3"]["is_on"])
+        self.assertFalse(led_map["Sleep 3/3"]["is_on"])
 
 
 if __name__ == "__main__":

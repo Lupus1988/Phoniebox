@@ -379,11 +379,23 @@
           <span>Hotspot Passwort</span>
           <input name="hotspot_password" value="{{ setup_data.wifi.hotspot_password }}" {% if setup_data.wifi.hotspot_security != "wpa-psk" %}disabled{% endif %}>
         </label>
-        <label class="checkbox-row full">
-          <input type="checkbox" name="allow_button_toggle" {% if setup_data.wifi.allow_button_toggle %}checked{% endif %}>
-          <span>Wifi über Taste zuschalten</span>
-        </label>
-        <button class="primary full setup-save-button" type="submit">Hotspot speichern</button>
+        <div class="setup-action-row hotspot-action-row full">
+          <button class="primary setup-save-button" type="submit">Hotspot speichern</button>
+          <div class="wifi-auto-off-wrap">
+            <span>Auto-WiFi-off nach</span>
+            <label class="checkbox-row compact-checkbox-row power-routine-inline-toggle wifi-auto-off-field">
+              <input type="checkbox" name="auto_wifi_off_enabled" {% if setup_data.wifi.auto_wifi_off_enabled %}checked{% endif %}>
+              <input
+                type="number"
+                name="auto_wifi_off_minutes"
+                min="1"
+                max="720"
+                value="{{ setup_data.wifi.auto_wifi_off_minutes }}"
+              >
+              <span class="power-routine-inline-unit">Min</span>
+            </label>
+          </div>
+        </div>
       </form>
     </article>
   </section>

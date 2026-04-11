@@ -125,6 +125,7 @@ def default_runtime_state():
         "event_log": [],
         "wifi_enabled": True,
         "last_activity_at": int(time.time()),
+        "last_wifi_activity_at": int(time.time()),
     }
 
 
@@ -823,6 +824,13 @@ class RuntimeService:
         runtime_state["event_log"] = event_log[:20]
         return runtime_state
 
+    def mark_wifi_activity(self, timestamp=None):
+        with self.state_transaction():
+            runtime_state = self.ensure_runtime()
+            runtime_state["last_wifi_activity_at"] = int(timestamp if timestamp is not None else time.time())
+            self.save_runtime(runtime_state)
+            return runtime_state
+
     def _power_routine_settings(self):
         setup = self.load_setup()
         return dict((setup.get("power_routines") or {}))
@@ -844,6 +852,30 @@ class RuntimeService:
         enabled = bool(routines.get("auto_standby_enabled", False))
         minutes = max(1, int(routines.get("auto_standby_minutes", 30) or 30))
         return {"enabled": enabled, "minutes": minutes}
+
+    def _auto_wifi_off_config(self):
+        setup = self.load_setup()
+        wifi = setup.get("wifi") or {}
+        enabled = bool(wifi.get("auto_wifi_off_enabled", False))
+        minutes = max(1, int(wifi.get("auto_wifi_off_minutes", 30) or 30))
+        return {"enabled": enabled, "minutes": minutes}
+
+    def _apply_inactivity_wifi_off(self, runtime_state, player):
+        config = self._auto_wifi_off_config()
+        if not config["enabled"] or not runtime_state.get("powered_on", True):
+            return runtime_state, player
+        if not bool(runtime_state.get("wifi_enabled", True)):
+            return runtime_state, player
+
+        now = int(time.time())
+        last_wifi_activity_at = int(runtime_state.get("last_wifi_activity_at", now) or now)
+        threshold_seconds = int(config["minutes"]) * 60
+        if now - last_wifi_activity_at < threshold_seconds:
+            return runtime_state, player
+
+        runtime_state["wifi_enabled"] = False
+        runtime_state = self.add_event(runtime_state, f"WiFi automatisch aus nach {config['minutes']} Min Inaktivität", mark_activity=False)
+        return runtime_state, player
 
     def _apply_inactivity_standby(self, runtime_state, player):
         config = self._auto_standby_config()
@@ -875,15 +907,9 @@ class RuntimeService:
             "remove": settings.get("rfid_remove_action", "stop"),
         }
 
-    def _wifi_button_toggle_allowed(self):
-        setup = self.load_setup()
-        return bool((setup.get("wifi") or {}).get("allow_button_toggle", False))
-
     def _desired_wifi_state(self, runtime_state):
         if not runtime_state.get("powered_on", True):
             return False
-        if not self._wifi_button_toggle_allowed():
-            return True
         return bool(runtime_state.get("wifi_enabled", True))
 
     def _set_service_active(self, service_name, active):
@@ -900,6 +926,8 @@ class RuntimeService:
 
     def apply_wifi_policy(self, runtime_state):
         desired = self._desired_wifi_state(runtime_state)
+        if not runtime_state.get("powered_on", True):
+            runtime_state["wifi_enabled"] = False
         result = set_wifi_radio(desired)
         if result.get("ok"):
             self._wifi_enabled_cache = bool(desired)
@@ -912,15 +940,9 @@ class RuntimeService:
     def toggle_wifi(self):
         with self.state_transaction():
             runtime_state = self.ensure_runtime()
-            if not self._wifi_button_toggle_allowed():
-                runtime_state["wifi_enabled"] = True
-                runtime_state = self.add_event(runtime_state, "Wifi-Taste ignoriert: Wifi ist dauerhaft aktiv")
-                runtime_state = self.update_hardware_profile(runtime_state)
-                runtime_state = self.apply_wifi_policy(runtime_state)
-                runtime_state = self.update_led_status(runtime_state)
-                self.save_runtime(runtime_state)
-                return {"runtime": runtime_state, "player": self.load_player()}
             runtime_state["wifi_enabled"] = not bool(runtime_state.get("wifi_enabled", True))
+            if runtime_state["wifi_enabled"]:
+                runtime_state["last_wifi_activity_at"] = int(time.time())
             runtime_state = self.add_event(runtime_state, "Wifi an" if runtime_state["wifi_enabled"] else "Wifi aus")
             runtime_state = self.update_hardware_profile(runtime_state)
             runtime_state = self.apply_wifi_policy(runtime_state)
@@ -1014,8 +1036,9 @@ class RuntimeService:
         if hold.get("completed"):
             return {}
         animation = hold.get("animation", "")
-        threshold = max(0.1, float(hold.get("threshold_seconds", 0.0) or 0.0))
-        progress = max(0.0, min(1.0, float(hold.get("seconds", 0.0) or 0.0) / threshold))
+        progress = self._power_hold_animation_progress(hold)
+        if progress is None:
+            return {}
         sleep_functions = {"sleep_1": False, "sleep_2": False, "sleep_3": False}
         power_on = runtime_state.get("powered_on", True)
 
@@ -1045,13 +1068,23 @@ class RuntimeService:
 
         return {}
 
+    def _power_hold_animation_progress(self, hold):
+        trigger_seconds = max(0.0, float(hold.get("trigger_seconds", self.button_long_press_seconds()) or self.button_long_press_seconds()))
+        threshold_seconds = max(trigger_seconds, float(hold.get("threshold_seconds", trigger_seconds) or trigger_seconds))
+        seconds = max(0.0, float(hold.get("seconds", 0.0) or 0.0))
+        if seconds < trigger_seconds:
+            return None
+        animation_window = max(0.1, threshold_seconds - trigger_seconds)
+        return max(0.0, min(1.0, (seconds - trigger_seconds) / animation_window))
+
     def _build_power_hold_led_effects(self, runtime_state):
         hold = runtime_state.get("power_hold", {})
         if hold.get("completed"):
             return {}
         animation = hold.get("animation", "")
-        threshold = max(0.1, float(hold.get("threshold_seconds", 0.0) or 0.0))
-        progress = max(0.0, min(1.0, float(hold.get("seconds", 0.0) or 0.0) / threshold))
+        progress = self._power_hold_animation_progress(hold)
+        if progress is None:
+            return {}
         if animation == "power_flicker_up":
             return {"power_on": {"is_on": True, "effect": "power_ramp_up", "progress": progress}}
         if animation == "power_flicker_down":
@@ -1198,6 +1231,7 @@ class RuntimeService:
                     runtime_state = result["runtime"]
                     player = result["player"]
 
+            runtime_state, player = self._apply_inactivity_wifi_off(runtime_state, player)
             runtime_state, player = self._apply_inactivity_standby(runtime_state, player)
 
             runtime_state = self.update_hardware_profile(runtime_state)
@@ -1258,11 +1292,14 @@ class RuntimeService:
             runtime_state["powered_on"] = target_powered_on
             if target_powered_on:
                 runtime_state["playback_state"] = "paused"
+                runtime_state["wifi_enabled"] = True
                 player["is_playing"] = False
                 message = event_message or "Power an"
                 runtime_state["last_activity_at"] = int(time.time())
+                runtime_state["last_wifi_activity_at"] = int(time.time())
             else:
                 runtime_state["playback_state"] = "stopped"
+                runtime_state["wifi_enabled"] = False
                 runtime_state["sleep_timer"]["remaining_seconds"] = 0
                 runtime_state["sleep_timer"]["level"] = 0
                 player["is_playing"] = False

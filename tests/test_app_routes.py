@@ -139,6 +139,20 @@ class AppRoutesTest(unittest.TestCase):
         response = self.client.get("/api/player/snapshot")
         self.assertEqual(response.status_code, 200)
 
+    def test_mutating_request_marks_wifi_activity(self):
+        with patch("app.runtime_service.mark_wifi_activity") as mark_wifi_activity:
+            response = self.client.post("/player", data={"action": "toggle_play"})
+
+        self.assertIn(response.status_code, {200, 302})
+        mark_wifi_activity.assert_called_once()
+
+    def test_get_request_does_not_mark_wifi_activity(self):
+        with patch("app.runtime_service.mark_wifi_activity") as mark_wifi_activity:
+            response = self.client.get("/player")
+
+        self.assertEqual(response.status_code, 200)
+        mark_wifi_activity.assert_not_called()
+
     def test_player_post_xhr_returns_json_snapshot(self):
         with patch(
             "routes.player.handle_player_action",
@@ -279,6 +293,16 @@ class AppRoutesTest(unittest.TestCase):
 
         self.assertEqual(setup["wifi"]["mode"], "hotspot_only")
         self.assertEqual(setup["wifi"]["saved_networks"], [])
+        self.assertFalse(setup["wifi"]["auto_wifi_off_enabled"])
+        self.assertEqual(setup["wifi"]["auto_wifi_off_minutes"], 30)
+
+    def test_normalize_setup_adds_auto_wifi_off_defaults(self):
+        setup = normalize_setup_data({"wifi": {"mode": "hotspot_only"}, "audio": {"output_mode": "usb_dac"}})
+
+        self.assertIn("auto_wifi_off_enabled", setup["wifi"])
+        self.assertIn("auto_wifi_off_minutes", setup["wifi"])
+        self.assertFalse(setup["wifi"]["auto_wifi_off_enabled"])
+        self.assertEqual(setup["wifi"]["auto_wifi_off_minutes"], 30)
 
     def test_default_setup_has_no_reader_installed(self):
         setup = default_setup()

@@ -198,6 +198,21 @@ READER_OPTIONS = [
     {"id": "PN532_SPI", "label": "PN532 (SPI)", "driver": "pn532", "transport": "spi"},
 ]
 
+WIFI_ACTIVITY_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+@app.before_request
+def touch_wifi_activity_on_mutating_panel_requests():
+    if request.method not in WIFI_ACTIVITY_METHODS:
+        return
+    if request.path.startswith("/static/"):
+        return
+    try:
+        runtime_service.mark_wifi_activity()
+    except Exception:
+        # WiFi-Aktivitätsmarkierung darf UI-Requests nicht blockieren.
+        return
+
 
 def default_player():
     return {
@@ -296,7 +311,8 @@ def default_setup():
         },
         "wifi": {
             "mode": "hotspot_only",
-            "allow_button_toggle": False,
+            "auto_wifi_off_enabled": False,
+            "auto_wifi_off_minutes": 30,
             "country": "DE",
             "fallback_hotspot": True,
             "hotspot_security": "open",
@@ -313,6 +329,8 @@ def default_setup():
 def factory_wifi_defaults():
     return {
         "mode": "hotspot_only",
+        "auto_wifi_off_enabled": False,
+        "auto_wifi_off_minutes": 30,
         "country": "DE",
         "fallback_hotspot": True,
         "hotspot_security": "open",
@@ -553,6 +571,12 @@ def normalize_setup_data(data):
         power_routines["suppress_shutdown_sound_for_inactivity"] = power_routines.get("suppress_shutdown_sound_for_inactivity") in {"on", True, "true", "1", 1}
     else:
         power_routines["suppress_shutdown_sound_for_inactivity"] = old_combined_suppress in {"on", True, "true", "1", 1}
+    wifi = data.setdefault("wifi", {})
+    legacy_allow = wifi.get("allow_button_toggle", True)
+    wifi["auto_wifi_off_enabled"] = wifi.get("auto_wifi_off_enabled") in {"on", True, "true", "1", 1}
+    wifi["auto_wifi_off_minutes"] = to_int(wifi.get("auto_wifi_off_minutes"), 30, 1, 720)
+    # Altbestand: allow_button_toggle bleibt nur als Legacy-Feld erhalten und ist ab jetzt immer aktiv.
+    wifi["allow_button_toggle"] = legacy_allow not in {"off", False, "false", "0", 0}
     return data
 
 
@@ -1618,7 +1642,14 @@ def setup():
         if section == "wifi":
             wifi = data["wifi"]
             wifi["mode"] = request.form.get("mode", wifi["mode"]).strip()
-            wifi["allow_button_toggle"] = request.form.get("allow_button_toggle") == "on"
+            wifi["allow_button_toggle"] = True
+            wifi["auto_wifi_off_enabled"] = request.form.get("auto_wifi_off_enabled") == "on"
+            wifi["auto_wifi_off_minutes"] = to_int(
+                request.form.get("auto_wifi_off_minutes"),
+                wifi.get("auto_wifi_off_minutes", 30),
+                1,
+                720,
+            )
             wifi["country"] = request.form.get("country", wifi["country"]).strip() or "DE"
             wifi["fallback_hotspot"] = request.form.get("fallback_hotspot") == "on"
             wifi["hotspot_security"] = normalize_hotspot_security(
