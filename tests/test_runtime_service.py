@@ -822,13 +822,13 @@ class RuntimeServiceTest(unittest.TestCase):
         state["powered_on"] = True
         state["playback_state"] = "paused"
         state["wifi_enabled"] = True
-        state["last_wifi_activity_at"] = int(service_module.time.time()) - 120
+        state["wifi_auto_off_started_at"] = int(service_module.time.time()) - 120
         self.service.save_runtime(state)
 
         result = self.service.tick(elapsed_seconds=1)
 
         self.assertFalse(result["runtime"]["wifi_enabled"])
-        self.assertEqual(result["runtime"]["last_event"], "WiFi automatisch aus nach 1 Min Inaktivität")
+        self.assertEqual(result["runtime"]["last_event"], "WiFi automatisch aus nach 1 Min")
 
     def test_power_on_forces_wifi_enabled_after_auto_wifi_off(self):
         state = self.service.ensure_runtime()
@@ -886,9 +886,9 @@ class RuntimeServiceTest(unittest.TestCase):
         result = self.service.tick(elapsed_seconds=1)
 
         self.assertFalse(result["runtime"]["wifi_enabled"])
-        self.assertNotEqual(result["runtime"]["last_event"], "WiFi automatisch aus nach 1 Min Inaktivität")
+        self.assertNotEqual(result["runtime"]["last_event"], "WiFi automatisch aus nach 1 Min")
 
-    def test_auto_wifi_off_uses_dedicated_wifi_activity_timer(self):
+    def test_auto_wifi_off_uses_start_or_wake_timer(self):
         write_json(
             self.data_dir / "setup.json",
             {
@@ -906,13 +906,41 @@ class RuntimeServiceTest(unittest.TestCase):
         state["playback_state"] = "paused"
         state["wifi_enabled"] = True
         state["last_activity_at"] = now
-        state["last_wifi_activity_at"] = now - 120
+        state["wifi_auto_off_started_at"] = now - 120
         self.service.save_runtime(state)
 
         result = self.service.tick(elapsed_seconds=1)
 
         self.assertFalse(result["runtime"]["wifi_enabled"])
-        self.assertEqual(result["runtime"]["last_event"], "WiFi automatisch aus nach 1 Min Inaktivität")
+        self.assertEqual(result["runtime"]["last_event"], "WiFi automatisch aus nach 1 Min")
+
+    def test_auto_wifi_off_is_not_reset_by_general_activity(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "buttons": [],
+                "leds": [],
+                "power_routines": {"power_on": "sleep_count_up_5", "power_off": "sleep_count_down_5"},
+                "audio": {"output_mode": "usb_dac", "i2s_profile": "auto"},
+                "wifi": {"auto_wifi_off_enabled": True, "auto_wifi_off_minutes": 1},
+            },
+        )
+        now = int(service_module.time.time())
+        state = self.service.ensure_runtime()
+        state["powered_on"] = True
+        state["playback_state"] = "paused"
+        state["wifi_enabled"] = True
+        state["wifi_auto_off_started_at"] = now - 120
+        state["last_activity_at"] = now
+        self.service.save_runtime(state)
+
+        result = self.service.trigger_button("Play/Pause", press_type="kurz")
+        post = self.service.tick(elapsed_seconds=1)
+
+        self.assertIn(result["runtime"]["last_event"], {"Wiedergabe gestartet", "Wiedergabe pausiert"})
+        self.assertFalse(post["runtime"]["wifi_enabled"])
+        self.assertEqual(post["runtime"]["last_event"], "WiFi automatisch aus nach 1 Min")
 
     def test_hardware_volume_buttons_use_configured_step_size(self):
         write_json(

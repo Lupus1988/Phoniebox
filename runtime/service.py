@@ -126,6 +126,7 @@ def default_runtime_state():
         "wifi_enabled": True,
         "last_activity_at": int(time.time()),
         "last_wifi_activity_at": int(time.time()),
+        "wifi_auto_off_started_at": int(time.time()),
     }
 
 
@@ -824,13 +825,6 @@ class RuntimeService:
         runtime_state["event_log"] = event_log[:20]
         return runtime_state
 
-    def mark_wifi_activity(self, timestamp=None):
-        with self.state_transaction():
-            runtime_state = self.ensure_runtime()
-            runtime_state["last_wifi_activity_at"] = int(timestamp if timestamp is not None else time.time())
-            self.save_runtime(runtime_state)
-            return runtime_state
-
     def _power_routine_settings(self):
         setup = self.load_setup()
         return dict((setup.get("power_routines") or {}))
@@ -868,13 +862,16 @@ class RuntimeService:
             return runtime_state, player
 
         now = int(time.time())
-        last_wifi_activity_at = int(runtime_state.get("last_wifi_activity_at", now) or now)
+        started_at = int(runtime_state.get("wifi_auto_off_started_at", 0) or 0)
+        if started_at <= 0:
+            runtime_state["wifi_auto_off_started_at"] = now
+            return runtime_state, player
         threshold_seconds = int(config["minutes"]) * 60
-        if now - last_wifi_activity_at < threshold_seconds:
+        if now - started_at < threshold_seconds:
             return runtime_state, player
 
         runtime_state["wifi_enabled"] = False
-        runtime_state = self.add_event(runtime_state, f"WiFi automatisch aus nach {config['minutes']} Min Inaktivität", mark_activity=False)
+        runtime_state = self.add_event(runtime_state, f"WiFi automatisch aus nach {config['minutes']} Min", mark_activity=False)
         return runtime_state, player
 
     def _apply_inactivity_standby(self, runtime_state, player):
@@ -941,8 +938,6 @@ class RuntimeService:
         with self.state_transaction():
             runtime_state = self.ensure_runtime()
             runtime_state["wifi_enabled"] = not bool(runtime_state.get("wifi_enabled", True))
-            if runtime_state["wifi_enabled"]:
-                runtime_state["last_wifi_activity_at"] = int(time.time())
             runtime_state = self.add_event(runtime_state, "Wifi an" if runtime_state["wifi_enabled"] else "Wifi aus")
             runtime_state = self.update_hardware_profile(runtime_state)
             runtime_state = self.apply_wifi_policy(runtime_state)
@@ -1297,9 +1292,11 @@ class RuntimeService:
                 message = event_message or "Power an"
                 runtime_state["last_activity_at"] = int(time.time())
                 runtime_state["last_wifi_activity_at"] = int(time.time())
+                runtime_state["wifi_auto_off_started_at"] = int(time.time())
             else:
                 runtime_state["playback_state"] = "stopped"
                 runtime_state["wifi_enabled"] = False
+                runtime_state["wifi_auto_off_started_at"] = 0
                 runtime_state["sleep_timer"]["remaining_seconds"] = 0
                 runtime_state["sleep_timer"]["level"] = 0
                 player["is_playing"] = False

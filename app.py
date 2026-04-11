@@ -198,20 +198,6 @@ READER_OPTIONS = [
     {"id": "PN532_SPI", "label": "PN532 (SPI)", "driver": "pn532", "transport": "spi"},
 ]
 
-WIFI_ACTIVITY_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-
-
-@app.before_request
-def touch_wifi_activity_on_mutating_panel_requests():
-    if request.method not in WIFI_ACTIVITY_METHODS:
-        return
-    if request.path.startswith("/static/"):
-        return
-    try:
-        runtime_service.mark_wifi_activity()
-    except Exception:
-        # WiFi-Aktivitätsmarkierung darf UI-Requests nicht blockieren.
-        return
 
 
 def default_player():

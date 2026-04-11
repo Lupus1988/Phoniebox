@@ -139,20 +139,6 @@ class AppRoutesTest(unittest.TestCase):
         response = self.client.get("/api/player/snapshot")
         self.assertEqual(response.status_code, 200)
 
-    def test_mutating_request_marks_wifi_activity(self):
-        with patch("app.runtime_service.mark_wifi_activity") as mark_wifi_activity:
-            response = self.client.post("/player", data={"action": "toggle_play"})
-
-        self.assertIn(response.status_code, {200, 302})
-        mark_wifi_activity.assert_called_once()
-
-    def test_get_request_does_not_mark_wifi_activity(self):
-        with patch("app.runtime_service.mark_wifi_activity") as mark_wifi_activity:
-            response = self.client.get("/player")
-
-        self.assertEqual(response.status_code, 200)
-        mark_wifi_activity.assert_not_called()
-
     def test_player_post_xhr_returns_json_snapshot(self):
         with patch(
             "routes.player.handle_player_action",
