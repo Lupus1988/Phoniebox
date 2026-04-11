@@ -298,6 +298,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const buttonPinSelects = rows
       .map((row) => row.querySelector("[data-button-pin]"))
       .filter((entry) => entry instanceof HTMLSelectElement);
+    const encoderPinSelects = Array.from(buttonMapping.querySelectorAll("[data-encoder-pin]"))
+      .filter((entry) => entry instanceof HTMLSelectElement);
     const buttonPressSelects = rows
       .map((row) => row.querySelector("[data-button-press-type]"))
       .filter((entry) => entry instanceof HTMLSelectElement);
@@ -320,6 +322,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const locked = select.dataset.pressLocked === "1";
         select.disabled = !enabled || locked;
       }
+      for (const select of encoderPinSelects) {
+        select.disabled = !enabled;
+      }
       if (longPressInput instanceof HTMLInputElement) {
         longPressInput.disabled = !enabled;
       }
@@ -333,6 +338,17 @@ document.addEventListener("DOMContentLoaded", () => {
         const pinSelect = row.querySelector("[data-button-pin]");
         const pressSelect = row.querySelector("[data-button-press-type]");
         if (!(pinSelect instanceof HTMLSelectElement) || !(pressSelect instanceof HTMLSelectElement)) {
+          continue;
+        }
+        const selectedValue = pinSelect.value || "";
+        if (selectedValue.startsWith("encoder:") && !selectedValue.endsWith(":press")) {
+          for (const option of pressSelect.options) {
+            const keep = option.value === "kurz";
+            option.hidden = !keep;
+            option.disabled = !keep;
+          }
+          pressSelect.value = "kurz";
+          pressSelect.disabled = true;
           continue;
         }
         if (pressSelect.dataset.pressLocked === "1") {
@@ -358,6 +374,9 @@ document.addEventListener("DOMContentLoaded", () => {
           if (!(otherPin instanceof HTMLSelectElement) || !(otherPress instanceof HTMLSelectElement)) {
             continue;
           }
+          if ((otherPin.value || "").startsWith("encoder:")) {
+            continue;
+          }
           if (otherPin.value && otherPin.value === currentPin) {
             usedPressTypes.add(otherPress.value || "kurz");
           }
@@ -374,11 +393,14 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!allowed.includes(currentValue)) {
           pressSelect.value = fallback;
         }
+        pressSelect.disabled = false;
       }
     }
 
     function syncCrossRolePinChoices() {
-      const selectedButtonPins = new Set(buttonPinSelects.map((select) => select.value).filter(Boolean));
+      const selectedButtonPins = new Set(
+        buttonPinSelects.concat(encoderPinSelects).map((select) => select.value).filter(Boolean)
+      );
       const selectedLedPins = new Set(ledPinSelects.map((select) => select.value).filter(Boolean));
 
       for (const select of buttonPinSelects) {
@@ -389,7 +411,7 @@ document.addEventListener("DOMContentLoaded", () => {
             option.disabled = false;
             continue;
           }
-          const blocked = selectedLedPins.has(option.value) && option.value !== currentValue;
+          const blocked = !option.value.startsWith("encoder:") && selectedLedPins.has(option.value) && option.value !== currentValue;
           option.hidden = blocked;
           option.disabled = blocked;
         }
@@ -407,6 +429,23 @@ document.addEventListener("DOMContentLoaded", () => {
             continue;
           }
           const blocked = selectedButtonPins.has(option.value) && option.value !== currentValue;
+          option.hidden = blocked;
+          option.disabled = blocked;
+        }
+        if (select.value && select.selectedOptions.length && select.selectedOptions[0].disabled) {
+          select.value = "";
+        }
+      }
+
+      for (const select of encoderPinSelects) {
+        const currentValue = select.value;
+        for (const option of select.options) {
+          if (!option.value) {
+            option.hidden = false;
+            option.disabled = false;
+            continue;
+          }
+          const blocked = selectedLedPins.has(option.value) && option.value !== currentValue;
           option.hidden = blocked;
           option.disabled = blocked;
         }
@@ -437,6 +476,65 @@ document.addEventListener("DOMContentLoaded", () => {
     for (const select of ledPinSelects) {
       select.addEventListener("change", syncCrossRolePinChoices);
     }
+    for (const select of encoderPinSelects) {
+      select.addEventListener("change", syncCrossRolePinChoices);
+    }
+  }
+
+  const encoderDebugRoot = document.querySelector("[data-encoder-debug]");
+  if (encoderDebugRoot instanceof HTMLElement) {
+    const refreshButton = encoderDebugRoot.querySelector("[data-encoder-refresh]");
+    const lastButton = encoderDebugRoot.querySelector("[data-encoder-last-button]");
+    const lastEvent = encoderDebugRoot.querySelector("[data-encoder-last-event]");
+    const pressed = encoderDebugRoot.querySelector("[data-encoder-pressed]");
+    const samples = encoderDebugRoot.querySelector("[data-encoder-samples]");
+
+    function setModuleValue(kind, id, value) {
+      const target = encoderDebugRoot.querySelector(`[data-encoder-${kind}="${id}"]`);
+      if (target) {
+        target.textContent = value ?? "-";
+      }
+    }
+
+    async function refreshEncoderDebug() {
+      if (refreshButton instanceof HTMLButtonElement) {
+        refreshButton.disabled = true;
+      }
+      try {
+        const response = await fetch("/api/setup/encoder-debug");
+        const payload = await response.json();
+        for (const module of payload.modules || []) {
+          setModuleValue("clk", module.id, module.clk_level ?? "-");
+          setModuleValue("dt", module.id, module.dt_level ?? "-");
+          setModuleValue("sw", module.id, module.sw_level ?? "-");
+        }
+        if (lastButton) {
+          lastButton.textContent = payload.last_button || "-";
+        }
+        if (lastEvent) {
+          lastEvent.textContent = payload.last_event || "-";
+        }
+        if (pressed) {
+          pressed.textContent = (payload.pressed_buttons || []).join(", ") || "-";
+        }
+        if (samples) {
+          const lines = (payload.samples || []).map((sample) =>
+            `${sample.label} clk=${sample.clk} dt=${sample.dt} dir=${sample.direction || "-"} action=${sample.action || "-"}`
+          );
+          samples.textContent = lines.join("\n") || "-";
+        }
+      } catch {
+        if (lastEvent) {
+          lastEvent.textContent = "Diagnose fehlgeschlagen";
+        }
+      } finally {
+        if (refreshButton instanceof HTMLButtonElement) {
+          refreshButton.disabled = false;
+        }
+      }
+    }
+
+    refreshButton?.addEventListener("click", refreshEncoderDebug);
   }
 
   const hotspotSecurity = document.querySelector("[data-hotspot-security]");

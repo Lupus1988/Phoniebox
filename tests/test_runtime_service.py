@@ -806,6 +806,108 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertTrue(second["runtime"]["wifi_enabled"])
         self.assertEqual(second["runtime"]["last_event"], "Wifi an")
 
+    def test_encoder_rotation_triggers_assigned_volume_actions(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "hardware_buttons_enabled": True,
+                "buttons": [
+                    {"id": "btn-1", "name": "Lautstärke +", "pin": "", "press_type": "kurz", "input_mode": "encoder", "encoder_slot": "encoder-1", "encoder_event": "cw"},
+                    {"id": "btn-2", "name": "Lautstärke -", "pin": "", "press_type": "kurz", "input_mode": "encoder", "encoder_slot": "encoder-1", "encoder_event": "ccw"},
+                ],
+                "encoder_modules": [
+                    {"id": "encoder-1", "label": "Modul 1", "clk_pin": "GPIO17", "dt_pin": "GPIO27", "sw_pin": ""},
+                    {"id": "encoder-2", "label": "Modul 2", "clk_pin": "", "dt_pin": "", "sw_pin": ""},
+                ],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+        player = self.service.load_player()
+        player["volume"] = 45
+        self.service.save_player(player)
+
+        with patch.object(
+            self.service,
+            "_read_gpio_levels",
+            side_effect=[
+                {"GPIO17": 1, "GPIO27": 1},
+                {"GPIO17": 1, "GPIO27": 0},
+                {"GPIO17": 0, "GPIO27": 1},
+            ],
+        ):
+            self.service.poll_buttons_once(now=100.00)
+            self.service.poll_buttons_once(now=100.05)
+            self.service.poll_buttons_once(now=100.10)
+
+        self.assertEqual(self.service.load_player()["volume"], 50)
+
+    def test_encoder_decoder_ignores_bounce_without_full_step(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "hardware_buttons_enabled": True,
+                "buttons": [
+                    {"id": "btn-1", "name": "Lautstärke +", "pin": "", "press_type": "kurz", "input_mode": "encoder", "encoder_slot": "encoder-1", "encoder_event": "cw"},
+                    {"id": "btn-2", "name": "Lautstärke -", "pin": "", "press_type": "kurz", "input_mode": "encoder", "encoder_slot": "encoder-1", "encoder_event": "ccw"},
+                ],
+                "encoder_modules": [
+                    {"id": "encoder-1", "label": "Modul 1", "clk_pin": "GPIO17", "dt_pin": "GPIO27", "sw_pin": ""},
+                    {"id": "encoder-2", "label": "Modul 2", "clk_pin": "", "dt_pin": "", "sw_pin": ""},
+                ],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+        player = self.service.load_player()
+        player["volume"] = 45
+        self.service.save_player(player)
+
+        with patch.object(
+            self.service,
+            "_read_gpio_levels",
+            side_effect=[
+                {"GPIO17": 1, "GPIO27": 1},
+                {"GPIO17": 1, "GPIO27": 0},
+                {"GPIO17": 1, "GPIO27": 1},
+                {"GPIO17": 1, "GPIO27": 0},
+                {"GPIO17": 1, "GPIO27": 1},
+            ],
+        ):
+            self.service.poll_buttons_once(now=100.00)
+            self.service.poll_buttons_once(now=100.02)
+            self.service.poll_buttons_once(now=100.04)
+            self.service.poll_buttons_once(now=100.06)
+            self.service.poll_buttons_once(now=100.08)
+
+        self.assertEqual(self.service.load_player()["volume"], 45)
+
+    def test_encoder_press_uses_module_switch_pin(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "hardware_buttons_enabled": True,
+                "buttons": [
+                    {"id": "btn-1", "name": "Wifi on/off", "pin": "", "press_type": "kurz", "input_mode": "encoder", "encoder_slot": "encoder-1", "encoder_event": "press"},
+                ],
+                "encoder_modules": [
+                    {"id": "encoder-1", "label": "Modul 1", "clk_pin": "GPIO17", "dt_pin": "GPIO27", "sw_pin": "GPIO22"},
+                    {"id": "encoder-2", "label": "Modul 2", "clk_pin": "", "dt_pin": "", "sw_pin": ""},
+                ],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        with patch.object(self.service, "_read_gpio_levels", side_effect=[{"GPIO22": 0, "GPIO17": 1, "GPIO27": 1}, {"GPIO22": 1, "GPIO17": 1, "GPIO27": 1}]):
+            self.service.poll_buttons_once(now=100.0)
+            self.service.poll_buttons_once(now=100.2)
+
+        self.assertFalse(self.service.ensure_runtime()["wifi_enabled"])
+
     def test_auto_wifi_off_triggers_after_inactivity_threshold(self):
         write_json(
             self.data_dir / "setup.json",
@@ -852,6 +954,20 @@ class RuntimeServiceTest(unittest.TestCase):
 
         self.assertTrue(result["runtime"]["wifi_enabled"])
         self.assertEqual(result["runtime"]["last_event"], "Wifi an")
+
+    def test_apply_wifi_policy_skips_redundant_wifi_toggle(self):
+        state = self.service.ensure_runtime()
+        state["powered_on"] = True
+        state["wifi_enabled"] = True
+        state["hardware"]["wifi_enabled"] = True
+
+        with patch.object(self.service, "_wifi_radio_enabled_cached", return_value=True), patch.object(
+            service_module, "set_wifi_radio", return_value={"ok": True, "details": ["ok"]}
+        ) as set_wifi_radio:
+            result = self.service.apply_wifi_policy(state)
+
+        self.assertTrue(result["hardware"]["wifi_enabled"])
+        set_wifi_radio.assert_not_called()
 
     def test_wifi_is_switched_off_in_standby(self):
         state = self.service.ensure_runtime()

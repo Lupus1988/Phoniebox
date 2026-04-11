@@ -199,6 +199,38 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(saved_buttons[0]["name"], "Power on/off")
         self.assertEqual(saved_buttons[0]["press_type"], "lang")
 
+    def test_setup_buttons_post_saves_encoder_assignment_and_module_pins(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+        captured = {}
+        payload = {"section": "buttons", "button_count": str(len(BUTTON_FUNCTIONS)), "hardware_buttons_enabled": "on", "button_long_press_seconds": "2"}
+        for index in range(len(BUTTON_FUNCTIONS)):
+            payload[f"button_pin_{index}"] = ""
+            payload[f"button_press_type_{index}"] = "kurz"
+        payload["button_pin_4"] = "encoder:encoder-1:cw"
+        payload["button_pin_5"] = "encoder:encoder-1:ccw"
+        payload["button_pin_8"] = "encoder:encoder-1:press"
+        payload["encoder_clk_pin_encoder-1"] = "GPIO17"
+        payload["encoder_dt_pin_encoder-1"] = "GPIO27"
+        payload["encoder_sw_pin_encoder-1"] = "GPIO22"
+
+        def capture_save(data):
+            captured["setup"] = data
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "app.save_setup", side_effect=capture_save
+        ):
+            response = self.client.post("/setup", data=payload, follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+        saved_buttons = captured["setup"]["buttons"]
+        self.assertEqual([button["encoder_event"] for button in saved_buttons], ["cw", "ccw", "press"])
+        self.assertTrue(all(button["input_mode"] == "encoder" for button in saved_buttons))
+        module = captured["setup"]["encoder_modules"][0]
+        self.assertEqual(module["clk_pin"], "GPIO17")
+        self.assertEqual(module["dt_pin"], "GPIO27")
+        self.assertEqual(module["sw_pin"], "GPIO22")
+
     def test_button_mapping_rows_keeps_power_press_type_locked_to_lang_without_assignment(self):
         setup = default_setup()
         setup["buttons"] = [entry for entry in setup["buttons"] if entry.get("name") != "Power on/off"]
@@ -209,6 +241,17 @@ class AppRoutesTest(unittest.TestCase):
         self.assertIsNotNone(power_row)
         self.assertEqual(power_row["press_type"], "lang")
         self.assertTrue(power_row["press_type_locked"])
+
+    def test_mapping_errors_require_encoder_pins_for_rotation(self):
+        setup = default_setup()
+        setup["buttons"] = [
+            {"id": "btn-1", "name": "Lautstärke +", "pin": "", "press_type": "kurz", "input_mode": "encoder", "encoder_slot": "encoder-1", "encoder_event": "cw"},
+            {"id": "btn-2", "name": "Lautstärke -", "pin": "", "press_type": "kurz", "input_mode": "encoder", "encoder_slot": "encoder-1", "encoder_event": "ccw"},
+        ]
+
+        errors = app_module.mapping_errors(setup)
+
+        self.assertTrue(any("CLK" in error and "DT" in error for error in errors))
 
     def test_api_settings_returns_stable_json_contract(self):
         with patch("app.load_settings", return_value=app_module.default_settings()), patch("app.save_settings") as save_settings:
@@ -400,6 +443,29 @@ class AppRoutesTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         prepare_inputs.assert_called_once_with(["GPIO17"])
+
+    def test_encoder_debug_endpoint_returns_gpio_levels_and_runtime_snapshot(self):
+        setup = default_setup()
+        setup["encoder_modules"][0]["clk_pin"] = "GPIO17"
+        setup["encoder_modules"][0]["dt_pin"] = "GPIO27"
+        setup["encoder_modules"][0]["sw_pin"] = "GPIO18"
+        runtime_snapshot = {
+            "last_event": "GPIO erkannt",
+            "last_event_at": 123,
+            "hardware": {"last_button": "Lautstärke +", "last_button_press_type": "kurz", "pressed_buttons": ["GPIO18"]},
+        }
+
+        with patch("app.load_setup", return_value=setup), patch("app.sample_gpio_levels", return_value={"GPIO17": 1, "GPIO27": 0, "GPIO18": 1}), patch(
+            "app.runtime_service.ensure_runtime", return_value=runtime_snapshot
+        ):
+            response = self.client.get("/api/setup/encoder-debug")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["modules"][0]["clk_level"], 1)
+        self.assertEqual(payload["modules"][0]["dt_level"], 0)
+        self.assertEqual(payload["last_button"], "Lautstärke +")
 
     def test_cross_role_pin_errors_detect_button_led_overlap(self):
         setup = default_setup()

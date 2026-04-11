@@ -12,8 +12,7 @@ from runtime.service import RuntimeService
 
 def main():
     service = RuntimeService()
-    state = service.tick()
-    print(state["runtime"]["last_event"])
+    service.tick()
     return 0
 
 

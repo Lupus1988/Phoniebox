@@ -117,6 +117,7 @@ def default_runtime_state():
             "last_button": "",
             "last_button_press_type": "",
             "pressed_buttons": [],
+            "encoder_debug": [],
             "profile": {},
         },
         "led_status": [],
@@ -170,6 +171,8 @@ class RuntimeService:
     SLEEP_TIMER_FADE_SECONDS = 5.0
     SLEEP_TIMER_FADE_STEPS = 10
     PRESENCE_READER_TYPES = {"RC522", "PN532_SPI"}
+    ENCODER_ROTATION_EVENTS = {"cw", "ccw"}
+    ENCODER_STEP_DEBOUNCE_SECONDS = 0.04
 
     def __init__(self):
         self.runtime_path = RUNTIME_FILE
@@ -180,6 +183,7 @@ class RuntimeService:
         self._configured_gpio_pins = set()
         self._idle_low_gpio_pins = set()
         self._button_poll_state = {}
+        self._encoder_poll_state = {}
         self._last_pressed_pins = []
         self._sysfs_gpio = SysfsGPIOInput()
         self._hardware_profile_cache = None
@@ -565,9 +569,44 @@ class RuntimeService:
         self.save_runtime(runtime_state)
         self._last_pressed_pins = pins
 
+    def _append_encoder_debug_sample(self, setup, slot, clk_level, dt_level, direction="", action_name=""):
+        runtime_state = self.ensure_runtime()
+        modules = self._encoder_module_map(setup)
+        module = modules.get(slot, {})
+        samples = list(runtime_state.get("hardware", {}).get("encoder_debug", []) or [])
+        samples.insert(
+            0,
+            {
+                "slot": slot,
+                "label": module.get("label", slot) if module else slot,
+                "clk": int(clk_level),
+                "dt": int(dt_level),
+                "direction": direction,
+                "action": action_name,
+                "at": int(time.time()),
+            },
+        )
+        runtime_state["hardware"]["encoder_debug"] = samples[:20]
+        self.save_runtime(runtime_state)
+
     def _button_mapping_for_pin(self, setup, pin, press_type):
         for button in setup.get("buttons", []):
             if button.get("pin", "").strip() != pin:
+                continue
+            if (button.get("input_mode") or "").strip() == "encoder":
+                continue
+            if button.get("press_type", "kurz") != press_type:
+                continue
+            return button.get("name", "")
+        modules = self._encoder_module_map(setup)
+        for button in setup.get("buttons", []):
+            if (button.get("input_mode") or "").strip() != "encoder":
+                continue
+            if (button.get("encoder_event") or "press").strip() != "press":
+                continue
+            slot = (button.get("encoder_slot") or "").strip()
+            module = modules.get(slot, {})
+            if module.get("sw_pin", "").strip() != pin:
                 continue
             if button.get("press_type", "kurz") != press_type:
                 continue
@@ -586,6 +625,74 @@ class RuntimeService:
     def _is_power_hold_pin(self, setup, pin):
         mapped = self._button_mapping_for_pin(setup, pin, "lang")
         return mapped.strip().lower() in {"power on/off", "sleep/power"}
+
+    def _encoder_module_map(self, setup):
+        modules = {}
+        for module in setup.get("encoder_modules", []) or []:
+            slot = (module.get("id") or "").strip()
+            if not slot:
+                continue
+            modules[slot] = {
+                "label": (module.get("label") or slot).strip(),
+                "clk_pin": (module.get("clk_pin") or "").strip(),
+                "dt_pin": (module.get("dt_pin") or "").strip(),
+                "sw_pin": (module.get("sw_pin") or "").strip(),
+            }
+        return modules
+
+    def _encoder_rotation_assignments(self, setup):
+        assignments = {}
+        for button in setup.get("buttons", []):
+            if (button.get("input_mode") or "").strip() != "encoder":
+                continue
+            event = (button.get("encoder_event") or "press").strip()
+            if event not in self.ENCODER_ROTATION_EVENTS:
+                continue
+            slot = (button.get("encoder_slot") or "").strip()
+            if not slot:
+                continue
+            assignments.setdefault(slot, {})[event] = button.get("name", "")
+        return assignments
+
+    def _poll_encoder_rotations(self, setup, levels, now):
+        modules = self._encoder_module_map(setup)
+        assignments = self._encoder_rotation_assignments(setup)
+        active_slots = set(assignments)
+        for slot in list(self._encoder_poll_state):
+            if slot not in active_slots:
+                self._encoder_poll_state.pop(slot, None)
+
+        for slot, slot_assignments in assignments.items():
+            module = modules.get(slot, {})
+            clk_pin = module.get("clk_pin", "")
+            dt_pin = module.get("dt_pin", "")
+            if not clk_pin or not dt_pin:
+                continue
+            if clk_pin not in levels or dt_pin not in levels:
+                continue
+            clk_level = int(levels[clk_pin])
+            dt_level = int(levels[dt_pin])
+            state = self._encoder_poll_state.setdefault(
+                slot,
+                {"clk": clk_level, "dt": dt_level, "last_event_at": 0.0},
+            )
+            previous_clk = state.get("clk")
+            state["clk"] = clk_level
+            state["dt"] = dt_level
+            if previous_clk is None:
+                continue
+            if previous_clk == 1 and clk_level == 0:
+                if now - float(state.get("last_event_at", 0.0) or 0.0) < self.ENCODER_STEP_DEBOUNCE_SECONDS:
+                    continue
+                direction = "cw" if dt_level != clk_level else "ccw"
+            else:
+                continue
+            action_name = slot_assignments.get(direction, "").strip()
+            self._append_encoder_debug_sample(setup, slot, clk_level, dt_level, direction=direction, action_name=action_name)
+            if not action_name:
+                continue
+            self.trigger_button(action_name, press_type="kurz")
+            state["last_event_at"] = now
 
     def _update_power_hold_state(self, runtime_state, pin, now, released=False):
         with self.state_transaction():
@@ -713,9 +820,26 @@ class RuntimeService:
                 self.save_runtime(runtime_state)
             return
 
+        encoder_modules = self._encoder_module_map(setup)
+        encoder_press_pins = {
+            module.get("sw_pin", "").strip()
+            for module in encoder_modules.values()
+            if module.get("sw_pin", "").strip()
+        }
+        normal_button_pins = {
+            button.get("pin", "").strip()
+            for button in setup.get("buttons", [])
+            if button.get("pin", "").strip() and (button.get("input_mode") or "").strip() != "encoder"
+        }
+        encoder_rotation_pins = {
+            pin
+            for module in encoder_modules.values()
+            for pin in (module.get("clk_pin", "").strip(), module.get("dt_pin", "").strip())
+            if pin
+        }
         configured_pins = sorted(
             filter_reserved_gpio_names(
-                {button.get("pin", "").strip() for button in setup.get("buttons", []) if button.get("pin", "").strip()},
+                normal_button_pins | encoder_press_pins | encoder_rotation_pins,
                 setup,
             )
         )
@@ -724,12 +848,13 @@ class RuntimeService:
             self._set_pressed_buttons([])
             return
 
+        active_button_pins = set(filter_reserved_gpio_names(normal_button_pins | encoder_press_pins, setup))
         for pin in list(self._button_poll_state):
-            if pin not in configured_pins:
+            if pin not in active_button_pins:
                 self._button_poll_state.pop(pin, None)
 
         pressed_now = []
-        for pin in configured_pins:
+        for pin in active_button_pins:
             level = levels.get(pin)
             if level is None:
                 continue
@@ -739,7 +864,7 @@ class RuntimeService:
                 pressed_now.append(pin)
         self._set_pressed_buttons(pressed_now)
 
-        for pin in configured_pins:
+        for pin in active_button_pins:
             level = levels.get(pin)
             if level is None:
                 continue
@@ -793,6 +918,7 @@ class RuntimeService:
                 continue
             self.trigger_gpio_pin(pin, press_type="kurz", held_seconds=held_seconds)
             state["long_triggered"] = False
+        self._poll_encoder_rotations(setup, levels, button_now)
 
     def poll_buttons_forever(self, interval_seconds=None):
         interval = float(interval_seconds if interval_seconds is not None else self.button_poll_interval_seconds())
@@ -925,6 +1051,16 @@ class RuntimeService:
         desired = self._desired_wifi_state(runtime_state)
         if not runtime_state.get("powered_on", True):
             runtime_state["wifi_enabled"] = False
+        current_enabled = bool(runtime_state.get("hardware", {}).get("wifi_enabled", self._wifi_enabled_cache))
+        cache_age = time.monotonic() - float(self._wifi_enabled_cached_at or 0.0)
+        if cache_age < self.WIFI_STATE_TTL_SECONDS:
+            current_enabled = bool(self._wifi_enabled_cache)
+        else:
+            current_enabled = self._wifi_radio_enabled_cached(force_refresh=True)
+        if current_enabled == bool(desired):
+            runtime_state["hardware"]["wifi_enabled"] = current_enabled
+            return runtime_state
+
         result = set_wifi_radio(desired)
         if result.get("ok"):
             self._wifi_enabled_cache = bool(desired)
@@ -1874,13 +2010,11 @@ class RuntimeService:
             runtime_state = self.add_event(runtime_state, "Hardwaretasten deaktiviert")
             self.save_runtime(runtime_state)
             return {"runtime": runtime_state, "player": self.load_player()}
-        for button in setup.get("buttons", []):
-            if button.get("pin", "").strip() == pin:
-                if button.get("press_type", "kurz") != press_type:
-                    continue
-                runtime_state = self.add_event(runtime_state, f"GPIO erkannt: {pin} -> {button.get('name', '')}")
-                self.save_runtime(runtime_state)
-                return self.trigger_button(button.get("name", ""), press_type)
+        mapped_name = self._button_mapping_for_pin(setup, pin, press_type)
+        if mapped_name:
+            runtime_state = self.add_event(runtime_state, f"GPIO erkannt: {pin} -> {mapped_name}")
+            self.save_runtime(runtime_state)
+            return self.trigger_button(mapped_name, press_type)
 
         runtime_state = self.add_event(runtime_state, f"GPIO erkannt ohne Zuordnung: {pin} ({press_type})", "warning")
         self.save_runtime(runtime_state)

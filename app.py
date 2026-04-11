@@ -124,6 +124,19 @@ BUTTON_FUNCTIONS = [
     "Power on/off",
 ]
 POWER_BUTTON_NAMES = {"Power on/off", "Sleep/Power"}
+ENCODER_SLOT_OPTIONS = [
+    {"id": "encoder-1", "label": "Modul 1"},
+    {"id": "encoder-2", "label": "Modul 2"},
+]
+ENCODER_SLOT_IDS = {option["id"] for option in ENCODER_SLOT_OPTIONS}
+ENCODER_EVENT_OPTIONS = [
+    {"id": "cw", "label": "Dreh rechts"},
+    {"id": "ccw", "label": "Dreh links"},
+    {"id": "press", "label": "Drucktaster"},
+]
+ENCODER_EVENT_IDS = {option["id"] for option in ENCODER_EVENT_OPTIONS}
+ENCODER_ROTATION_EVENTS = {"cw", "ccw"}
+ENCODER_EVENT_LABELS = {option["id"]: option["label"] for option in ENCODER_EVENT_OPTIONS}
 LED_FUNCTIONS = ["power_on", "standby", "sleep_1", "sleep_2", "sleep_3", "wifi_on"]
 POWER_ROUTINE_OPTIONS = [
     {
@@ -261,16 +274,20 @@ def default_setup():
         "hardware_buttons_enabled": False,
         "button_long_press_seconds": 2,
         "buttons": [
-            {"id": "btn-1", "name": "Play/Pause", "pin": "", "press_type": "kurz"},
-            {"id": "btn-2", "name": "Stopp", "pin": "", "press_type": "kurz"},
-            {"id": "btn-3", "name": "Vor", "pin": "", "press_type": "kurz"},
-            {"id": "btn-4", "name": "Zurück", "pin": "", "press_type": "kurz"},
-            {"id": "btn-5", "name": "Lautstärke +", "pin": "", "press_type": "kurz"},
-            {"id": "btn-6", "name": "Lautstärke -", "pin": "", "press_type": "kurz"},
-            {"id": "btn-7", "name": "Sleep Timer +", "pin": "", "press_type": "kurz"},
-            {"id": "btn-8", "name": "Sleep Timer -", "pin": "", "press_type": "kurz"},
-            {"id": "btn-9", "name": "Wifi on/off", "pin": "", "press_type": "kurz"},
-            {"id": "btn-10", "name": "Power on/off", "pin": "", "press_type": "lang"},
+            {"id": "btn-1", "name": "Play/Pause", "pin": "", "press_type": "kurz", "input_mode": "button", "encoder_slot": "", "encoder_event": "press"},
+            {"id": "btn-2", "name": "Stopp", "pin": "", "press_type": "kurz", "input_mode": "button", "encoder_slot": "", "encoder_event": "press"},
+            {"id": "btn-3", "name": "Vor", "pin": "", "press_type": "kurz", "input_mode": "button", "encoder_slot": "", "encoder_event": "press"},
+            {"id": "btn-4", "name": "Zurück", "pin": "", "press_type": "kurz", "input_mode": "button", "encoder_slot": "", "encoder_event": "press"},
+            {"id": "btn-5", "name": "Lautstärke +", "pin": "", "press_type": "kurz", "input_mode": "button", "encoder_slot": "", "encoder_event": "press"},
+            {"id": "btn-6", "name": "Lautstärke -", "pin": "", "press_type": "kurz", "input_mode": "button", "encoder_slot": "", "encoder_event": "press"},
+            {"id": "btn-7", "name": "Sleep Timer +", "pin": "", "press_type": "kurz", "input_mode": "button", "encoder_slot": "", "encoder_event": "press"},
+            {"id": "btn-8", "name": "Sleep Timer -", "pin": "", "press_type": "kurz", "input_mode": "button", "encoder_slot": "", "encoder_event": "press"},
+            {"id": "btn-9", "name": "Wifi on/off", "pin": "", "press_type": "kurz", "input_mode": "button", "encoder_slot": "", "encoder_event": "press"},
+            {"id": "btn-10", "name": "Power on/off", "pin": "", "press_type": "lang", "input_mode": "button", "encoder_slot": "", "encoder_event": "press"},
+        ],
+        "encoder_modules": [
+            {"id": "encoder-1", "label": "Modul 1", "clk_pin": "", "dt_pin": "", "sw_pin": ""},
+            {"id": "encoder-2", "label": "Modul 2", "clk_pin": "", "dt_pin": "", "sw_pin": ""},
         ],
         "leds": [
             {"id": "led-1", "name": "Power", "pin": "", "function": "power_on", "brightness": 50},
@@ -331,6 +348,85 @@ def factory_wifi_defaults():
 
 def default_apply_report():
     return {"ok": True, "summary": "Noch nicht angewendet.", "details": []}
+
+
+def default_encoder_modules():
+    return [dict(option, clk_pin="", dt_pin="", sw_pin="") for option in ENCODER_SLOT_OPTIONS]
+
+
+def normalize_encoder_slot(value):
+    normalized = (value or "").strip()
+    return normalized if normalized in ENCODER_SLOT_IDS else ""
+
+
+def normalize_encoder_event(value):
+    normalized = (value or "press").strip()
+    return normalized if normalized in ENCODER_EVENT_IDS else "press"
+
+
+def encoder_binding_value(slot, event):
+    slot = normalize_encoder_slot(slot)
+    event = normalize_encoder_event(event)
+    if not slot:
+        return ""
+    return f"encoder:{slot}:{event}"
+
+
+def parse_encoder_binding_value(value):
+    raw = (value or "").strip()
+    if not raw.startswith("encoder:"):
+        return None
+    parts = raw.split(":")
+    if len(parts) != 3:
+        return None
+    slot = normalize_encoder_slot(parts[1])
+    event = normalize_encoder_event(parts[2])
+    if not slot:
+        return None
+    return {"slot": slot, "event": event}
+
+
+def normalize_button_entry(button, fallback_name=""):
+    entry = dict(button or {})
+    entry["name"] = (entry.get("name") or fallback_name or "").strip()
+    entry["pin"] = (entry.get("pin") or "").strip()
+    entry["input_mode"] = "encoder" if (entry.get("input_mode") or "").strip() == "encoder" else "button"
+    entry["encoder_slot"] = normalize_encoder_slot(entry.get("encoder_slot"))
+    entry["encoder_event"] = normalize_encoder_event(entry.get("encoder_event"))
+    binding = parse_encoder_binding_value(entry.get("pin"))
+    if binding:
+        entry["input_mode"] = "encoder"
+        entry["encoder_slot"] = binding["slot"]
+        entry["encoder_event"] = binding["event"]
+        entry["pin"] = ""
+    entry["press_type"] = (entry.get("press_type") or "kurz").strip() or "kurz"
+    if entry["input_mode"] != "encoder":
+        entry["encoder_slot"] = ""
+        entry["encoder_event"] = "press"
+    if entry["input_mode"] == "encoder" and entry["encoder_event"] in ENCODER_ROTATION_EVENTS:
+        entry["press_type"] = "kurz"
+    if entry["name"] in POWER_BUTTON_NAMES:
+        entry["press_type"] = "lang"
+    return entry
+
+
+def normalize_encoder_modules(modules):
+    provided = {}
+    for module in modules or []:
+        slot_id = normalize_encoder_slot((module or {}).get("id"))
+        if not slot_id:
+            continue
+        provided[slot_id] = {
+            "id": slot_id,
+            "label": next((option["label"] for option in ENCODER_SLOT_OPTIONS if option["id"] == slot_id), slot_id),
+            "clk_pin": ((module or {}).get("clk_pin") or "").strip(),
+            "dt_pin": ((module or {}).get("dt_pin") or "").strip(),
+            "sw_pin": ((module or {}).get("sw_pin") or "").strip(),
+        }
+    normalized = []
+    for option in ENCODER_SLOT_OPTIONS:
+        normalized.append(provided.get(option["id"], {"id": option["id"], "label": option["label"], "clk_pin": "", "dt_pin": "", "sw_pin": ""}))
+    return normalized
 
 
 def default_button_detect():
@@ -543,9 +639,10 @@ def normalize_setup_data(data):
     )
     buttons = data.get("buttons", [])
     if isinstance(buttons, list):
-        for button in buttons:
-            if button.get("name", "").strip() in POWER_BUTTON_NAMES:
-                button["press_type"] = "lang"
+        data["buttons"] = [normalize_button_entry(button, button.get("name", "")) for button in buttons]
+    else:
+        data["buttons"] = [normalize_button_entry(button, button.get("name", "")) for button in default_setup()["buttons"]]
+    data["encoder_modules"] = normalize_encoder_modules(data.get("encoder_modules", []))
     power_routines = data.setdefault("power_routines", {})
     old_combined_suppress = power_routines.get("suppress_shutdown_sound_for_sleep_timer", False)
     power_routines["auto_standby_enabled"] = power_routines.get("auto_standby_enabled") in {"on", True, "true", "1", 1}
@@ -1049,7 +1146,13 @@ def get_wifi_snapshot():
 
 
 def assigned_button_pins(setup_data):
-    return {button.get("pin", "").strip() for button in setup_data.get("buttons", []) if button.get("pin", "").strip()}
+    pins = {button.get("pin", "").strip() for button in setup_data.get("buttons", []) if button.get("pin", "").strip()}
+    for module in setup_data.get("encoder_modules", []) or []:
+        for key in ("clk_pin", "dt_pin", "sw_pin"):
+            pin = (module.get(key) or "").strip()
+            if pin:
+                pins.add(pin)
+    return pins
 
 
 def assigned_led_pins(setup_data):
@@ -1099,11 +1202,13 @@ def normalize_power_routine_id(kind, routine_id):
 
 def collect_conflicts(setup_data):
     warnings = []
-    buttons = setup_data.get("buttons", [])
+    buttons = [normalize_button_entry(button, button.get("name", "")) for button in setup_data.get("buttons", [])]
     leds = setup_data.get("leds", [])
 
     button_pins = {}
     for button in buttons:
+        if button.get("input_mode") == "encoder":
+            continue
         pin = button.get("pin", "").strip()
         press_type = button.get("press_type", "kurz").strip() or "kurz"
         function_name = button.get("name", "Taste").strip() or "Taste"
@@ -1126,7 +1231,19 @@ def collect_conflicts(setup_data):
         if len(names) > 1:
             warnings.append(f"LED-PIN {pin} ist mehrfach belegt: {', '.join(names)}")
 
-    overlap = set(button_pins) & set(led_pins)
+    encoder_pins = {}
+    for module in normalize_encoder_modules(setup_data.get("encoder_modules", [])):
+        label = module.get("label", module.get("id", "Modul"))
+        for signal_name, signal_pin in (("CLK", "clk_pin"), ("DT", "dt_pin"), ("SW", "sw_pin")):
+            pin = (module.get(signal_pin) or "").strip()
+            if not pin:
+                continue
+            encoder_pins.setdefault(pin, []).append(f"{label} {signal_name}")
+    for pin, names in encoder_pins.items():
+        if len(names) > 1:
+            warnings.append(f"Encoder-PIN {pin} ist mehrfach belegt: {', '.join(names)}")
+
+    overlap = (set(button_pins) | set(encoder_pins)) & set(led_pins)
     for pin in sorted(overlap):
         warnings.append(f"PIN {pin} ist gleichzeitig für Taste und LED vergeben und muss neu zugeordnet werden.")
 
@@ -1144,6 +1261,11 @@ def collect_conflicts(setup_data):
             warnings.append(f"LED {', '.join(names)} muss neu zugeordnet werden. {pin} ist für Reader reserviert.")
         elif pin in potential:
             warnings.append(f"LED {', '.join(names)} sollte neu zugeordnet werden. {pin} ist grundsätzlich für Reader reserviert.")
+    for pin, names in encoder_pins.items():
+        if pin in reserved:
+            warnings.append(f"Encoder {', '.join(names)} muss neu zugeordnet werden. {pin} ist für Reader reserviert.")
+        elif pin in potential:
+            warnings.append(f"Encoder {', '.join(names)} sollte neu zugeordnet werden. {pin} ist grundsätzlich für Reader reserviert.")
 
     wifi = setup_data.get("wifi", {})
     if normalize_hotspot_security(wifi.get("hotspot_security")) == "wpa-psk" and len(wifi.get("hotspot_password", "")) < 8:
@@ -1154,12 +1276,15 @@ def collect_conflicts(setup_data):
 
 def mapping_errors(setup_data):
     errors = []
-    buttons = setup_data.get("buttons", [])
+    buttons = [normalize_button_entry(button, button.get("name", "")) for button in setup_data.get("buttons", [])]
+    modules = {module["id"]: module for module in normalize_encoder_modules(setup_data.get("encoder_modules", []))}
     pin_usage = {}
     for button in buttons:
         pin = button.get("pin", "").strip()
         press_type = button.get("press_type", "kurz").strip() or "kurz"
         function_name = button.get("name", "").strip()
+        if button.get("input_mode") == "encoder":
+            continue
         if not pin or not function_name:
             continue
         used_presses = pin_usage.setdefault(pin, set())
@@ -1168,6 +1293,42 @@ def mapping_errors(setup_data):
         used_presses.add(press_type)
         if len(used_presses) > 2:
             errors.append(f"GPIO {pin} ist zu oft belegt.")
+    exclusive_pin_usage = {}
+    encoder_assignment_by_slot = {}
+    for button in buttons:
+        if button.get("input_mode") != "encoder":
+            continue
+        slot = normalize_encoder_slot(button.get("encoder_slot"))
+        event = normalize_encoder_event(button.get("encoder_event"))
+        function_name = button.get("name", "").strip() or "Taste"
+        if not slot:
+            errors.append(f"{function_name} nutzt KY-040, aber es wurde kein Modul gewählt.")
+            continue
+        slot_assignments = encoder_assignment_by_slot.setdefault(slot, {})
+        if event in slot_assignments:
+            errors.append(f"{modules.get(slot, {}).get('label', slot)} hat {event} mehrfach zugeordnet.")
+        slot_assignments[event] = function_name
+        if function_name in POWER_BUTTON_NAMES and event in ENCODER_ROTATION_EVENTS:
+            errors.append("Power on/off kann nicht über Drehung eines KY-040 ausgelöst werden.")
+    for slot, assignment in encoder_assignment_by_slot.items():
+        module = modules.get(slot, {})
+        label = module.get("label", slot)
+        if any(event in assignment for event in ENCODER_ROTATION_EVENTS):
+            if not (module.get("clk_pin") or "").strip() or not (module.get("dt_pin") or "").strip():
+                errors.append(f"{label} braucht für Drehfunktionen sowohl CLK als auch DT.")
+        if "press" in assignment and not (module.get("sw_pin") or "").strip():
+            errors.append(f"{label} braucht für Drucktaster-Aktionen einen SW-PIN.")
+    for module in modules.values():
+        label = module.get("label", module.get("id", "Modul"))
+        for signal_name, signal_pin in (("CLK", "clk_pin"), ("DT", "dt_pin"), ("SW", "sw_pin")):
+            pin = (module.get(signal_pin) or "").strip()
+            if not pin:
+                continue
+            owner = exclusive_pin_usage.setdefault(pin, f"{label} {signal_name}")
+            if owner != f"{label} {signal_name}":
+                errors.append(f"GPIO {pin} ist mehrfach für Encoder-Signale belegt.")
+            if pin in pin_usage:
+                errors.append(f"GPIO {pin} ist bereits als normaler Taster belegt und kann nicht zusätzlich für einen KY-040 genutzt werden.")
     return errors
 
 
@@ -1384,23 +1545,25 @@ def collect_rows(prefix, columns):
 
 def default_button_rows():
     return [
-        {"id": "btn-1", "name": "Play/Pause", "pin": "", "press_type": "kurz"},
-        {"id": "btn-2", "name": "Stopp", "pin": "", "press_type": "kurz"},
-        {"id": "btn-3", "name": "Vor", "pin": "", "press_type": "kurz"},
-        {"id": "btn-4", "name": "Zurück", "pin": "", "press_type": "kurz"},
-        {"id": "btn-5", "name": "Lautstärke +", "pin": "", "press_type": "kurz"},
-        {"id": "btn-6", "name": "Lautstärke -", "pin": "", "press_type": "kurz"},
-        {"id": "btn-7", "name": "Sleep Timer +", "pin": "", "press_type": "kurz"},
-        {"id": "btn-8", "name": "Sleep Timer -", "pin": "", "press_type": "kurz"},
-        {"id": "btn-9", "name": "Wifi on/off", "pin": "", "press_type": "kurz"},
-        {"id": "btn-10", "name": "Power on/off", "pin": "", "press_type": "lang"},
+        normalize_button_entry({"id": "btn-1", "name": "Play/Pause"}, "Play/Pause"),
+        normalize_button_entry({"id": "btn-2", "name": "Stopp"}, "Stopp"),
+        normalize_button_entry({"id": "btn-3", "name": "Vor"}, "Vor"),
+        normalize_button_entry({"id": "btn-4", "name": "Zurück"}, "Zurück"),
+        normalize_button_entry({"id": "btn-5", "name": "Lautstärke +"}, "Lautstärke +"),
+        normalize_button_entry({"id": "btn-6", "name": "Lautstärke -"}, "Lautstärke -"),
+        normalize_button_entry({"id": "btn-7", "name": "Sleep Timer +"}, "Sleep Timer +"),
+        normalize_button_entry({"id": "btn-8", "name": "Sleep Timer -"}, "Sleep Timer -"),
+        normalize_button_entry({"id": "btn-9", "name": "Wifi on/off"}, "Wifi on/off"),
+        normalize_button_entry({"id": "btn-10", "name": "Power on/off", "press_type": "lang"}, "Power on/off"),
     ]
 
 
 def available_press_types(rows, row_index):
-    current = rows[row_index] if row_index < len(rows) else {}
+    current = normalize_button_entry(rows[row_index], BUTTON_FUNCTIONS[row_index] if row_index < len(BUTTON_FUNCTIONS) else "") if row_index < len(rows) else {}
     if current.get("name", "").strip() in POWER_BUTTON_NAMES:
         return ["lang"]
+    if current.get("input_mode") == "encoder" and current.get("encoder_event") in ENCODER_ROTATION_EVENTS:
+        return ["kurz"]
     current_pin = current.get("pin", "").strip()
     if not current_pin:
         return ["kurz", "lang"]
@@ -1408,43 +1571,127 @@ def available_press_types(rows, row_index):
     for index, button in enumerate(rows):
         if index == row_index:
             continue
-        if button.get("pin", "").strip() == current_pin:
-            used.add(button.get("press_type", "kurz").strip() or "kurz")
+        normalized_button = normalize_button_entry(button, button.get("name", ""))
+        if normalized_button.get("input_mode") == "encoder":
+            continue
+        if normalized_button.get("pin", "").strip() == current_pin:
+            used.add(normalized_button.get("press_type", "kurz").strip() or "kurz")
     return [option for option in ["kurz", "lang"] if option not in used] or ["kurz", "lang"]
+
+
+def encoder_binding_options(setup_data):
+    options = []
+    for module in normalize_encoder_modules(setup_data.get("encoder_modules", [])):
+        slot = module.get("id", "")
+        label = module.get("label", slot)
+        if (module.get("clk_pin") or "").strip() and (module.get("dt_pin") or "").strip():
+            options.append({"value": encoder_binding_value(slot, "cw"), "label": f"{label.replace('Modul ', 'M')} Dreh rechts"})
+            options.append({"value": encoder_binding_value(slot, "ccw"), "label": f"{label.replace('Modul ', 'M')} Dreh links"})
+        if (module.get("sw_pin") or "").strip():
+            options.append({"value": encoder_binding_value(slot, "press"), "label": f"{label.replace('Modul ', 'M')} Drucktaster"})
+    return options
 
 
 def button_mapping_rows(setup_data):
     rows = []
     buttons = setup_data.get("buttons", []) or default_button_rows()
-    assignments = {button.get("name", ""): button for button in buttons}
+    assignments = {button.get("name", ""): normalize_button_entry(button, button.get("name", "")) for button in buttons}
     valid_pins = pin_choices(setup_data, "button")
+    encoder_options = encoder_binding_options(setup_data)
     base_rows = []
     for function_name in BUTTON_FUNCTIONS:
-        button = assignments.get(function_name, {"name": function_name, "pin": "", "press_type": "kurz"})
+        button = assignments.get(function_name, normalize_button_entry({"name": function_name}, function_name))
         base_rows.append(button)
     for index, button in enumerate(base_rows):
         function_name = button.get("name", "")
         current_pin = button.get("pin", "")
         press_type = button.get("press_type", "kurz") or "kurz"
+        encoder_enabled = button.get("input_mode") == "encoder"
+        encoder_event = normalize_encoder_event(button.get("encoder_event"))
+        selected_pin_value = encoder_binding_value(button.get("encoder_slot"), encoder_event) if encoder_enabled else current_pin
         if function_name in POWER_BUTTON_NAMES:
             press_type = "lang"
         pin_options = list(valid_pins)
-        current_pin_invalid = bool(current_pin and current_pin not in valid_pins)
+        current_pin_invalid = bool(selected_pin_value and selected_pin_value not in valid_pins and selected_pin_value not in {option["value"] for option in encoder_options})
         if current_pin_invalid:
-            pin_options = [current_pin] + pin_options
+            pin_options = [selected_pin_value] + pin_options
+        press_type_locked = function_name in POWER_BUTTON_NAMES or (encoder_enabled and encoder_event in ENCODER_ROTATION_EVENTS)
         rows.append(
             {
                 "index": index,
                 "name": function_name,
                 "pin": current_pin,
+                "selected_pin_value": selected_pin_value,
                 "press_type": press_type,
                 "pin_options": pin_options,
+                "encoder_options": encoder_options,
                 "press_type_options": available_press_types(base_rows, index),
-                "press_type_locked": function_name in POWER_BUTTON_NAMES,
+                "press_type_locked": press_type_locked,
                 "pin_invalid": current_pin_invalid,
             }
         )
     return rows
+
+
+def encoder_module_rows(setup_data):
+    rows = []
+    modules = {module["id"]: module for module in normalize_encoder_modules(setup_data.get("encoder_modules", []))}
+    buttons = [normalize_button_entry(button, button.get("name", "")) for button in setup_data.get("buttons", [])]
+    usage = {}
+    for button in buttons:
+        if button.get("input_mode") != "encoder":
+            continue
+        slot = normalize_encoder_slot(button.get("encoder_slot"))
+        if not slot:
+            continue
+        usage.setdefault(slot, []).append(button.get("name", "Taste"))
+    for option in ENCODER_SLOT_OPTIONS:
+        module = modules.get(option["id"], {"id": option["id"], "label": option["label"], "clk_pin": "", "dt_pin": "", "sw_pin": ""})
+        rows.append(
+            {
+                "id": option["id"],
+                "label": option["label"],
+                "clk_pin": (module.get("clk_pin") or "").strip(),
+                "dt_pin": (module.get("dt_pin") or "").strip(),
+                "sw_pin": (module.get("sw_pin") or "").strip(),
+                "used_by": usage.get(option["id"], []),
+                "pin_options": pin_choices(setup_data, "button"),
+            }
+        )
+    return rows
+
+
+def encoder_debug_payload(setup_data):
+    modules = normalize_encoder_modules(setup_data.get("encoder_modules", []))
+    gpio_names = []
+    for module in modules:
+        for key in ("clk_pin", "dt_pin", "sw_pin"):
+            pin = (module.get(key) or "").strip()
+            if pin and pin not in gpio_names:
+                gpio_names.append(pin)
+    levels = sample_gpio_levels(gpio_names) if gpio_names else {}
+    runtime_state = runtime_service.ensure_runtime()
+    return {
+        "modules": [
+            {
+                "id": module["id"],
+                "label": module["label"],
+                "clk_pin": module.get("clk_pin", ""),
+                "dt_pin": module.get("dt_pin", ""),
+                "sw_pin": module.get("sw_pin", ""),
+                "clk_level": levels.get(module.get("clk_pin", "").strip()),
+                "dt_level": levels.get(module.get("dt_pin", "").strip()),
+                "sw_level": levels.get(module.get("sw_pin", "").strip()),
+            }
+            for module in modules
+        ],
+        "last_event": runtime_state.get("last_event", ""),
+        "last_event_at": runtime_state.get("last_event_at", 0),
+        "last_button": runtime_state.get("hardware", {}).get("last_button", ""),
+        "last_button_press_type": runtime_state.get("hardware", {}).get("last_button_press_type", ""),
+        "pressed_buttons": list(runtime_state.get("hardware", {}).get("pressed_buttons", []) or []),
+        "samples": list(runtime_state.get("hardware", {}).get("encoder_debug", []) or []),
+    }
 
 
 @app.route("/setup", methods=["GET", "POST"])
@@ -1479,22 +1726,48 @@ def setup():
             new_buttons = []
             row_count = to_int(request.form.get("button_count"), 0, 0, 50)
             for index in range(row_count):
-                pin = request.form.get(f"button_pin_{index}", "").strip()
                 function_name = BUTTON_FUNCTIONS[index] if index < len(BUTTON_FUNCTIONS) else ""
+                raw_pin = request.form.get(f"button_pin_{index}", "").strip()
+                encoder_binding = parse_encoder_binding_value(raw_pin)
+                pin = raw_pin if not encoder_binding else ""
                 press_type = request.form.get(f"button_press_type_{index}", "kurz").strip() or "kurz"
+                input_mode = "encoder" if encoder_binding else "button"
+                encoder_slot = encoder_binding["slot"] if encoder_binding else ""
+                encoder_event = encoder_binding["event"] if encoder_binding else "press"
                 if function_name in POWER_BUTTON_NAMES:
                     press_type = "lang"
-                if pin and function_name:
+                if input_mode == "encoder" and encoder_event in ENCODER_ROTATION_EVENTS:
+                    press_type = "kurz"
+                if function_name and (pin or input_mode == "encoder"):
                     new_buttons.append(
-                        {
-                            "id": f"btn-{len(new_buttons) + 1}",
-                            "name": function_name,
-                            "pin": pin,
-                            "press_type": press_type,
-                        }
+                        normalize_button_entry(
+                            {
+                                "id": f"btn-{len(new_buttons) + 1}",
+                                "name": function_name,
+                                "pin": pin,
+                                "press_type": press_type,
+                                "input_mode": input_mode,
+                                "encoder_slot": encoder_slot,
+                                "encoder_event": encoder_event,
+                            },
+                            function_name,
+                        )
                     )
+            encoder_modules = []
+            for option in ENCODER_SLOT_OPTIONS:
+                slot_id = option["id"]
+                encoder_modules.append(
+                    {
+                        "id": slot_id,
+                        "label": option["label"],
+                        "clk_pin": request.form.get(f"encoder_clk_pin_{slot_id}", "").strip(),
+                        "dt_pin": request.form.get(f"encoder_dt_pin_{slot_id}", "").strip(),
+                        "sw_pin": request.form.get(f"encoder_sw_pin_{slot_id}", "").strip(),
+                    }
+                )
             candidate = dict(data)
             candidate["buttons"] = new_buttons
+            candidate["encoder_modules"] = normalize_encoder_modules(encoder_modules)
             candidate["hardware_buttons_enabled"] = request.form.get("hardware_buttons_enabled") == "on"
             candidate["button_long_press_seconds"] = round(
                 to_float(
@@ -1512,6 +1785,7 @@ def setup():
                     flash(error, "error")
                 return redirect(url_for("setup"))
             data["buttons"] = new_buttons
+            data["encoder_modules"] = candidate["encoder_modules"]
             data["hardware_buttons_enabled"] = candidate["hardware_buttons_enabled"]
             data["button_long_press_seconds"] = candidate["button_long_press_seconds"]
             save_setup(data)
@@ -1755,6 +2029,8 @@ def setup():
         reader_management=reader_management,
         runtime_state=runtime_snapshot["runtime"],
         button_mapping_rows=button_mapping_rows(data),
+        encoder_module_rows=encoder_module_rows(data),
+        encoder_debug=encoder_debug_payload(data),
         reader_option=reader_management["target_option"],
         reader_reboot_notice=reader_reboot_notice,
     )
@@ -1806,6 +2082,13 @@ def api_setup_button_detect_status():
     payload = dict(session)
     payload.pop("message", None)
     return json_success(session.get("message", ""), **payload)
+
+
+@app.route("/api/setup/encoder-debug")
+def api_setup_encoder_debug():
+    setup_data = load_setup()
+    payload = encoder_debug_payload(setup_data)
+    return json_success("Encoder-Diagnose aktualisiert.", **payload)
 
 
 @app.route("/api/setup/led-blink", methods=["POST"])

@@ -2058,7 +2058,7 @@ dialog[data-power-routine-dialog]::backdrop {
 
 .mapping-table-head,
 .mapping-row {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr) minmax(0, 0.8fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.8fr);
 }
 
 .mapping-row > div {
@@ -2068,6 +2068,94 @@ dialog[data-power-routine-dialog]::backdrop {
 .mapping-row select {
   width: 100%;
   min-width: 0;
+}
+
+.encoder-modules-box,
+.encoder-module-table,
+.encoder-module-row {
+  display: grid;
+}
+
+.encoder-modules-box {
+  gap: 0.8rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+
+.encoder-modules-head {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.encoder-modules-head span,
+.encoder-module-label span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.encoder-module-table-head,
+.encoder-module-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, minmax(0, 0.85fr));
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.encoder-module-table {
+  gap: 0.75rem;
+}
+
+.encoder-module-label {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.encoder-debug-list,
+.encoder-debug-card,
+.encoder-debug-summary {
+  display: grid;
+}
+
+.encoder-debug-list {
+  gap: 0.75rem;
+}
+
+.encoder-debug-card {
+  gap: 0.2rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.encoder-debug-card span,
+.encoder-debug-summary span {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.encoder-debug-summary {
+  gap: 0.35rem;
+  margin-top: 0.9rem;
+}
+
+.encoder-debug-history {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.9rem;
+}
+
+.encoder-debug-history pre {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
 }
 
 .fixed-press-type {
@@ -2449,6 +2537,8 @@ dialog[data-sleep-rotation-dialog]::backdrop {
   .library-table-row,
   .mapping-table-head,
   .mapping-row,
+  .encoder-module-table-head,
+  .encoder-module-row,
   .led-table-head,
   .led-row {
     grid-template-columns: 1fr;

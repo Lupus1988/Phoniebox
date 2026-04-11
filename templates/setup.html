@@ -100,7 +100,7 @@
       </div>
       <div class="mapping-table-head">
         <div>Funktion</div>
-        <div>PIN</div>
+        <div>Direkter GPIO</div>
         <div>Tastendruck</div>
       </div>
       <div class="mapping-table">
@@ -109,19 +109,22 @@
             <div class="mapping-name">{{ row.name }}</div>
             <div>
               <select name="button_pin_{{ row.index }}" data-button-pin {% if not setup_data.hardware_buttons_enabled %}disabled{% endif %}>
-                <option value="" {% if not row.pin %}selected{% endif %}>-</option>
+                <option value="" {% if not row.selected_pin_value %}selected{% endif %}>-</option>
                 {% if row.pin_invalid %}
-                  <option value="{{ row.pin }}" selected>{{ row.pin }} · neu zuordnen</option>
+                  <option value="{{ row.selected_pin_value }}" selected>{{ row.selected_pin_value }} · neu zuordnen</option>
                 {% endif %}
                 {% for pin in row.pin_options %}
-                  <option value="{{ pin }}" {% if row.pin == pin %}selected{% endif %}>{{ pin }}</option>
+                  <option value="{{ pin }}" {% if row.selected_pin_value == pin %}selected{% endif %}>{{ pin }}</option>
+                {% endfor %}
+                {% for option in row.encoder_options %}
+                  <option value="{{ option.value }}" {% if row.selected_pin_value == option.value %}selected{% endif %}>{{ option.label }}</option>
                 {% endfor %}
               </select>
             </div>
             <div>
               {% if row.press_type_locked %}
                 <span class="fixed-press-type">{{ row.press_type }}</span>
-                <input type="hidden" name="button_press_type_{{ row.index }}" value="lang">
+                <input type="hidden" name="button_press_type_{{ row.index }}" value="{{ row.press_type }}">
               {% else %}
                 <select
                   name="button_press_type_{{ row.index }}"
@@ -136,6 +139,46 @@
             </div>
           </div>
         {% endfor %}
+      </div>
+      <div class="encoder-modules-box">
+        <div class="encoder-modules-head">
+          <strong>KY-040 Module</strong>
+          <span>Hier werden die echten GPIO-Anschlüsse des Encoders gesetzt: `CLK`, `DT` und optional `SW`. Wenn oben `KY-040 Modul` aktiv ist, kommt der GPIO also von hier und nicht aus der normalen PIN-Spalte.</span>
+        </div>
+        <div class="encoder-module-table-head">
+          <div>Modul</div>
+          <div>CLK</div>
+          <div>DT</div>
+          <div>SW</div>
+        </div>
+        <div class="encoder-module-table">
+          {% for module in encoder_module_rows %}
+            <div class="encoder-module-row">
+              <div class="encoder-module-label">
+                <strong>{{ module.label }}</strong>
+                <span>{% if module.used_by %}genutzt von {{ module.used_by|join(", ") }}{% else %}noch ungenutzt{% endif %}</span>
+              </div>
+              <select name="encoder_clk_pin_{{ module.id }}" data-encoder-pin>
+                <option value="" {% if not module.clk_pin %}selected{% endif %}>-</option>
+                {% for pin in module.pin_options %}
+                  <option value="{{ pin }}" {% if module.clk_pin == pin %}selected{% endif %}>{{ pin }}</option>
+                {% endfor %}
+              </select>
+              <select name="encoder_dt_pin_{{ module.id }}" data-encoder-pin>
+                <option value="" {% if not module.dt_pin %}selected{% endif %}>-</option>
+                {% for pin in module.pin_options %}
+                  <option value="{{ pin }}" {% if module.dt_pin == pin %}selected{% endif %}>{{ pin }}</option>
+                {% endfor %}
+              </select>
+              <select name="encoder_sw_pin_{{ module.id }}" data-encoder-pin>
+                <option value="" {% if not module.sw_pin %}selected{% endif %}>-</option>
+                {% for pin in module.pin_options %}
+                  <option value="{{ pin }}" {% if module.sw_pin == pin %}selected{% endif %}>{{ pin }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          {% endfor %}
+        </div>
       </div>
       <div class="mapping-actions">
         <div class="mapping-actions-left">
@@ -188,12 +231,39 @@
           <h3>Tastenerkennung</h3>
           <span class="detect-head-timer" data-detect-timer hidden></span>
         </div>
-        <p class="page-copy">aktiviere die tastenerkennung um zu überprüfen an welchem Pin deine Hardware-Tasten angeschlossen sind.</p>
+        <p class="page-copy">Aktiviere die Tastenerkennung, um herauszufinden, an welchem GPIO deine Taste oder ein `KY-040`-Signal hängt. Für Encoder einfach drehen oder drücken.</p>
         <div class="button-detect-grid">
           <div class="detect-display">
             <strong data-detect-result>-</strong>
           </div>
           <button class="primary" type="button" data-detect-start>Taste erkennen</button>
+        </div>
+      </article>
+
+      <article class="panel-box" data-encoder-debug>
+        <div class="panel-box-head">
+          <h3>Encoder-Diagnose</h3>
+          <button class="button-like" type="button" data-encoder-refresh>Aktualisieren</button>
+        </div>
+        <div class="encoder-debug-list" data-encoder-modules>
+          {% for module in encoder_debug.modules %}
+            <div class="encoder-debug-card">
+              <strong>{{ module.label }}</strong>
+              <span>CLK: {{ module.clk_pin or "-" }} = <b data-encoder-clk="{{ module.id }}">{{ module.clk_level if module.clk_level is not none else "-" }}</b></span>
+              <span>DT: {{ module.dt_pin or "-" }} = <b data-encoder-dt="{{ module.id }}">{{ module.dt_level if module.dt_level is not none else "-" }}</b></span>
+              <span>SW: {{ module.sw_pin or "-" }} = <b data-encoder-sw="{{ module.id }}">{{ module.sw_level if module.sw_level is not none else "-" }}</b></span>
+            </div>
+          {% endfor %}
+        </div>
+        <div class="encoder-debug-summary">
+          <span>Letzte Taste: <b data-encoder-last-button>{{ encoder_debug.last_button or "-" }}</b></span>
+          <span>Letztes Event: <b data-encoder-last-event>{{ encoder_debug.last_event or "-" }}</b></span>
+          <span>Gedrückt: <b data-encoder-pressed>{{ encoder_debug.pressed_buttons|join(", ") if encoder_debug.pressed_buttons else "-" }}</b></span>
+        </div>
+        <div class="encoder-debug-history">
+          <strong>Letzte Rohschritte</strong>
+          <pre data-encoder-samples>{% if encoder_debug.samples %}{% for sample in encoder_debug.samples %}{{ sample.label }} clk={{ sample.clk }} dt={{ sample.dt }} dir={{ sample.direction or "-" }} action={{ sample.action or "-" }}
+{% endfor %}{% else %}-{% endif %}</pre>
         </div>
       </article>
 
