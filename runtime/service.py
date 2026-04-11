@@ -587,14 +587,17 @@ class RuntimeService:
 
     def _update_power_hold_state(self, runtime_state, pin, now, released=False):
         with self.state_transaction():
+            runtime_state = self.ensure_runtime()
             hold = runtime_state.get("power_hold", {})
             if not hold.get("pressed") and not released:
-                routine = self._configured_power_routine(runtime_state.get("powered_on", True))
+                live_powered_on = bool(runtime_state.get("powered_on", True))
+                routine = self._configured_power_routine(live_powered_on)
+                mode = "pending_off" if live_powered_on else "pending_on"
                 hold.update(
                     {
                         "pressed": True,
                         "seconds": 0.0,
-                        "mode": "pending_off" if runtime_state.get("powered_on", True) else "pending_on",
+                        "mode": mode,
                         "pin": pin,
                         "started_at": now,
                         "trigger_seconds": float(self.button_long_press_seconds()),
@@ -608,10 +611,11 @@ class RuntimeService:
                 hold["seconds"] = max(0.0, now - float(hold.get("started_at", now)))
                 if not hold.get("completed") and hold.get("seconds", 0.0) >= float(hold.get("threshold_seconds", 0.0) or 0.0):
                     completed_hold = dict(hold)
-                    if runtime_state.get("powered_on", True):
-                        result = self.power_off(runtime_state=runtime_state, player=self.load_player())
-                    else:
+                    target_power_on = completed_hold.get("mode") == "pending_on"
+                    if target_power_on:
                         result = self.power_on(runtime_state=runtime_state, player=self.load_player())
+                    else:
+                        result = self.power_off(runtime_state=runtime_state, player=self.load_player())
                     runtime_state = result["runtime"]
                     completed_hold.update(
                         {
@@ -631,10 +635,11 @@ class RuntimeService:
                     # In der letzten Sekunde der Routine darf losgelassen werden.
                     release_ready_seconds = max(trigger_seconds, threshold_seconds - 1.0)
                     if not hold.get("completed") and hold.get("seconds", 0.0) >= release_ready_seconds:
-                        if runtime_state.get("powered_on", True):
-                            result = self.power_off(runtime_state=runtime_state, player=self.load_player())
-                        else:
+                        target_power_on = hold.get("mode") == "pending_on"
+                        if target_power_on:
                             result = self.power_on(runtime_state=runtime_state, player=self.load_player())
+                        else:
+                            result = self.power_off(runtime_state=runtime_state, player=self.load_player())
                         runtime_state = result["runtime"]
                 runtime_state["power_hold"] = merge_defaults({}, default_runtime_state()["power_hold"])
             else:
@@ -1232,7 +1237,11 @@ class RuntimeService:
 
     def _set_power_state(self, powered_on, runtime_state=None, player=None, event_message=None, reason="manual"):
         with self.state_transaction():
-            runtime_state = runtime_state or self.ensure_runtime()
+            persisted_runtime = self.ensure_runtime()
+            runtime_state = runtime_state or persisted_runtime
+            runtime_state["powered_on"] = bool(
+                persisted_runtime.get("powered_on", runtime_state.get("powered_on", True))
+            )
             player = player or self.load_player()
             runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
             current_powered_on = bool(runtime_state.get("powered_on", True))

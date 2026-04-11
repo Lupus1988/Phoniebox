@@ -1415,6 +1415,9 @@ def button_mapping_rows(setup_data):
     for index, button in enumerate(base_rows):
         function_name = button.get("name", "")
         current_pin = button.get("pin", "")
+        press_type = button.get("press_type", "kurz") or "kurz"
+        if function_name in POWER_BUTTON_NAMES:
+            press_type = "lang"
         pin_options = list(valid_pins)
         current_pin_invalid = bool(current_pin and current_pin not in valid_pins)
         if current_pin_invalid:
@@ -1424,7 +1427,7 @@ def button_mapping_rows(setup_data):
                 "index": index,
                 "name": function_name,
                 "pin": current_pin,
-                "press_type": button.get("press_type", "kurz") or "kurz",
+                "press_type": press_type,
                 "pin_options": pin_options,
                 "press_type_options": available_press_types(base_rows, index),
                 "press_type_locked": function_name in POWER_BUTTON_NAMES,

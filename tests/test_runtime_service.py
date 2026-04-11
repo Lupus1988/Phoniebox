@@ -347,6 +347,35 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertFalse(result["runtime"]["powered_on"])
         play_sound.assert_not_called()
 
+    def test_power_off_uses_persisted_runtime_state_when_snapshot_is_stale(self):
+        persisted = self.service.ensure_runtime()
+        persisted["powered_on"] = False
+        persisted["playback_state"] = "stopped"
+        self.service.save_runtime(persisted)
+
+        stale_runtime = dict(persisted)
+        stale_runtime["powered_on"] = True
+        stale_runtime["playback_state"] = "paused"
+
+        with patch.object(self.service, "play_system_sound", return_value={"ok": True, "details": ["ok"]}) as play_sound:
+            result = self.service.power_off(runtime_state=stale_runtime)
+
+        self.assertFalse(result["runtime"]["powered_on"])
+        play_sound.assert_not_called()
+
+    def test_power_hold_starts_in_pending_on_mode_when_runtime_is_in_standby(self):
+        persisted = self.service.ensure_runtime()
+        persisted["powered_on"] = False
+        persisted["playback_state"] = "stopped"
+        self.service.save_runtime(persisted)
+
+        stale_runtime = dict(persisted)
+        stale_runtime["powered_on"] = True
+
+        updated = self.service._update_power_hold_state(stale_runtime, "GPIO19", now=123.0, released=False)
+
+        self.assertEqual(updated["power_hold"]["mode"], "pending_on")
+
     def test_system_sound_uses_current_player_volume(self):
         write_json(
             self.data_dir / "player_state.json",

@@ -9,6 +9,7 @@ import app as app_module
 from app import (
     app,
     BUTTON_FUNCTIONS,
+    button_mapping_rows,
     create_app,
     collect_conflicts,
     cross_role_pin_errors,
@@ -197,6 +198,17 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(len(saved_buttons), 1)
         self.assertEqual(saved_buttons[0]["name"], "Power on/off")
         self.assertEqual(saved_buttons[0]["press_type"], "lang")
+
+    def test_button_mapping_rows_keeps_power_press_type_locked_to_lang_without_assignment(self):
+        setup = default_setup()
+        setup["buttons"] = [entry for entry in setup["buttons"] if entry.get("name") != "Power on/off"]
+
+        rows = button_mapping_rows(setup)
+        power_row = next((row for row in rows if row.get("name") == "Power on/off"), None)
+
+        self.assertIsNotNone(power_row)
+        self.assertEqual(power_row["press_type"], "lang")
+        self.assertTrue(power_row["press_type_locked"])
 
     def test_api_settings_returns_stable_json_contract(self):
         with patch("app.load_settings", return_value=app_module.default_settings()), patch("app.save_settings") as save_settings:
