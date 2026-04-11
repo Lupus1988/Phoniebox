@@ -482,6 +482,52 @@ class AppRoutesTest(unittest.TestCase):
         self.assertTrue(response.is_json)
         self.assertFalse(response.get_json()["ok"])
 
+    def test_import_album_xhr_uses_track_upload_flow(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+        album = {"id": "album-new", "name": "Neu", "folder": "media/albums/neu", "playlist": "media/albums/neu/playlist.m3u", "track_count": 1, "rfid_uid": "", "cover_url": ""}
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "routes.library.load_library", return_value={"albums": []}
+        ), patch("routes.library.create_album_with_tracks", return_value=album) as create_album_with_tracks:
+            response = self.client.post(
+                "/library",
+                data={"action": "import_album", "name": "Neu", "track_files": (BytesIO(b"fake"), "song.mp3")},
+                content_type="multipart/form-data",
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertIn("Titel hochgeladen", payload["message"])
+        create_album_with_tracks.assert_called_once()
+
+    def test_import_album_xhr_allows_empty_album_creation(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+        album = {"id": "album-empty", "name": "Leer", "folder": "media/albums/leer", "playlist": "media/albums/leer/playlist.m3u", "track_count": 0, "rfid_uid": "", "cover_url": ""}
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "routes.library.load_library", return_value={"albums": []}
+        ), patch("routes.library.create_empty_album", return_value=album) as create_empty_album, patch(
+            "routes.library.create_album_with_tracks"
+        ) as create_album_with_tracks:
+            response = self.client.post(
+                "/library",
+                data={"action": "import_album", "name": "Leer"},
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertIn("Leeres Album", payload["message"])
+        create_empty_album.assert_called_once_with("Leer", "")
+        create_album_with_tracks.assert_not_called()
+
     def test_add_tracks_xhr_returns_json_success(self):
         setup = default_setup()
         runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}

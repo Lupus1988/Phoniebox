@@ -645,6 +645,91 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(result["runtime"]["sleep_timer"]["level"], 0)
         self.assertEqual(result["runtime"]["last_event"], "Sleeptimer abgelaufen, Standby aktiv")
 
+    @patch.object(service_module.time, "sleep", return_value=None)
+    def test_sleep_timer_can_suppress_shutdown_sound(self, _sleep):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "buttons": [],
+                "leds": [],
+                "power_routines": {
+                    "power_on": "sleep_count_up_5",
+                    "power_off": "sleep_count_down_5",
+                    "startup_sound_enabled": True,
+                    "shutdown_sound_enabled": True,
+                    "suppress_shutdown_sound_for_sleep_timer": True,
+                },
+                "wifi": {},
+            },
+        )
+        self.service.load_album_by_id("album-1", autoplay=True)
+        self.service.set_sleep_level(1)
+        with patch.object(self.service, "play_system_sound", return_value={"ok": True, "details": ["ok"]}) as play_sound:
+            self.service.tick(elapsed_seconds=300)
+        play_sound.assert_not_called()
+
+    def test_inactivity_auto_standby_triggers_after_threshold(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "buttons": [],
+                "leds": [],
+                "power_routines": {
+                    "power_on": "sleep_count_up_5",
+                    "power_off": "sleep_count_down_5",
+                    "auto_standby_enabled": True,
+                    "auto_standby_minutes": 1,
+                    "startup_sound_enabled": True,
+                    "shutdown_sound_enabled": False,
+                    "suppress_shutdown_sound_for_sleep_timer": False,
+                },
+                "wifi": {},
+            },
+        )
+        state = self.service.ensure_runtime()
+        state["powered_on"] = True
+        state["playback_state"] = "paused"
+        state["last_activity_at"] = int(service_module.time.time()) - 120
+        self.service.save_runtime(state)
+
+        result = self.service.tick(elapsed_seconds=1)
+
+        self.assertFalse(result["runtime"]["powered_on"])
+        self.assertEqual(result["runtime"]["last_event"], "Inaktiv seit 1 Min, Standby aktiv")
+
+    def test_inactivity_auto_standby_can_suppress_shutdown_sound(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "buttons": [],
+                "leds": [],
+                "power_routines": {
+                    "power_on": "sleep_count_up_5",
+                    "power_off": "sleep_count_down_5",
+                    "auto_standby_enabled": True,
+                    "auto_standby_minutes": 1,
+                    "startup_sound_enabled": True,
+                    "shutdown_sound_enabled": True,
+                    "suppress_shutdown_sound_for_inactivity": True,
+                },
+                "wifi": {},
+            },
+        )
+        state = self.service.ensure_runtime()
+        state["powered_on"] = True
+        state["playback_state"] = "paused"
+        state["last_activity_at"] = int(service_module.time.time()) - 120
+        self.service.save_runtime(state)
+
+        with patch.object(self.service, "play_system_sound", return_value={"ok": True, "details": ["ok"]}) as play_sound:
+            result = self.service.tick(elapsed_seconds=1)
+
+        self.assertFalse(result["runtime"]["powered_on"])
+        play_sound.assert_not_called()
+
     def test_standby_led_only_lights_in_standby(self):
         write_json(
             self.data_dir / "setup.json",

@@ -8,8 +8,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const createNameInput = document.getElementById("album-create-name");
   const createWarning = document.getElementById("album-create-warning");
   const createForm = document.getElementById("album-create-form");
-  const folderInput = document.getElementById("album-folder-input");
-  const folderTrigger = document.getElementById("album-folder-trigger");
+  const createTrackInput = document.getElementById("album-track-input-create");
+  const createTrackTrigger = document.getElementById("album-track-trigger-create");
   const createUploadStatus = document.getElementById("album-create-upload-status");
   const createSubmitButton = document.getElementById("album-create-submit");
 
@@ -290,10 +290,135 @@ document.addEventListener("DOMContentLoaded", () => {
     return fallback;
   }
 
-  function bindUploadProgress(form, fileInput, statusRoot, submitButton, validate) {
+  async function parseJsonResponse(response) {
+    const raw = await response.text();
+    if (!raw) {
+      return {};
+    }
+    try {
+      return JSON.parse(raw);
+    } catch (_error) {
+      return {ok: false, message: raw.slice(0, 220)};
+    }
+  }
+
+  function uploadSingleTrack(uploadUrl, albumId, file, files, statusRoot, bytesDone, totalBytes, allowFallback = true) {
+    return new Promise((resolve, reject) => {
+      const formData = new FormData();
+      formData.append("action", "add_tracks");
+      formData.append("album_id", albumId);
+      formData.append("track_files", file, file.name || "track");
+
+      const request = new XMLHttpRequest();
+      request.open("POST", uploadUrl);
+      request.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+      request.upload.addEventListener("progress", (progressEvent) => {
+        if (!progressEvent.lengthComputable || totalBytes <= 0) {
+          return;
+        }
+        const ratio = Math.max(0, Math.min(1, (bytesDone + progressEvent.loaded) / totalBytes));
+        renderUploadTracker(statusRoot, files, ratio, false);
+      });
+      request.addEventListener("load", () => {
+        if (request.status === 404 && allowFallback && uploadUrl !== "/library") {
+          uploadSingleTrack("/library", albumId, file, files, statusRoot, bytesDone, totalBytes, false)
+            .then(resolve)
+            .catch(reject);
+          return;
+        }
+        if (request.status >= 200 && request.status < 300) {
+          let payload = null;
+          try {
+            payload = JSON.parse(request.responseText || "{}");
+          } catch (_error) {
+            payload = null;
+          }
+          if (!payload || payload.ok !== false) {
+            resolve(payload || {});
+            return;
+          }
+        }
+        reject(new Error(extractUploadErrorMessage(request)));
+      });
+      request.addEventListener("error", () => {
+        reject(new Error("Upload-Verbindung abgebrochen. Bitte erneut versuchen."));
+      });
+      request.send(formData);
+    });
+  }
+
+  function bindCreateAlbumUpload(form, fileInput, statusRoot, submitButton, validate) {
     if (!(form instanceof HTMLFormElement) || !(fileInput instanceof HTMLInputElement)) {
       return;
     }
+
+    form.addEventListener("submit", async (event) => {
+      if (typeof validate === "function" && !validate()) {
+        event.preventDefault();
+        return;
+      }
+
+      const files = Array.from(fileInput.files || []);
+      if (!files.length) {
+        // Leeres Album weiterhin als normaler Form-Submit.
+        return;
+      }
+
+      event.preventDefault();
+      submitButton?.setAttribute("disabled", "disabled");
+      renderUploadTracker(statusRoot, files, 0, false);
+
+      const createPayload = new FormData();
+      createPayload.append("action", "import_album");
+      createPayload.append("name", String(createNameInput?.value || "").trim());
+      const postUrl = form.getAttribute("action") || window.location.pathname || "/library";
+
+      try {
+        let createResponse = await fetch(postUrl, {
+          method: form.method || "POST",
+          headers: {"X-Requested-With": "XMLHttpRequest"},
+          body: createPayload,
+        });
+        if (createResponse.status === 404 && postUrl !== "/library") {
+          createResponse = await fetch("/library", {
+            method: form.method || "POST",
+            headers: {"X-Requested-With": "XMLHttpRequest"},
+            body: createPayload,
+          });
+        }
+        const createJson = await parseJsonResponse(createResponse);
+        if (!createResponse.ok || createJson.ok === false) {
+          throw new Error(createJson?.message || "Album konnte nicht angelegt werden.");
+        }
+
+        const albumId = String(createJson?.album?.id || "").trim();
+        if (!albumId) {
+          throw new Error("Album-ID fehlt in der Serverantwort.");
+        }
+
+        const totalBytes = files.reduce((sum, item) => sum + (item.size || 0), 0);
+        let bytesDone = 0;
+        for (const file of files) {
+          await uploadSingleTrack(postUrl, albumId, file, files, statusRoot, bytesDone, totalBytes);
+          bytesDone += file.size || 0;
+          const ratio = totalBytes > 0 ? Math.min(1, bytesDone / totalBytes) : 1;
+          renderUploadTracker(statusRoot, files, ratio, false);
+        }
+
+        renderUploadTracker(statusRoot, files, 1, true);
+        window.setTimeout(() => window.location.reload(), 280);
+      } catch (error) {
+        submitButton?.removeAttribute("disabled");
+        renderUploadError(statusRoot, files, error instanceof Error ? error.message : "Upload fehlgeschlagen.");
+      }
+    });
+  }
+
+  function bindUploadProgress(form, fileInput, statusRoot, submitButton, validate, options = {}) {
+    if (!(form instanceof HTMLFormElement) || !(fileInput instanceof HTMLInputElement)) {
+      return;
+    }
+    const useXhr = options.useXhr !== false;
 
     let fallbackSubmitting = false;
 
@@ -311,6 +436,19 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       const files = Array.from(fileInput.files || []);
       if (!files.length) {
+        return;
+      }
+      if (!useXhr) {
+        submitButton?.setAttribute("disabled", "disabled");
+        renderUploadTracker(statusRoot, files, 0, false);
+        const title = statusRoot?.querySelector?.("[data-upload-title]");
+        const summary = statusRoot?.querySelector?.("[data-upload-summary]");
+        if (title) {
+          title.textContent = "Upload gestartet";
+        }
+        if (summary) {
+          summary.textContent = "Bitte warten, die Titel werden verarbeitet.";
+        }
         return;
       }
 
@@ -342,11 +480,8 @@ document.addEventListener("DOMContentLoaded", () => {
         renderUploadError(statusRoot, files, extractUploadErrorMessage(request));
       });
       request.addEventListener("error", () => {
-        fallbackSubmitting = true;
-        renderUploadFallback(statusRoot, files, "Browser-Upload fehlgeschlagen. Standard-Upload wird gestartet.");
-        window.setTimeout(() => {
-          HTMLFormElement.prototype.submit.call(form);
-        }, 120);
+        submitButton?.removeAttribute("disabled");
+        renderUploadError(statusRoot, files, "Upload-Verbindung abgebrochen. Bitte erneut versuchen.");
       });
       request.send(new FormData(form));
     });
@@ -638,7 +773,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   createOpenButton?.addEventListener("click", openCreateModal);
-  folderTrigger?.addEventListener("click", () => folderInput?.click());
+  createTrackTrigger?.addEventListener("click", () => createTrackInput?.click());
   trackTrigger?.addEventListener("click", () => trackInput?.click());
   createNameInput?.addEventListener("input", () => {
     const hasConflict = createNameExists(createNameInput.value);
@@ -658,7 +793,13 @@ document.addEventListener("DOMContentLoaded", () => {
     createModalBody?.classList.add("create-warning-surface");
     createNameInput?.focus();
   });
-  bindUploadProgress(createForm, folderInput, createUploadStatus, createSubmitButton, () => !createNameExists(createNameInput?.value || ""));
+  bindCreateAlbumUpload(
+    createForm,
+    createTrackInput,
+    createUploadStatus,
+    createSubmitButton,
+    () => !createNameExists(createNameInput?.value || "")
+  );
 
   for (const closeButton of document.querySelectorAll("[data-close-create]")) {
     closeButton.addEventListener("click", closeCreateModal);

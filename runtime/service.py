@@ -124,6 +124,7 @@ def default_runtime_state():
         "playback_session": {},
         "event_log": [],
         "wifi_enabled": True,
+        "last_activity_at": int(time.time()),
     }
 
 
@@ -797,17 +798,70 @@ class RuntimeService:
             time.sleep(max(0.02, interval))
 
     def ensure_runtime(self):
+        defaults = default_runtime_state()
         if not self.runtime_path.exists():
-            self.save_runtime(default_runtime_state())
-        return self.load_runtime()
+            self.save_runtime(defaults)
+            return defaults
+        current = self.load_runtime()
+        merged = merge_defaults(current, defaults)
+        if merged != current:
+            self.save_runtime(merged)
+        return merged
 
-    def add_event(self, runtime_state, message, level="info"):
+    def add_event(self, runtime_state, message, level="info", mark_activity=True):
         runtime_state["last_event"] = message
         runtime_state["last_event_at"] = int(time.time())
+        if mark_activity:
+            runtime_state["last_activity_at"] = runtime_state["last_event_at"]
         event_log = list(runtime_state.get("event_log", []))
         event_log.insert(0, {"message": message, "level": level, "at": runtime_state["last_event_at"]})
         runtime_state["event_log"] = event_log[:20]
         return runtime_state
+
+    def _power_routine_settings(self):
+        setup = self.load_setup()
+        return dict((setup.get("power_routines") or {}))
+
+    def _should_play_power_sound(self, target_powered_on, reason):
+        routines = self._power_routine_settings()
+        if target_powered_on:
+            return bool(routines.get("startup_sound_enabled", True))
+        if not bool(routines.get("shutdown_sound_enabled", True)):
+            return False
+        if reason == "sleep_timer" and bool(routines.get("suppress_shutdown_sound_for_sleep_timer", False)):
+            return False
+        if reason == "inactivity" and bool(routines.get("suppress_shutdown_sound_for_inactivity", False)):
+            return False
+        return True
+
+    def _auto_standby_config(self):
+        routines = self._power_routine_settings()
+        enabled = bool(routines.get("auto_standby_enabled", False))
+        minutes = max(1, int(routines.get("auto_standby_minutes", 30) or 30))
+        return {"enabled": enabled, "minutes": minutes}
+
+    def _apply_inactivity_standby(self, runtime_state, player):
+        config = self._auto_standby_config()
+        if not config["enabled"] or not runtime_state.get("powered_on", True):
+            return runtime_state, player
+        if runtime_state.get("playback_state") == "playing":
+            return runtime_state, player
+        if int(runtime_state.get("sleep_timer", {}).get("remaining_seconds", 0) or 0) > 0:
+            return runtime_state, player
+
+        now = int(time.time())
+        last_activity_at = int(runtime_state.get("last_activity_at", runtime_state.get("last_event_at", now)) or now)
+        threshold_seconds = int(config["minutes"]) * 60
+        if now - last_activity_at < threshold_seconds:
+            return runtime_state, player
+
+        result = self.power_off(
+            runtime_state=runtime_state,
+            player=player,
+            event_message=f"Inaktiv seit {config['minutes']} Min, Standby aktiv",
+            reason="inactivity",
+        )
+        return result["runtime"], result["player"]
 
     def get_reader_behavior(self):
         settings = self.load_settings()
@@ -1139,6 +1193,8 @@ class RuntimeService:
                     runtime_state = result["runtime"]
                     player = result["player"]
 
+            runtime_state, player = self._apply_inactivity_standby(runtime_state, player)
+
             runtime_state = self.update_hardware_profile(runtime_state)
             runtime_state = self.apply_wifi_policy(runtime_state)
             runtime_state = self.update_led_status(runtime_state)
@@ -1174,7 +1230,7 @@ class RuntimeService:
             self.save_runtime(runtime_state)
             return runtime_state
 
-    def _set_power_state(self, powered_on, runtime_state=None, player=None, event_message=None):
+    def _set_power_state(self, powered_on, runtime_state=None, player=None, event_message=None, reason="manual"):
         with self.state_transaction():
             runtime_state = runtime_state or self.ensure_runtime()
             player = player or self.load_player()
@@ -1195,6 +1251,7 @@ class RuntimeService:
                 runtime_state["playback_state"] = "paused"
                 player["is_playing"] = False
                 message = event_message or "Power an"
+                runtime_state["last_activity_at"] = int(time.time())
             else:
                 runtime_state["playback_state"] = "stopped"
                 runtime_state["sleep_timer"]["remaining_seconds"] = 0
@@ -1211,14 +1268,27 @@ class RuntimeService:
             runtime_state = self.update_led_status(runtime_state)
             self.save_runtime(runtime_state)
             self.save_player(player)
-            self.play_system_sound("power_on" if target_powered_on else "power_off")
+            if self._should_play_power_sound(target_powered_on, reason):
+                self.play_system_sound("power_on" if target_powered_on else "power_off")
             return {"runtime": runtime_state, "player": player}
 
-    def power_off(self, runtime_state=None, player=None, event_message=None):
-        return self._set_power_state(False, runtime_state=runtime_state, player=player, event_message=event_message or "Standby aktiv")
+    def power_off(self, runtime_state=None, player=None, event_message=None, reason="manual"):
+        return self._set_power_state(
+            False,
+            runtime_state=runtime_state,
+            player=player,
+            event_message=event_message or "Standby aktiv",
+            reason=reason,
+        )
 
-    def power_on(self, runtime_state=None, player=None, event_message=None):
-        return self._set_power_state(True, runtime_state=runtime_state, player=player, event_message=event_message or "Power an")
+    def power_on(self, runtime_state=None, player=None, event_message=None, reason="manual"):
+        return self._set_power_state(
+            True,
+            runtime_state=runtime_state,
+            player=player,
+            event_message=event_message or "Power an",
+            reason=reason,
+        )
 
     def toggle_power(self):
         runtime_state = self.ensure_runtime()
@@ -1246,7 +1316,12 @@ class RuntimeService:
         player = player or self.load_player()
         runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
         runtime_state, player = self._fade_out_playback(runtime_state, player)
-        return self.power_off(runtime_state=runtime_state, player=player, event_message="Sleeptimer abgelaufen, Standby aktiv")
+        return self.power_off(
+            runtime_state=runtime_state,
+            player=player,
+            event_message="Sleeptimer abgelaufen, Standby aktiv",
+            reason="sleep_timer",
+        )
 
     def seek(self, position_seconds):
         with self.state_transaction():

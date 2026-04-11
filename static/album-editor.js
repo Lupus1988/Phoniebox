@@ -7,6 +7,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const albumNameForm = document.getElementById("album-name-form");
   const uploadForm = document.getElementById("album-upload-form");
   const trackInput = document.getElementById("album-track-input");
+  const uploadStatusRoot = document.getElementById("album-upload-status");
   const tableBody = document.getElementById("album-track-table-body");
   const selectionSummary = document.getElementById("track-selection-summary");
   const deleteButton = document.getElementById("track-delete-submit");
@@ -21,6 +22,113 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (!(appRoot instanceof HTMLElement) || !(tableBody instanceof HTMLElement) || !albumId) {
     return;
+  }
+
+  function formatBytes(bytes) {
+    const value = Number(bytes || 0);
+    if (value >= 1024 * 1024) {
+      return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+    }
+    if (value >= 1024) {
+      return `${Math.round(value / 1024)} KB`;
+    }
+    return `${value} B`;
+  }
+
+  function renderUploadTracker(files, progressRatio = 0, completed = false) {
+    if (!(uploadStatusRoot instanceof HTMLElement)) {
+      return;
+    }
+    const normalizedFiles = Array.from(files || []);
+    if (!normalizedFiles.length) {
+      uploadStatusRoot.hidden = true;
+      return;
+    }
+
+    const title = uploadStatusRoot.querySelector("[data-upload-title]");
+    const summary = uploadStatusRoot.querySelector("[data-upload-summary]");
+    const bar = uploadStatusRoot.querySelector("[data-upload-progress-bar]");
+    const list = uploadStatusRoot.querySelector("[data-upload-file-list]");
+    const totalBytes = normalizedFiles.reduce((sum, file) => sum + (file.size || 0), 0);
+    const loadedBytes = completed ? totalBytes : Math.max(0, Math.min(totalBytes, totalBytes * progressRatio));
+
+    uploadStatusRoot.hidden = false;
+    if (title) {
+      title.textContent = completed ? "Upload abgeschlossen" : "Upload läuft";
+    }
+    if (summary) {
+      summary.textContent = `${normalizedFiles.length} Titel · ${formatBytes(loadedBytes)} / ${formatBytes(totalBytes)}`;
+    }
+    if (bar instanceof HTMLElement) {
+      const percent = completed ? 100 : Math.round(progressRatio * 100);
+      bar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+    }
+    if (!(list instanceof HTMLElement)) {
+      return;
+    }
+
+    list.innerHTML = "";
+    let consumedBytes = 0;
+    for (const file of normalizedFiles) {
+      const size = file.size || 0;
+      const fileLoaded = completed ? size : Math.max(0, Math.min(size, loadedBytes - consumedBytes));
+      const fileRatio = size > 0 ? (fileLoaded / size) : (completed ? 1 : 0);
+      const row = document.createElement("div");
+      row.className = "upload-file-row";
+      row.classList.add(completed || fileRatio >= 1 ? "is-done" : fileRatio > 0 ? "is-active" : "is-pending");
+
+      const meta = document.createElement("div");
+      meta.className = "upload-file-meta";
+
+      const name = document.createElement("div");
+      name.className = "upload-file-name";
+      name.textContent = file.name;
+
+      const detail = document.createElement("div");
+      detail.className = "upload-file-detail";
+      detail.textContent = formatBytes(size);
+
+      const state = document.createElement("div");
+      state.className = "upload-file-state";
+      state.textContent = completed || fileRatio >= 1 ? "Fertig" : fileRatio > 0 ? `${Math.round(fileRatio * 100)}%` : "Wartet";
+
+      meta.appendChild(name);
+      meta.appendChild(detail);
+      row.appendChild(meta);
+      row.appendChild(state);
+      list.appendChild(row);
+      consumedBytes += size;
+    }
+  }
+
+  function renderUploadError(files, message) {
+    if (!(uploadStatusRoot instanceof HTMLElement)) {
+      return;
+    }
+    const normalizedFiles = Array.from(files || []);
+    if (!normalizedFiles.length) {
+      uploadStatusRoot.hidden = true;
+      return;
+    }
+    renderUploadTracker(normalizedFiles, 0, false);
+    const title = uploadStatusRoot.querySelector("[data-upload-title]");
+    const summary = uploadStatusRoot.querySelector("[data-upload-summary]");
+    const bar = uploadStatusRoot.querySelector("[data-upload-progress-bar]");
+    const list = uploadStatusRoot.querySelector("[data-upload-file-list]");
+    if (title) {
+      title.textContent = "Upload fehlgeschlagen";
+    }
+    if (summary) {
+      summary.textContent = message || "Der Upload konnte nicht abgeschlossen werden.";
+    }
+    if (bar instanceof HTMLElement) {
+      bar.style.width = "0%";
+    }
+    if (list instanceof HTMLElement) {
+      for (const state of list.querySelectorAll(".upload-file-state")) {
+        state.textContent = "Fehler";
+      }
+    }
   }
 
   function setStatus(message, kind = "neutral") {
@@ -211,8 +319,8 @@ document.addEventListener("DOMContentLoaded", () => {
           return;
         }
         if (event.lengthComputable && event.total > 0) {
-          const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)));
-          onProgress(percent);
+          const ratio = Math.max(0, Math.min(1, event.loaded / event.total));
+          onProgress(ratio);
           return;
         }
         onProgress(null);
@@ -338,25 +446,30 @@ document.addEventListener("DOMContentLoaded", () => {
     if (trackInput instanceof HTMLInputElement) {
       trackInput.disabled = true;
     }
-    setStatus("Lade Titel hoch … 0%");
+    renderUploadTracker(files, 0, false);
+    setStatus("Lade Titel hoch …");
     try {
       const data = new FormData();
       data.append("action", "add_tracks");
       for (const file of files) {
         data.append("track_files", file);
       }
-      const payload = await postFormDataWithUploadProgress(data, (percent) => {
-        if (typeof percent === "number") {
-          setStatus(`Lade Titel hoch … ${percent}%`);
+      const payload = await postFormDataWithUploadProgress(data, (ratio) => {
+        if (typeof ratio === "number") {
+          renderUploadTracker(files, ratio, false);
+          setStatus(`Lade Titel hoch … ${Math.round(ratio * 100)}%`);
           return;
         }
+        renderUploadTracker(files, 0, false);
         setStatus("Lade Titel hoch …");
       });
       if (trackInput instanceof HTMLInputElement) {
         trackInput.value = "";
       }
+      renderUploadTracker(files, 1, true);
       applyPayload(payload, "Titel ergänzt");
     } catch (error) {
+      renderUploadError(files, error.message || "Upload fehlgeschlagen.");
       setStatus(error.message || "Upload fehlgeschlagen.", "error");
     } finally {
       if (trackInput instanceof HTMLInputElement) {
@@ -383,4 +496,8 @@ document.addEventListener("DOMContentLoaded", () => {
   renderRows(state.track_rows || []);
   updateCounters();
   setStatus("Bereit");
+  trackInput?.addEventListener("change", () => {
+    const files = selectedUploadFiles();
+    renderUploadTracker(files, 0, false);
+  });
 });

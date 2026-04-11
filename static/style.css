@@ -771,6 +771,12 @@ label {
   align-items: stretch;
 }
 
+.setup-left-stack {
+  display: grid;
+  gap: 1.2rem;
+  align-content: start;
+}
+
 .setup-side-stack {
   display: grid;
   gap: 1.2rem;
@@ -1266,9 +1272,10 @@ dialog[data-power-routine-dialog]::backdrop {
 
 .power-routine-field {
   display: inline-grid;
-  grid-template-columns: minmax(0, 13rem) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.45rem;
   align-items: center;
+  width: min(100%, 16rem);
 }
 
 .power-routine-grid {
@@ -1284,6 +1291,130 @@ dialog[data-power-routine-dialog]::backdrop {
   min-width: 2.5rem;
   padding: 0.64rem 0;
   justify-self: start;
+}
+
+.power-routine-save-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  gap: 0.9rem;
+  margin-top: auto;
+  padding-top: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.power-routine-audio-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.power-routine-save-row .setup-save-button {
+  margin-top: 0;
+}
+
+.power-routine-inline-group {
+  margin-left: 0;
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, auto);
+  gap: 0.6rem;
+  align-items: stretch;
+}
+
+.power-routine-inline-toggle {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 5.4rem auto;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.7rem;
+  padding: 0.5rem 0.72rem;
+}
+
+.power-routine-auto-standby-wrap {
+  grid-column: 1 / -1;
+  display: grid;
+  justify-items: center;
+  gap: 0.4rem;
+}
+
+.power-routine-auto-standby-wrap > span {
+  display: block;
+  width: min(100%, 16rem);
+}
+
+.power-routine-auto-standby-field {
+  width: min(100%, 16rem) !important;
+  min-width: 0 !important;
+  grid-template-columns: 18px minmax(0, 1fr) auto !important;
+}
+
+.power-routine-auto-standby-field input[type="number"] {
+  min-height: 2.1rem;
+  width: 100%;
+  text-align: right;
+}
+
+.sound-options-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.sound-option-field {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.7rem;
+}
+
+.sound-option-field.checkbox-no-wrap {
+  width: 100%;
+  max-width: none;
+}
+
+.sound-option-field span {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.power-routine-inline-toggle span {
+  min-width: 0;
+  flex: initial;
+}
+
+.power-routine-inline-toggle input[type="number"] {
+  min-height: 2.1rem;
+  width: 100%;
+  text-align: right;
+}
+
+.power-routine-inline-group .power-routine-inline-toggle:last-child {
+  grid-template-columns: 18px minmax(0, 1fr);
+}
+
+.power-routine-suppress-stack {
+  display: grid;
+  gap: 0.42rem;
+  align-content: start;
+}
+
+.power-routine-suppress-stack .power-routine-inline-toggle {
+  grid-template-columns: 18px minmax(0, 1fr);
+}
+
+.checkbox-no-wrap {
+  flex-wrap: nowrap;
+}
+
+.checkbox-no-wrap span {
+  flex: 0 1 auto;
+  white-space: nowrap;
+}
+
+.power-routine-inline-unit {
+  color: var(--muted);
+  font-size: 0.86rem;
+  white-space: nowrap;
 }
 
 .link-confirm-view {
@@ -1767,6 +1898,12 @@ dialog[data-power-routine-dialog]::backdrop {
   margin-bottom: 1.35rem;
 }
 
+.mapping-actions-left {
+  display: grid;
+  gap: 0.55rem;
+  align-items: end;
+}
+
 .mapping-actions .setup-save-button {
   margin-top: 0;
   flex: 0 0 auto;
@@ -2032,6 +2169,41 @@ dialog[data-power-routine-dialog]::backdrop {
   min-height: 2.7rem;
 }
 
+.checkbox-row.checkbox-no-wrap {
+  flex-wrap: nowrap;
+  width: max-content;
+  max-width: 100%;
+}
+
+.checkbox-row.checkbox-no-wrap span {
+  flex: 0 0 auto;
+  min-width: max-content;
+  white-space: nowrap;
+}
+
+.checkbox-row.power-routine-inline-toggle {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 5.4rem auto;
+  align-items: center;
+  gap: 0.5rem;
+  width: min(100%, 23rem);
+  min-width: min(100%, 23rem);
+}
+
+.checkbox-row.power-routine-inline-toggle span {
+  flex: 0 1 auto;
+  white-space: nowrap;
+}
+
+.power-routine-suppress-stack .checkbox-row.power-routine-inline-toggle {
+  grid-template-columns: 18px minmax(0, 1fr);
+}
+
+.power-routine-inline-unit {
+  display: inline-block;
+  align-self: center;
+}
+
 .settings-checkbox-row {
   width: 100%;
 }
@@ -2262,6 +2434,10 @@ dialog[data-sleep-rotation-dialog]::backdrop {
   }
 
   .reader-select-inline {
+    grid-template-columns: 1fr;
+  }
+
+  .sound-options-grid {
     grid-template-columns: 1fr;
   }
 

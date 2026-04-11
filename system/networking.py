@@ -87,16 +87,7 @@ def activate_hotspot_with_recovery(connection_name="phoniebox-hotspot"):
 
     details = [first_try["output"] or "Hotspot-Aktivierung fehlgeschlagen."]
     lower = (first_try["output"] or "").lower()
-    needs_recovery = any(
-        text in lower
-        for text in (
-            "no suitable device found",
-            "device is not available",
-            "not available",
-            "unmanaged",
-        )
-    )
-    if not needs_recovery:
+    if "unknown connection" in lower:
         return {"ok": False, "details": details}
 
     # Self-heal for stale interface bindings (e.g. old wlan0 pinning).

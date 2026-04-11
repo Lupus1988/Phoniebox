@@ -282,6 +282,12 @@ def default_setup():
         "power_routines": {
             "power_on": "sleep_count_up_5",
             "power_off": "sleep_count_down_5",
+            "auto_standby_enabled": False,
+            "auto_standby_minutes": 30,
+            "startup_sound_enabled": True,
+            "shutdown_sound_enabled": True,
+            "suppress_shutdown_sound_for_sleep_timer": False,
+            "suppress_shutdown_sound_for_inactivity": False,
         },
         "audio": {
             "output_mode": "usb_dac",
@@ -536,6 +542,17 @@ def normalize_setup_data(data):
         for button in buttons:
             if button.get("name", "").strip() in POWER_BUTTON_NAMES:
                 button["press_type"] = "lang"
+    power_routines = data.setdefault("power_routines", {})
+    old_combined_suppress = power_routines.get("suppress_shutdown_sound_for_sleep_timer", False)
+    power_routines["auto_standby_enabled"] = power_routines.get("auto_standby_enabled") in {"on", True, "true", "1", 1}
+    power_routines["auto_standby_minutes"] = to_int(power_routines.get("auto_standby_minutes"), 30, 1, 720)
+    power_routines["startup_sound_enabled"] = power_routines.get("startup_sound_enabled") not in {"off", False, "false", "0", 0}
+    power_routines["shutdown_sound_enabled"] = power_routines.get("shutdown_sound_enabled") not in {"off", False, "false", "0", 0}
+    power_routines["suppress_shutdown_sound_for_sleep_timer"] = power_routines.get("suppress_shutdown_sound_for_sleep_timer") in {"on", True, "true", "1", 1}
+    if "suppress_shutdown_sound_for_inactivity" in power_routines:
+        power_routines["suppress_shutdown_sound_for_inactivity"] = power_routines.get("suppress_shutdown_sound_for_inactivity") in {"on", True, "true", "1", 1}
+    else:
+        power_routines["suppress_shutdown_sound_for_inactivity"] = old_combined_suppress in {"on", True, "true", "1", 1}
     return data
 
 
@@ -1522,8 +1539,29 @@ def setup():
                 "power_off",
                 request.form.get("power_off_routine", routines.get("power_off", "")),
             )
+            routines["auto_standby_enabled"] = request.form.get("auto_standby_enabled") == "on"
+            routines["auto_standby_minutes"] = to_int(
+                request.form.get("auto_standby_minutes"),
+                routines.get("auto_standby_minutes", 30),
+                1,
+                720,
+            )
             save_setup(data)
             flash("Ein-/Ausschaltroutine gespeichert.", "success")
+            return redirect(url_for("setup"))
+
+        if section == "power_sounds":
+            routines = data.setdefault("power_routines", {})
+            routines["startup_sound_enabled"] = request.form.get("startup_sound_enabled") == "on"
+            routines["shutdown_sound_enabled"] = request.form.get("shutdown_sound_enabled") == "on"
+            routines["suppress_shutdown_sound_for_sleep_timer"] = (
+                request.form.get("suppress_shutdown_sound_for_sleep_timer") == "on"
+            )
+            routines["suppress_shutdown_sound_for_inactivity"] = (
+                request.form.get("suppress_shutdown_sound_for_inactivity") == "on"
+            )
+            save_setup(data)
+            flash("Sound-Optionen gespeichert.", "success")
             return redirect(url_for("setup"))
 
         if section == "audio":

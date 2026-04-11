@@ -91,6 +91,7 @@
   </section>
 
   <section class="setup-core-grid">
+    <div class="setup-left-stack">
     <form method="post" class="panel-box" data-button-mapping>
       <input type="hidden" name="section" value="buttons">
       <input type="hidden" name="button_count" value="{{ button_mapping_rows|length }}">
@@ -137,18 +138,49 @@
         {% endfor %}
       </div>
       <div class="mapping-actions">
-        <button class="primary setup-save-button" type="submit">Tasten speichern</button>
+        <div class="mapping-actions-left">
+          <label class="checkbox-row compact-checkbox-row checkbox-no-wrap">
+            <input type="checkbox" name="hardware_buttons_enabled" {% if setup_data.hardware_buttons_enabled %}checked{% endif %} data-hardware-buttons-toggle>
+            <span>Hardwaretasten Aktiv</span>
+          </label>
+          <button class="primary setup-save-button" type="submit">Tasten speichern</button>
+        </div>
         <div class="inline-field long-press-field">
           <span>Langer Tastendruck ab</span>
           <input type="number" name="button_long_press_seconds" min="1" max="10" step="0.1" value="{{ setup_data.button_long_press_seconds or 2 }}" inputmode="decimal" {% if not setup_data.hardware_buttons_enabled %}disabled{% endif %} data-button-long-press>
           <em>s</em>
         </div>
-        <label class="checkbox-row compact-checkbox-row">
-          <input type="checkbox" name="hardware_buttons_enabled" {% if setup_data.hardware_buttons_enabled %}checked{% endif %} data-hardware-buttons-toggle>
-          <span>Hardwaretasten Aktiv</span>
-        </label>
       </div>
     </form>
+
+    <form method="post" class="panel-box setup-save-card">
+      <input type="hidden" name="section" value="power_sounds">
+      <div class="panel-box-head">
+        <h3>Sounds</h3>
+      </div>
+      <div class="form-grid compact sound-options-grid">
+        <label class="checkbox-row checkbox-no-wrap sound-option-field">
+          <input type="checkbox" name="startup_sound_enabled" {% if setup_data.power_routines.startup_sound_enabled %}checked{% endif %}>
+          <span>Sound bei Power on</span>
+        </label>
+        <label class="checkbox-row checkbox-no-wrap sound-option-field">
+          <input type="checkbox" name="shutdown_sound_enabled" {% if setup_data.power_routines.shutdown_sound_enabled %}checked{% endif %}>
+          <span>Sound bei Power off</span>
+        </label>
+        <label class="checkbox-row checkbox-no-wrap sound-option-field">
+          <input type="checkbox" name="suppress_shutdown_sound_for_sleep_timer" {% if setup_data.power_routines.suppress_shutdown_sound_for_sleep_timer %}checked{% endif %}>
+          <span>kein Sound bei Sleeptimer</span>
+        </label>
+        <label class="checkbox-row checkbox-no-wrap sound-option-field">
+          <input type="checkbox" name="suppress_shutdown_sound_for_inactivity" {% if setup_data.power_routines.suppress_shutdown_sound_for_inactivity %}checked{% endif %}>
+          <span>kein Sound bei Auto-Standby</span>
+        </label>
+      </div>
+      <div class="setup-action-row">
+        <button class="primary setup-save-button" type="submit">Sounds speichern</button>
+      </div>
+    </form>
+    </div>
 
     <div class="setup-side-stack">
       <article class="panel-box" data-button-detect>
@@ -243,8 +275,24 @@
               >i</button>
             </div>
           </label>
+          <div class="power-routine-auto-standby-wrap">
+            <span>Auto-Standby nach</span>
+            <label class="checkbox-row compact-checkbox-row power-routine-inline-toggle power-routine-auto-standby-field">
+              <input type="checkbox" name="auto_standby_enabled" {% if setup_data.power_routines.auto_standby_enabled %}checked{% endif %}>
+              <input
+                type="number"
+                name="auto_standby_minutes"
+                min="1"
+                max="720"
+                value="{{ setup_data.power_routines.auto_standby_minutes }}"
+              >
+              <span class="power-routine-inline-unit">Min</span>
+            </label>
+          </div>
         </div>
-        <button class="primary full setup-save-button" type="submit">Routinen speichern</button>
+        <div class="power-routine-save-row full">
+          <button class="primary setup-save-button" type="submit">Routinen speichern</button>
+        </div>
       </form>
     </div>
   </section>

@@ -12,9 +12,9 @@ from services.library_service import (
     album_editor_payload,
     apply_link_uid,
     create_empty_album,
+    create_album_with_tracks,
     enrich_library_data,
     finish_link_session,
-    import_album_folder,
     library_storage_summary,
     load_library,
     load_link_session,
@@ -45,18 +45,20 @@ def register_library_routes(app):
             action = request.form.get("action", "").strip()
             albums = library_data["albums"]
             if action == "import_album":
-                files = [item for item in request.files.getlist("album_files") if getattr(item, "filename", "")]
+                files = [item for item in request.files.getlist("track_files") if getattr(item, "filename", "")]
+                if not files:
+                    files = [item for item in request.files.getlist("album_files") if getattr(item, "filename", "")]
                 album_name = request.form.get("name", "").strip()
                 rfid_uid = request.form.get("rfid_uid", "").strip()
                 if not album_name:
                     return library_action_response(False, "Albumname ist erforderlich.", "error", 400)
                 try:
-                    album_entry = import_album_folder(files, album_name, rfid_uid) if files else create_empty_album(album_name, rfid_uid)
+                    album_entry = create_album_with_tracks(files, album_name, rfid_uid) if files else create_empty_album(album_name, rfid_uid)
                 except ValueError as exc:
                     return library_action_response(False, str(exc), "error", 400)
                 return library_action_response(
                     True,
-                    f"Album {album_entry['name']} importiert und Playlist erzeugt." if files else f"Leeres Album {album_entry['name']} angelegt.",
+                    f"Album {album_entry['name']} angelegt und Titel hochgeladen." if files else f"Leeres Album {album_entry['name']} angelegt.",
                     "success",
                     album=album_entry,
                 )

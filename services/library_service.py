@@ -257,6 +257,34 @@ def create_empty_album(album_name, rfid_uid=""):
     return album_entry
 
 
+def create_album_with_tracks(files, album_name, rfid_uid=""):
+    valid_files = [item for item in (files or []) if getattr(item, "filename", "")]
+    if not valid_files:
+        raise ValueError("Bitte Titel auswählen.")
+
+    album_entry = create_empty_album(album_name, rfid_uid)
+    try:
+        add_tracks_to_album(album_entry, valid_files)
+    except Exception:
+        album_dir = BASE_DIR / album_entry.get("folder", "")
+        if album_dir.exists() and ALBUMS_DIR in album_dir.parents:
+            shutil.rmtree(album_dir, ignore_errors=True)
+        library_data = load_library()
+        library_data["albums"] = [entry for entry in library_data.get("albums", []) if entry.get("id") != album_entry.get("id")]
+        save_library(library_data)
+        raise
+
+    library_data = load_library()
+    target = next((entry for entry in library_data.get("albums", []) if entry.get("id") == album_entry.get("id")), None)
+    if target is None:
+        library_data.setdefault("albums", []).append(album_entry)
+        save_library(library_data)
+        return album_entry
+    target.update(album_entry)
+    save_library(library_data)
+    return target
+
+
 def add_tracks_to_album(album, files):
     album_dir = BASE_DIR / album.get("folder", "")
     album_dir.mkdir(parents=True, exist_ok=True)

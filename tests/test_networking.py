@@ -32,6 +32,26 @@ class NetworkingTest(unittest.TestCase):
         self.assertTrue(any(cmd[:6] == ["sudo", "nmcli", "connection", "modify", "phoniebox-hotspot", "connection.interface-name"] for cmd in calls))
         self.assertTrue(any("wlp1s0" in " ".join(cmd) for cmd in calls))
 
+    def test_activate_hotspot_recovery_runs_even_without_known_error_text(self):
+        calls = []
+
+        def fake_run(command):
+            calls.append(command)
+            if command[:5] == ["sudo", "nmcli", "connection", "up", "phoniebox-hotspot"] and len(command) == 5:
+                return {"ok": False, "output": "Activation failed with no extra context"}
+            if command == ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device", "status"]:
+                return {"ok": True, "output": "wlan1:wifi:disconnected"}
+            if command[:5] == ["sudo", "nmcli", "connection", "up", "phoniebox-hotspot"] and "ifname" in command:
+                return {"ok": True, "output": "ok"}
+            return {"ok": True, "output": ""}
+
+        with patch.object(networking, "run_command", side_effect=fake_run):
+            result = networking.activate_hotspot_with_recovery("phoniebox-hotspot")
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(any(cmd == ["sudo", "nmcli", "radio", "wifi", "on"] for cmd in calls))
+        self.assertTrue(any(cmd[:6] == ["sudo", "nmcli", "connection", "modify", "phoniebox-hotspot", "connection.interface-name"] for cmd in calls))
+
     def test_fallback_hotspot_cycle_uses_recovery_activation(self):
         config = {"mode": "client_with_fallback_hotspot", "fallback_hotspot": True}
         with patch.object(networking, "command_exists", return_value=True), patch.object(

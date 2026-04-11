@@ -128,17 +128,12 @@
     <div class="library-storage-head">
       <div>
         <h3>Speicherplatz</h3>
-        <p>{{ storage_summary.used_label }} von {{ storage_summary.total_label }} belegt</p>
+        <p>{{ storage_summary.free_label }} frei von {{ storage_summary.total_label }}</p>
       </div>
       <strong>{{ storage_summary.used_percent }}%</strong>
     </div>
     <div class="library-storage-meter" aria-hidden="true">
       <div class="library-storage-meter-fill" style="width: {{ storage_summary.used_percent }}%"></div>
-    </div>
-    <div class="library-storage-stats">
-      <span>Belegt: {{ storage_summary.used_label }}</span>
-      <span>Frei: {{ storage_summary.free_label }}</span>
-      <span>Gesamt: {{ storage_summary.total_label }}</span>
     </div>
   </article>
 
@@ -154,7 +149,7 @@
           <input name="name" id="album-create-name" placeholder="Albumname" required>
         </label>
         <label class="full hidden-input-wrap">
-          <input type="file" name="album_files" id="album-folder-input" webkitdirectory directory multiple>
+          <input type="file" name="track_files" id="album-track-input-create" multiple accept=".mp3,.m4a,.wav,.flac,.ogg,.aac,.opus,.oga,.aif,.aiff,.m4b,.mp4">
         </label>
         <div id="album-create-warning" class="create-warning-box full" hidden>Albumname bereits vorhanden.</div>
         <div id="album-create-upload-status" class="upload-status-box full" hidden>
@@ -168,7 +163,7 @@
           <div class="upload-file-list" data-upload-file-list></div>
         </div>
         <div class="button-row compact-button-row create-button-stack full">
-          <button type="button" id="album-folder-trigger">Ordner auswählen</button>
+          <button type="button" id="album-track-trigger-create">Titel auswählen</button>
           <button type="submit" class="primary" id="album-create-submit">Album anlegen</button>
           <button type="button" data-close-create>Zurück</button>
         </div>

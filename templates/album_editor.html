@@ -34,6 +34,16 @@
               <path d="M16 42v8h32v-8" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
+          <div id="album-upload-status" class="upload-status-box full" hidden>
+            <div class="upload-status-head">
+              <strong data-upload-title>Noch keine Dateien ausgewählt</strong>
+              <span data-upload-summary></span>
+            </div>
+            <div class="upload-progress-shell" aria-hidden="true">
+              <div class="upload-progress-bar" data-upload-progress-bar></div>
+            </div>
+            <div class="upload-file-list" data-upload-file-list></div>
+          </div>
         </form>
       </div>
 
