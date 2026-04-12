@@ -189,7 +189,8 @@ sudo systemctl enable phoniebox-rfid.service
 sudo systemctl enable phoniebox-hdmi-off.service
 sudo systemctl enable phoniebox-network-bootstrap.service
 sudo systemctl enable phoniebox-hotspot-fallback.timer
-sudo systemctl enable phoniebox-runtime-tick.timer
+sudo systemctl disable --now phoniebox-runtime-tick.timer 2>/dev/null || true
+sudo systemctl enable phoniebox-runtime-tick.service
 sudo "$VENV_DIR/bin/python" "$APP_DIR/scripts/bootstrap_network.py" --seed-only || true
 sudo systemctl restart phoniebox-panel.service
 sudo systemctl restart phoniebox-gpio-poll.service
@@ -202,7 +203,7 @@ else
   sudo systemctl restart phoniebox-network-bootstrap.service || true
 fi
 sudo systemctl restart phoniebox-hotspot-fallback.timer
-sudo systemctl restart phoniebox-runtime-tick.timer
+sudo systemctl restart phoniebox-runtime-tick.service
 
 echo "Installation abgeschlossen."
 echo "Panel: http://phoniebox.local"

@@ -1661,39 +1661,6 @@ def encoder_module_rows(setup_data):
     return rows
 
 
-def encoder_debug_payload(setup_data):
-    modules = normalize_encoder_modules(setup_data.get("encoder_modules", []))
-    gpio_names = []
-    for module in modules:
-        for key in ("clk_pin", "dt_pin", "sw_pin"):
-            pin = (module.get(key) or "").strip()
-            if pin and pin not in gpio_names:
-                gpio_names.append(pin)
-    levels = sample_gpio_levels(gpio_names) if gpio_names else {}
-    runtime_state = runtime_service.ensure_runtime()
-    return {
-        "modules": [
-            {
-                "id": module["id"],
-                "label": module["label"],
-                "clk_pin": module.get("clk_pin", ""),
-                "dt_pin": module.get("dt_pin", ""),
-                "sw_pin": module.get("sw_pin", ""),
-                "clk_level": levels.get(module.get("clk_pin", "").strip()),
-                "dt_level": levels.get(module.get("dt_pin", "").strip()),
-                "sw_level": levels.get(module.get("sw_pin", "").strip()),
-            }
-            for module in modules
-        ],
-        "last_event": runtime_state.get("last_event", ""),
-        "last_event_at": runtime_state.get("last_event_at", 0),
-        "last_button": runtime_state.get("hardware", {}).get("last_button", ""),
-        "last_button_press_type": runtime_state.get("hardware", {}).get("last_button_press_type", ""),
-        "pressed_buttons": list(runtime_state.get("hardware", {}).get("pressed_buttons", []) or []),
-        "samples": list(runtime_state.get("hardware", {}).get("encoder_debug", []) or []),
-    }
-
-
 @app.route("/setup", methods=["GET", "POST"])
 def setup():
     data = load_setup()
@@ -2030,7 +1997,6 @@ def setup():
         runtime_state=runtime_snapshot["runtime"],
         button_mapping_rows=button_mapping_rows(data),
         encoder_module_rows=encoder_module_rows(data),
-        encoder_debug=encoder_debug_payload(data),
         reader_option=reader_management["target_option"],
         reader_reboot_notice=reader_reboot_notice,
     )
@@ -2082,13 +2048,6 @@ def api_setup_button_detect_status():
     payload = dict(session)
     payload.pop("message", None)
     return json_success(session.get("message", ""), **payload)
-
-
-@app.route("/api/setup/encoder-debug")
-def api_setup_encoder_debug():
-    setup_data = load_setup()
-    payload = encoder_debug_payload(setup_data)
-    return json_success("Encoder-Diagnose aktualisiert.", **payload)
 
 
 @app.route("/api/setup/led-blink", methods=["POST"])

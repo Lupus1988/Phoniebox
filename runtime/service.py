@@ -38,6 +38,13 @@ LED_PREVIEW_FILE = DATA_DIR / "led_preview.json"
 STATE_LOCK_FILE = DATA_DIR / "state.lock"
 
 
+def current_boot_id():
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def load_json(path, default):
     if not path.exists():
         return default
@@ -82,6 +89,7 @@ def default_player():
         "playlist": "",
         "playlist_entries": [],
         "current_track_index": 0,
+        "queued_tracks": [],
         "queue": [],
     }
 
@@ -128,6 +136,10 @@ def default_runtime_state():
         "last_activity_at": int(time.time()),
         "last_wifi_activity_at": int(time.time()),
         "wifi_auto_off_started_at": int(time.time()),
+        "system": {
+            "boot_id": current_boot_id(),
+            "last_boot_recovery_at": 0,
+        },
     }
 
 
@@ -172,7 +184,20 @@ class RuntimeService:
     SLEEP_TIMER_FADE_STEPS = 10
     PRESENCE_READER_TYPES = {"RC522", "PN532_SPI"}
     ENCODER_ROTATION_EVENTS = {"cw", "ccw"}
-    ENCODER_STEP_DEBOUNCE_SECONDS = 0.04
+    ENCODER_TRANSITION_DEBOUNCE_SECONDS = 0.004
+    ENCODER_STEPS_PER_EVENT = 2
+    ENCODER_CLOCKWISE_TRANSITIONS = {
+        (0b00, 0b01),
+        (0b01, 0b11),
+        (0b11, 0b10),
+        (0b10, 0b00),
+    }
+    ENCODER_COUNTERCLOCKWISE_TRANSITIONS = {
+        (0b00, 0b10),
+        (0b10, 0b11),
+        (0b11, 0b01),
+        (0b01, 0b00),
+    }
 
     def __init__(self):
         self.runtime_path = RUNTIME_FILE
@@ -194,6 +219,7 @@ class RuntimeService:
         self._state_lock = threading.RLock()
         self._state_lock_handle = None
         self._state_lock_depth = 0
+        self._boot_recovery_checked = False
 
     def _wifi_radio_enabled_cached(self, force_refresh=False):
         now = time.monotonic()
@@ -360,6 +386,89 @@ class RuntimeService:
 
     def save_player(self, state):
         save_json(PLAYER_FILE, state)
+
+    def _current_boot_id(self):
+        return current_boot_id()
+
+    def _clear_playback_context(self, runtime_state, player, keep_loaded_media=False):
+        runtime_state["playback_session"] = {}
+        runtime_state["playback_state"] = "stopped"
+        runtime_state["active_rfid_uid"] = ""
+        runtime_state["hardware"]["last_scanned_uid"] = ""
+        player["is_playing"] = False
+        player["position_seconds"] = 0
+        if keep_loaded_media:
+            player["queued_tracks"] = []
+            self._rebuild_queue_display(player)
+            return runtime_state, player
+        player.update(
+            {
+                "current_album": "",
+                "current_track": "",
+                "cover_url": "",
+                "position_seconds": 0,
+                "duration_seconds": 0,
+                "playlist": "",
+                "playlist_entries": [],
+                "current_track_index": 0,
+                "queued_tracks": [],
+                "queue": [],
+            }
+        )
+        runtime_state["active_album_id"] = ""
+        return runtime_state, player
+
+    def _current_player_entry(self, player):
+        entries = list(player.get("playlist_entries", []))
+        if not entries:
+            return "", 0
+        current_index = max(0, min(len(entries) - 1, int(player.get("current_track_index", 0) or 0)))
+        return entries[current_index], current_index
+
+    def _reopen_current_track_session(self, runtime_state, player, autoplay=False):
+        entry, current_index = self._current_player_entry(player)
+        playlist = player.get("playlist", "")
+        if not playlist or not entry:
+            return runtime_state, player, False
+        runtime_state["playback_session"] = self.playback.open_track(
+            playlist,
+            entry,
+            0,
+            volume=player.get("volume", 45),
+            previous_session=runtime_state.get("playback_session", {}),
+            current_index=current_index,
+            entries=list(player.get("playlist_entries", [])),
+        )
+        runtime_state["playback_state"] = "playing" if autoplay else "paused"
+        if runtime_state["playback_session"]:
+            runtime_state["playback_session"] = (
+                self.playback.play(runtime_state["playback_session"])
+                if autoplay
+                else self.playback.pause(runtime_state["playback_session"])
+            )
+        player["is_playing"] = bool(autoplay)
+        player["position_seconds"] = 0
+        self._rebuild_queue_display(player)
+        return runtime_state, player, True
+
+    def _apply_boot_recovery(self, runtime_state, player):
+        system_state = merge_defaults(runtime_state.get("system", {}), default_runtime_state()["system"])
+        stored_boot_id = str(system_state.get("boot_id", "") or "")
+        current_id = self._current_boot_id()
+        runtime_state["system"] = system_state
+        if current_id and stored_boot_id == current_id:
+            return runtime_state, player, False
+        runtime_state["system"]["boot_id"] = current_id
+        runtime_state["system"]["last_boot_recovery_at"] = int(time.time())
+        runtime_state["powered_on"] = False
+        runtime_state, player = self._clear_playback_context(runtime_state, player, keep_loaded_media=False)
+        runtime_state["wifi_enabled"] = True
+        runtime_state["wifi_auto_off_started_at"] = int(time.time())
+        runtime_state["sleep_timer"]["remaining_seconds"] = 0
+        runtime_state["sleep_timer"]["level"] = 0
+        runtime_state["power_hold"] = merge_defaults({}, default_runtime_state()["power_hold"])
+        runtime_state = self.add_event(runtime_state, "Sicherer Neustartzustand hergestellt", mark_activity=False)
+        return runtime_state, player, True
 
     def load_library(self):
         return load_json(LIBRARY_FILE, {"albums": []})
@@ -589,6 +698,17 @@ class RuntimeService:
         runtime_state["hardware"]["encoder_debug"] = samples[:20]
         self.save_runtime(runtime_state)
 
+    def _encoder_state_value(self, clk_level, dt_level):
+        return ((int(clk_level) & 1) << 1) | (int(dt_level) & 1)
+
+    def _encoder_transition_delta(self, previous_state, current_state):
+        transition = (int(previous_state), int(current_state))
+        if transition in self.ENCODER_CLOCKWISE_TRANSITIONS:
+            return 1
+        if transition in self.ENCODER_COUNTERCLOCKWISE_TRANSITIONS:
+            return -1
+        return 0
+
     def _button_mapping_for_pin(self, setup, pin, press_type):
         for button in setup.get("buttons", []):
             if button.get("pin", "").strip() != pin:
@@ -672,27 +792,52 @@ class RuntimeService:
                 continue
             clk_level = int(levels[clk_pin])
             dt_level = int(levels[dt_pin])
+            current_state = self._encoder_state_value(clk_level, dt_level)
             state = self._encoder_poll_state.setdefault(
                 slot,
-                {"clk": clk_level, "dt": dt_level, "last_event_at": 0.0},
+                {
+                    "state": current_state,
+                    "accumulator": 0,
+                    "last_direction": 0,
+                    "last_transition_at": 0.0,
+                },
             )
-            previous_clk = state.get("clk")
-            state["clk"] = clk_level
-            state["dt"] = dt_level
-            if previous_clk is None:
+            previous_state = state.get("state")
+            if previous_state is None:
+                state["state"] = current_state
                 continue
-            if previous_clk == 1 and clk_level == 0:
-                if now - float(state.get("last_event_at", 0.0) or 0.0) < self.ENCODER_STEP_DEBOUNCE_SECONDS:
-                    continue
-                direction = "cw" if dt_level != clk_level else "ccw"
+            if current_state == previous_state:
+                continue
+            if now - float(state.get("last_transition_at", 0.0) or 0.0) < self.ENCODER_TRANSITION_DEBOUNCE_SECONDS:
+                continue
+
+            step_delta = self._encoder_transition_delta(previous_state, current_state)
+            state["state"] = current_state
+            if step_delta == 0:
+                state["accumulator"] = 0
+                state["last_direction"] = 0
+                self._append_encoder_debug_sample(setup, slot, clk_level, dt_level, direction="invalid", action_name="")
+                continue
+
+            state["last_transition_at"] = now
+            if state.get("last_direction") and step_delta != state.get("last_direction"):
+                state["accumulator"] = step_delta
             else:
-                continue
+                state["accumulator"] = int(state.get("accumulator", 0) or 0) + step_delta
+            state["last_direction"] = step_delta
+
+            direction = "cw" if step_delta > 0 else "ccw"
             action_name = slot_assignments.get(direction, "").strip()
-            self._append_encoder_debug_sample(setup, slot, clk_level, dt_level, direction=direction, action_name=action_name)
-            if not action_name:
-                continue
-            self.trigger_button(action_name, press_type="kurz")
-            state["last_event_at"] = now
+            if state["accumulator"] >= self.ENCODER_STEPS_PER_EVENT:
+                state["accumulator"] -= self.ENCODER_STEPS_PER_EVENT
+                self._append_encoder_debug_sample(setup, slot, clk_level, dt_level, direction="cw", action_name=action_name)
+                if action_name:
+                    self.trigger_button(action_name, press_type="kurz")
+            elif state["accumulator"] <= -self.ENCODER_STEPS_PER_EVENT:
+                state["accumulator"] += self.ENCODER_STEPS_PER_EVENT
+                self._append_encoder_debug_sample(setup, slot, clk_level, dt_level, direction="ccw", action_name=action_name)
+                if action_name:
+                    self.trigger_button(action_name, press_type="kurz")
 
     def _update_power_hold_state(self, runtime_state, pin, now, released=False):
         with self.state_transaction():
@@ -937,8 +1082,17 @@ class RuntimeService:
             return defaults
         current = self.load_runtime()
         merged = merge_defaults(current, defaults)
-        if merged != current:
+        player = None
+        changed = merged != current
+        if not self._boot_recovery_checked:
+            player = self.load_player()
+            merged, player, boot_changed = self._apply_boot_recovery(merged, player)
+            changed = changed or boot_changed
+            self._boot_recovery_checked = True
+        if changed:
             self.save_runtime(merged)
+            if player is not None:
+                self.save_player(player)
         return merged
 
     def add_event(self, runtime_state, message, level="info", mark_activity=True):
@@ -1031,8 +1185,6 @@ class RuntimeService:
         }
 
     def _desired_wifi_state(self, runtime_state):
-        if not runtime_state.get("powered_on", True):
-            return False
         return bool(runtime_state.get("wifi_enabled", True))
 
     def _set_service_active(self, service_name, active):
@@ -1049,8 +1201,6 @@ class RuntimeService:
 
     def apply_wifi_policy(self, runtime_state):
         desired = self._desired_wifi_state(runtime_state)
-        if not runtime_state.get("powered_on", True):
-            runtime_state["wifi_enabled"] = False
         current_enabled = bool(runtime_state.get("hardware", {}).get("wifi_enabled", self._wifi_enabled_cache))
         cache_age = time.monotonic() - float(self._wifi_enabled_cached_at or 0.0)
         if cache_age < self.WIFI_STATE_TTL_SECONDS:
@@ -1253,13 +1403,13 @@ class RuntimeService:
             current_index = max(0, min(len(entries) - 1, int(session.get("current_index", player.get("current_track_index", 0)))))
             player["current_track_index"] = current_index
             player["current_track"] = track_title_from_entry(entries[current_index])
-            player["queue"] = build_track_queue(entries, current_index)
             actual_duration = pick_track_duration(player.get("playlist", ""), entries[current_index])
             player["duration_seconds"] = max(0, int(actual_duration or session.get("duration_seconds", 0)))
         if desired_state == "stopped" or session.get("state") == "stopped":
             player["position_seconds"] = 0
         else:
             player["position_seconds"] = max(0, int(session.get("position_seconds", player.get("position_seconds", 0))))
+        self._rebuild_queue_display(player)
         if runtime_state.get("playback_state") == "playing" and session.get("state") == "paused":
             runtime_state["playback_state"] = "paused"
         if runtime_state.get("playback_state") == "playing" and session.get("state") == "stopped" and was_playing:
@@ -1279,6 +1429,63 @@ class RuntimeService:
         library = self.load_library()
         return next((album for album in library.get("albums", []) if album.get("id") == album_id), None)
 
+    def _queue_track_items(self, album, entries):
+        return [
+            {
+                "album": album.get("name", ""),
+                "album_id": album.get("id", ""),
+                "cover_url": album.get("cover_url", ""),
+                "playlist": album.get("playlist", ""),
+                "entry": entry,
+                "title": track_title_from_entry(entry),
+            }
+            for entry in entries
+        ]
+
+    def _rebuild_queue_display(self, player):
+        entries = list(player.get("playlist_entries", []))
+        current_index = max(0, int(player.get("current_track_index", 0)))
+        queue = build_track_queue(entries, current_index) if entries else []
+        queue.extend(item.get("title", "") for item in player.get("queued_tracks", []) if item.get("title"))
+        player["queue"] = queue
+        return player
+
+    def _load_queued_track_item(self, track_item, runtime_state, player, autoplay=False):
+        playlist = track_item.get("playlist", "")
+        entry = track_item.get("entry", "")
+        if not playlist or not entry:
+            return runtime_state, player
+        runtime_state["powered_on"] = True
+        runtime_state["wifi_enabled"] = True
+        player["playlist"] = playlist
+        player["playlist_entries"] = [entry]
+        player["current_track_index"] = 0
+        player["current_track"] = track_item.get("title", track_title_from_entry(entry))
+        player["current_album"] = track_item.get("album", player.get("current_album", ""))
+        player["cover_url"] = track_item.get("cover_url", "")
+        player["duration_seconds"] = pick_track_duration(playlist, entry)
+        player["position_seconds"] = 0
+        runtime_state["active_album_id"] = track_item.get("album_id", "")
+        runtime_state["playback_session"] = self.playback.open_track(
+            playlist,
+            entry,
+            0,
+            volume=player.get("volume", 45),
+            previous_session=runtime_state.get("playback_session", {}),
+            current_index=0,
+            entries=[entry],
+        )
+        runtime_state["playback_state"] = "playing" if autoplay else "paused"
+        player["is_playing"] = runtime_state["playback_state"] == "playing"
+        if runtime_state["playback_session"]:
+            runtime_state["playback_session"] = (
+                self.playback.play(runtime_state["playback_session"])
+                if autoplay
+                else self.playback.pause(runtime_state["playback_session"])
+            )
+        self._rebuild_queue_display(player)
+        return runtime_state, player
+
     def load_album_into_player(self, album, runtime_state=None, player=None, autoplay=False):
         runtime_state = runtime_state or self.ensure_runtime()
         player = player or self.load_player()
@@ -1288,10 +1495,10 @@ class RuntimeService:
         player["playlist"] = album.get("playlist", "")
         player["playlist_entries"] = entries
         player["current_track_index"] = 0
+        player["queued_tracks"] = []
         if entries:
             player["current_track"] = track_title_from_entry(entries[0])
             player["duration_seconds"] = pick_track_duration(album.get("playlist", ""), entries[0])
-            player["queue"] = build_track_queue(entries, 0)
             runtime_state["playback_session"] = self.playback.open_track(
                 album.get("playlist", ""),
                 entries[0],
@@ -1304,11 +1511,11 @@ class RuntimeService:
         else:
             player["current_track"] = album.get("name", player.get("current_track", ""))
             player["duration_seconds"] = 0
-            player["queue"] = []
             runtime_state["playback_session"] = {}
         player["current_album"] = album.get("name", player.get("current_album", ""))
         player["cover_url"] = album.get("cover_url", "")
         player["position_seconds"] = 0
+        self._rebuild_queue_display(player)
         runtime_state["active_album_id"] = album.get("id", "")
         runtime_state["playback_state"] = "playing" if autoplay else "paused"
         player["is_playing"] = runtime_state["playback_state"] == "playing"
@@ -1343,7 +1550,7 @@ class RuntimeService:
                 elif session_finished:
                     entries = list(player.get("playlist_entries", []))
                     current_index = int(player.get("current_track_index", 0))
-                    if entries and current_index + 1 < len(entries):
+                    if (entries and current_index + 1 < len(entries)) or player.get("queued_tracks"):
                         result = self.next_track(runtime_state=runtime_state, player=player, autoplay=True)
                         runtime_state = result["runtime"]
                         player = result["player"]
@@ -1430,15 +1637,13 @@ class RuntimeService:
                 runtime_state["last_wifi_activity_at"] = int(time.time())
                 runtime_state["wifi_auto_off_started_at"] = int(time.time())
             else:
-                runtime_state["playback_state"] = "stopped"
-                runtime_state["wifi_enabled"] = False
-                runtime_state["wifi_auto_off_started_at"] = 0
-                runtime_state["sleep_timer"]["remaining_seconds"] = 0
-                runtime_state["sleep_timer"]["level"] = 0
-                player["is_playing"] = False
-                player["position_seconds"] = 0
                 if runtime_state.get("playback_session"):
                     runtime_state["playback_session"] = self.playback.stop(runtime_state["playback_session"])
+                runtime_state["wifi_enabled"] = True
+                runtime_state["wifi_auto_off_started_at"] = int(time.time())
+                runtime_state["sleep_timer"]["remaining_seconds"] = 0
+                runtime_state["sleep_timer"]["level"] = 0
+                runtime_state, player = self._clear_playback_context(runtime_state, player, keep_loaded_media=False)
                 message = event_message or "Standby aktiv"
             runtime_state = self.add_event(runtime_state, message)
             runtime_state = self.update_hardware_profile(runtime_state)
@@ -1526,14 +1731,24 @@ class RuntimeService:
             return {"runtime": runtime_state, "player": player}
 
     def clear_queue(self):
-        runtime_state = self.ensure_runtime()
-        player = self.load_player()
-        player["queue"] = []
-        runtime_state["queue_revision"] = secrets.token_hex(4)
-        runtime_state = self.add_event(runtime_state, "Warteschlange geleert")
-        self.save_runtime(runtime_state)
-        self.save_player(player)
-        return {"runtime": runtime_state, "player": player}
+        with self.state_transaction():
+            runtime_state = self.ensure_runtime()
+            player = self.load_player()
+            runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
+            entries = list(player.get("playlist_entries", []))
+            current_index = max(0, int(player.get("current_track_index", 0)))
+            if entries:
+                player["playlist_entries"] = entries[: current_index + 1]
+            player["queued_tracks"] = []
+            self._rebuild_queue_display(player)
+            runtime_state["queue_revision"] = secrets.token_hex(4)
+            runtime_state = self.add_event(runtime_state, "Warteschlange geleert")
+            runtime_state = self.update_hardware_profile(runtime_state)
+            runtime_state = self.apply_wifi_policy(runtime_state)
+            runtime_state = self.update_led_status(runtime_state)
+            self.save_runtime(runtime_state)
+            self.save_player(player)
+            return {"runtime": runtime_state, "player": player}
 
     def load_album_by_id(self, album_id, autoplay=False):
         with self.state_transaction():
@@ -1589,6 +1804,7 @@ class RuntimeService:
                 "playlist": "",
                 "playlist_entries": [],
                 "current_track_index": 0,
+                "queued_tracks": [],
             }
             runtime_state["powered_on"] = False
             runtime_state["playback_state"] = "stopped"
@@ -1611,6 +1827,13 @@ class RuntimeService:
             runtime_state = self.ensure_runtime()
             player = self.load_player()
             runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
+            if not runtime_state.get("playback_session") and not player.get("playlist_entries") and player.get("queued_tracks"):
+                queued_tracks = list(player.get("queued_tracks", []))
+                next_item = queued_tracks.pop(0)
+                player["queued_tracks"] = queued_tracks
+                runtime_state, player = self._load_queued_track_item(next_item, runtime_state, player, autoplay=False)
+            elif not runtime_state.get("playback_session"):
+                runtime_state, player, _ = self._reopen_current_track_session(runtime_state, player, autoplay=False)
             if not runtime_state.get("powered_on", True):
                 runtime_state["powered_on"] = True
             if runtime_state.get("playback_state") == "playing":
@@ -1639,10 +1862,9 @@ class RuntimeService:
             player = self.load_player()
             runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
             runtime_state["playback_state"] = "stopped"
-            player["is_playing"] = False
-            player["position_seconds"] = 0
             if runtime_state.get("playback_session"):
                 runtime_state["playback_session"] = self.playback.stop(runtime_state["playback_session"])
+            runtime_state, player = self._clear_playback_context(runtime_state, player, keep_loaded_media=False)
             runtime_state = self.add_event(runtime_state, "Wiedergabe gestoppt")
             runtime_state = self.update_hardware_profile(runtime_state)
             runtime_state = self.apply_wifi_policy(runtime_state)
@@ -1657,24 +1879,34 @@ class RuntimeService:
             player = player or self.load_player()
             entries = list(player.get("playlist_entries", []))
             current_index = int(player.get("current_track_index", 0))
+            if not entries:
+                runtime_state, player, reopened = self._reopen_current_track_session(runtime_state, player, autoplay=autoplay)
+                if reopened:
+                    runtime_state["queue_revision"] = secrets.token_hex(4)
+                    runtime_state = self.add_event(runtime_state, f"Nächster Titel: {player.get('current_track', '')}")
+                    runtime_state = self.update_hardware_profile(runtime_state)
+                    runtime_state = self.apply_wifi_policy(runtime_state)
+                    runtime_state = self.update_led_status(runtime_state)
+                    self.save_runtime(runtime_state)
+                    self.save_player(player)
+                    return {"runtime": runtime_state, "player": player}
             if entries and current_index + 1 < len(entries):
                 current_index += 1
-                if (
-                    runtime_state.get("playback_session", {}).get("backend") == "mpv"
-                    and runtime_state.get("playback_session", {}).get("pid")
-                ):
-                    runtime_state["playback_session"] = self.playback.next_track(runtime_state.get("playback_session", {}))
-                else:
-                    runtime_state["playback_session"] = self.playback.open_track(
-                        player.get("playlist", ""),
-                        entries[current_index],
-                        0,
-                        volume=player.get("volume", 45),
-                        previous_session=runtime_state.get("playback_session", {}),
-                        current_index=current_index,
-                        entries=entries,
-                    )
+                runtime_state["playback_session"] = self.playback.open_track(
+                    player.get("playlist", ""),
+                    entries[current_index],
+                    0,
+                    volume=player.get("volume", 45),
+                    previous_session=runtime_state.get("playback_session", {}),
+                    current_index=current_index,
+                    entries=entries,
+                )
                 runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
+            elif player.get("queued_tracks"):
+                queued_tracks = list(player.get("queued_tracks", []))
+                next_item = queued_tracks.pop(0)
+                player["queued_tracks"] = queued_tracks
+                runtime_state, player = self._load_queued_track_item(next_item, runtime_state, player, autoplay=autoplay)
             else:
                 runtime_state, player = self._finish_playlist(runtime_state, player)
                 runtime_state["queue_revision"] = secrets.token_hex(4)
@@ -1711,21 +1943,15 @@ class RuntimeService:
             current_index = int(player.get("current_track_index", 0))
             if entries and current_index > 0:
                 current_index -= 1
-                if (
-                    runtime_state.get("playback_session", {}).get("backend") == "mpv"
-                    and runtime_state.get("playback_session", {}).get("pid")
-                ):
-                    runtime_state["playback_session"] = self.playback.previous_track(runtime_state.get("playback_session", {}))
-                else:
-                    runtime_state["playback_session"] = self.playback.open_track(
-                        player.get("playlist", ""),
-                        entries[current_index],
-                        0,
-                        volume=player.get("volume", 45),
-                        previous_session=runtime_state.get("playback_session", {}),
-                        current_index=current_index,
-                        entries=entries,
-                    )
+                runtime_state["playback_session"] = self.playback.open_track(
+                    player.get("playlist", ""),
+                    entries[current_index],
+                    0,
+                    volume=player.get("volume", 45),
+                    previous_session=runtime_state.get("playback_session", {}),
+                    current_index=current_index,
+                    entries=entries,
+                )
                 runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
                 runtime_state = self.add_event(runtime_state, f"Vorheriger Titel: {player.get('current_track', '')}")
             else:
@@ -1800,10 +2026,12 @@ class RuntimeService:
         runtime_state = runtime_state or self.ensure_runtime()
         player = player or self.load_player()
         entries = load_playlist_entries(album.get("playlist", ""))
-        appended = [track_title_from_entry(entry) for entry in entries]
-        queue = list(player.get("queue", []))
-        queue.extend(appended)
-        player["queue"] = queue
+        queued_items = self._queue_track_items(album, entries)
+        if not player.get("current_track") and not player.get("playlist_entries") and queued_items:
+            next_item = queued_items.pop(0)
+            runtime_state, player = self._load_queued_track_item(next_item, runtime_state, player, autoplay=False)
+        player["queued_tracks"] = list(player.get("queued_tracks", [])) + queued_items
+        self._rebuild_queue_display(player)
         runtime_state["queue_revision"] = secrets.token_hex(4)
         runtime_state = self.add_event(runtime_state, f"Album zur Warteschlange hinzugefügt: {album.get('name', '')}")
         self.save_runtime(runtime_state)
@@ -1818,11 +2046,9 @@ class RuntimeService:
             action = self.get_reader_behavior()["remove"]
             runtime_state["active_rfid_uid"] = ""
             if action == "stop":
-                runtime_state["playback_state"] = "stopped"
-                player["is_playing"] = False
-                player["position_seconds"] = 0
                 if runtime_state.get("playback_session"):
                     runtime_state["playback_session"] = self.playback.stop(runtime_state["playback_session"])
+                runtime_state, player = self._clear_playback_context(runtime_state, player, keep_loaded_media=False)
                 runtime_state = self.add_event(runtime_state, "Tag entfernt: Wiedergabe gestoppt")
             elif action == "pause":
                 runtime_state["playback_state"] = "paused"

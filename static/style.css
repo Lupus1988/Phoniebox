@@ -854,6 +854,21 @@ label {
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.03);
   color: var(--muted);
+  padding: 0;
+  cursor: pointer;
+  transition: border-color 140ms ease, transform 140ms ease, background 140ms ease;
+}
+
+.library-cover-tile:hover,
+.library-cover-tile:focus-visible {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.05);
+  transform: translateY(-1px);
+}
+
+.library-cover-tile:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(124, 170, 255, 0.2);
 }
 
 .library-cover-tile img {
@@ -2109,53 +2124,6 @@ dialog[data-power-routine-dialog]::backdrop {
 .encoder-module-label {
   display: grid;
   gap: 0.2rem;
-}
-
-.encoder-debug-list,
-.encoder-debug-card,
-.encoder-debug-summary {
-  display: grid;
-}
-
-.encoder-debug-list {
-  gap: 0.75rem;
-}
-
-.encoder-debug-card {
-  gap: 0.2rem;
-  padding: 0.75rem 0.9rem;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.encoder-debug-card span,
-.encoder-debug-summary span {
-  color: var(--muted);
-  font-size: 0.88rem;
-}
-
-.encoder-debug-summary {
-  gap: 0.35rem;
-  margin-top: 0.9rem;
-}
-
-.encoder-debug-history {
-  display: grid;
-  gap: 0.35rem;
-  margin-top: 0.9rem;
-}
-
-.encoder-debug-history pre {
-  margin: 0;
-  padding: 0.75rem 0.9rem;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: rgba(0, 0, 0, 0.22);
-  color: var(--text);
-  font-size: 0.82rem;
-  line-height: 1.45;
-  white-space: pre-wrap;
 }
 
 .fixed-press-type {

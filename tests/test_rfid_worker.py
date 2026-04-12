@@ -17,6 +17,26 @@ class FakeBackend:
         self.cleaned = True
 
 
+class FakeReader:
+    presence_reader = False
+
+    def __init__(self, responses):
+        self.responses = iter(responses)
+        self.ready = True
+        self.status_message = "bereit"
+        self.status_details = []
+        self.cleaned = False
+
+    def poll(self):
+        response = next(self.responses)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+    def cleanup(self):
+        self.cleaned = True
+
+
 class ProbeRC522BackendTest(unittest.TestCase):
     def test_ensure_spi_pinmux_only_inspects_current_state(self):
         completed = CompletedProcess(
@@ -60,6 +80,34 @@ class ProbeRC522BackendTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertTrue(backend.cleaned)
         self.assertIn("Der Chip antwortet nicht über SPI.", result["details"])
+
+    def test_worker_suppresses_uid_posts_during_boot_grace_period(self):
+        reader = FakeReader(["ABC123", KeyboardInterrupt()])
+
+        with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
+            rfid_worker, "build_reader", return_value=reader
+        ), patch.object(rfid_worker, "save_reader_status"), patch.object(rfid_worker, "post_uid") as post_uid, patch.object(
+            rfid_worker.time, "monotonic", side_effect=[0.0, 0.1, 1.0, 1.1, 1.2]
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                rfid_worker.main()
+
+        post_uid.assert_not_called()
+        self.assertTrue(reader.cleaned)
+
+    def test_worker_requires_short_uid_confirmation_before_post(self):
+        reader = FakeReader(["ABC123", "ABC123", KeyboardInterrupt()])
+
+        with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "USB"}}), patch.object(
+            rfid_worker, "build_reader", return_value=reader
+        ), patch.object(rfid_worker, "save_reader_status"), patch.object(rfid_worker, "post_uid", return_value=True) as post_uid, patch.object(
+            rfid_worker.time, "monotonic", side_effect=[0.0, 0.1, 6.2, 6.6, 6.8, 7.0]
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                rfid_worker.main()
+
+        post_uid.assert_called_once_with("ABC123")
+        self.assertTrue(reader.cleaned)
 
 
 if __name__ == "__main__":

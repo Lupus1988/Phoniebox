@@ -46,6 +46,7 @@ class RuntimeServiceTest(unittest.TestCase):
                 "playlist": "",
                 "playlist_entries": [],
                 "current_track_index": 0,
+                "queued_tracks": [],
             },
         )
         write_json(
@@ -148,6 +149,34 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(sought["player"]["position_seconds"], 37)
         self.assertEqual(cleared["player"]["queue"], [])
 
+    def test_queue_album_persists_in_snapshot(self):
+        self.service.load_album_by_id("album-1", autoplay=False)
+
+        self.service.queue_album_by_id("album-2")
+        snapshot = self.service.player_snapshot()
+
+        self.assertEqual(snapshot["player"]["queue"], ["02 weiter", "03 bonus"])
+
+    def test_next_track_continues_into_queued_album(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        self.service.queue_album_by_id("album-2")
+
+        second_track = self.service.next_track(autoplay=True)
+        queued_track = self.service.next_track(autoplay=True)
+
+        self.assertEqual(second_track["player"]["current_track"], "02 weiter")
+        self.assertEqual(queued_track["player"]["current_track"], "03 bonus")
+        self.assertEqual(queued_track["player"]["current_album"], "Queuealbum")
+        self.assertEqual(queued_track["player"]["queue"], [])
+
+    def test_queue_album_without_active_player_primes_first_track(self):
+        queued = self.service.queue_album_by_id("album-2")
+
+        self.assertTrue(queued["ok"])
+        self.assertEqual(queued["player"]["current_track"], "03 bonus")
+        self.assertEqual(queued["player"]["current_album"], "Queuealbum")
+        self.assertEqual(queued["player"]["queue"], [])
+
     def test_remove_rfid_stop_resets_position_and_session(self):
         started = self.service.assign_album_by_rfid("1234567890")
         self.service.seek(37)
@@ -158,7 +187,9 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(removed["runtime"]["playback_state"], "stopped")
         self.assertEqual(removed["player"]["position_seconds"], 0)
         self.assertEqual(removed["runtime"]["active_rfid_uid"], "")
-        self.assertEqual(removed["runtime"]["playback_session"]["state"], "stopped")
+        self.assertEqual(removed["runtime"]["playback_session"], {})
+        self.assertEqual(removed["runtime"]["active_album_id"], "")
+        self.assertEqual(removed["player"]["current_album"], "")
         self.assertFalse(removed["player"]["is_playing"])
 
     def test_remove_rfid_pause_uses_settings_and_preserves_position(self):
@@ -314,6 +345,19 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(reset["player"]["queue"], [])
         self.assertEqual(reset["runtime"]["last_event"], "Runtime zurückgesetzt")
 
+    def test_stop_clears_loaded_playback_context(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+
+        stopped = self.service.stop()
+
+        self.assertEqual(stopped["runtime"]["playback_state"], "stopped")
+        self.assertEqual(stopped["runtime"]["playback_session"], {})
+        self.assertEqual(stopped["runtime"]["active_album_id"], "")
+        self.assertEqual(stopped["runtime"]["active_rfid_uid"], "")
+        self.assertEqual(stopped["player"]["current_album"], "")
+        self.assertEqual(stopped["player"]["playlist_entries"], [])
+        self.assertEqual(stopped["player"]["queue"], [])
+
     def test_power_toggle_stops_playback_and_clears_sleep_timer(self):
         self.service.load_album_by_id("album-1", autoplay=True)
         self.service.set_sleep_level(3)
@@ -328,6 +372,9 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(powered_off["runtime"]["sleep_timer"]["level"], 0)
         self.assertFalse(powered_off["player"]["is_playing"])
         self.assertEqual(powered_off["player"]["position_seconds"], 0)
+        self.assertEqual(powered_off["runtime"]["playback_session"], {})
+        self.assertEqual(powered_off["player"]["current_album"], "")
+        self.assertTrue(powered_off["runtime"]["wifi_enabled"])
         self.assertEqual(powered_off["runtime"]["last_event"], "Standby aktiv")
 
         self.assertTrue(powered_on["runtime"]["powered_on"])
@@ -337,6 +384,37 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(play_sound.call_count, 2)
         self.assertEqual(play_sound.call_args_list[0].args[0], "power_off")
         self.assertEqual(play_sound.call_args_list[1].args[0], "power_on")
+
+    def test_boot_recovery_forces_safe_standby_and_clears_player_context(self):
+        runtime = self.service.ensure_runtime()
+        runtime["powered_on"] = True
+        runtime["playback_state"] = "playing"
+        runtime["active_album_id"] = "album-1"
+        runtime["active_rfid_uid"] = "1234567890"
+        runtime["playback_session"] = {"backend": "mock", "state": "ready", "entry": "01-start.mp3"}
+        runtime["system"]["boot_id"] = "old-boot"
+        self.service.save_runtime(runtime)
+        player = self.service.load_player()
+        player["current_album"] = "Testalbum"
+        player["current_track"] = "01 start"
+        player["playlist"] = "media/albums/test-album/playlist.m3u"
+        player["playlist_entries"] = ["01-start.mp3"]
+        self.service.save_player(player)
+
+        with patch.object(service_module, "current_boot_id", return_value="new-boot"):
+            recovered_service = service_module.RuntimeService()
+            recovered = recovered_service.ensure_runtime()
+            recovered_player = recovered_service.load_player()
+
+        self.assertFalse(recovered["powered_on"])
+        self.assertEqual(recovered["playback_state"], "stopped")
+        self.assertEqual(recovered["playback_session"], {})
+        self.assertEqual(recovered["active_album_id"], "")
+        self.assertEqual(recovered["active_rfid_uid"], "")
+        self.assertTrue(recovered["wifi_enabled"])
+        self.assertEqual(recovered["system"]["boot_id"], "new-boot")
+        self.assertEqual(recovered_player["current_album"], "")
+        self.assertEqual(recovered_player["playlist_entries"], [])
 
     def test_duplicate_power_off_does_not_replay_power_off_sound(self):
         self.service.power_off()
@@ -832,9 +910,9 @@ class RuntimeServiceTest(unittest.TestCase):
             self.service,
             "_read_gpio_levels",
             side_effect=[
-                {"GPIO17": 1, "GPIO27": 1},
-                {"GPIO17": 1, "GPIO27": 0},
+                {"GPIO17": 0, "GPIO27": 0},
                 {"GPIO17": 0, "GPIO27": 1},
+                {"GPIO17": 1, "GPIO27": 1},
             ],
         ):
             self.service.poll_buttons_once(now=100.00)
@@ -869,11 +947,11 @@ class RuntimeServiceTest(unittest.TestCase):
             self.service,
             "_read_gpio_levels",
             side_effect=[
-                {"GPIO17": 1, "GPIO27": 1},
-                {"GPIO17": 1, "GPIO27": 0},
-                {"GPIO17": 1, "GPIO27": 1},
-                {"GPIO17": 1, "GPIO27": 0},
-                {"GPIO17": 1, "GPIO27": 1},
+                {"GPIO17": 0, "GPIO27": 0},
+                {"GPIO17": 0, "GPIO27": 1},
+                {"GPIO17": 0, "GPIO27": 0},
+                {"GPIO17": 0, "GPIO27": 1},
+                {"GPIO17": 0, "GPIO27": 0},
             ],
         ):
             self.service.poll_buttons_once(now=100.00)
@@ -883,6 +961,86 @@ class RuntimeServiceTest(unittest.TestCase):
             self.service.poll_buttons_once(now=100.08)
 
         self.assertEqual(self.service.load_player()["volume"], 45)
+
+    def test_encoder_decoder_ignores_invalid_transition_and_recovers(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "hardware_buttons_enabled": True,
+                "buttons": [
+                    {"id": "btn-1", "name": "Lautstärke +", "pin": "", "press_type": "kurz", "input_mode": "encoder", "encoder_slot": "encoder-1", "encoder_event": "cw"},
+                    {"id": "btn-2", "name": "Lautstärke -", "pin": "", "press_type": "kurz", "input_mode": "encoder", "encoder_slot": "encoder-1", "encoder_event": "ccw"},
+                ],
+                "encoder_modules": [
+                    {"id": "encoder-1", "label": "Modul 1", "clk_pin": "GPIO17", "dt_pin": "GPIO27", "sw_pin": ""},
+                    {"id": "encoder-2", "label": "Modul 2", "clk_pin": "", "dt_pin": "", "sw_pin": ""},
+                ],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+        player = self.service.load_player()
+        player["volume"] = 45
+        self.service.save_player(player)
+
+        with patch.object(
+            self.service,
+            "_read_gpio_levels",
+            side_effect=[
+                {"GPIO17": 0, "GPIO27": 0},
+                {"GPIO17": 1, "GPIO27": 1},
+                {"GPIO17": 1, "GPIO27": 0},
+                {"GPIO17": 0, "GPIO27": 0},
+            ],
+        ):
+            self.service.poll_buttons_once(now=100.00)
+            self.service.poll_buttons_once(now=100.05)
+            self.service.poll_buttons_once(now=100.10)
+            self.service.poll_buttons_once(now=100.15)
+
+        self.assertEqual(self.service.load_player()["volume"], 50)
+
+    def test_encoder_direction_change_resets_partial_accumulator(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "hardware_buttons_enabled": True,
+                "buttons": [
+                    {"id": "btn-1", "name": "Lautstärke +", "pin": "", "press_type": "kurz", "input_mode": "encoder", "encoder_slot": "encoder-1", "encoder_event": "cw"},
+                    {"id": "btn-2", "name": "Lautstärke -", "pin": "", "press_type": "kurz", "input_mode": "encoder", "encoder_slot": "encoder-1", "encoder_event": "ccw"},
+                ],
+                "encoder_modules": [
+                    {"id": "encoder-1", "label": "Modul 1", "clk_pin": "GPIO17", "dt_pin": "GPIO27", "sw_pin": ""},
+                    {"id": "encoder-2", "label": "Modul 2", "clk_pin": "", "dt_pin": "", "sw_pin": ""},
+                ],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+        player = self.service.load_player()
+        player["volume"] = 45
+        self.service.save_player(player)
+
+        with patch.object(
+            self.service,
+            "_read_gpio_levels",
+            side_effect=[
+                {"GPIO17": 0, "GPIO27": 0},
+                {"GPIO17": 0, "GPIO27": 1},
+                {"GPIO17": 0, "GPIO27": 0},
+                {"GPIO17": 1, "GPIO27": 0},
+                {"GPIO17": 1, "GPIO27": 1},
+            ],
+        ):
+            self.service.poll_buttons_once(now=100.00)
+            self.service.poll_buttons_once(now=100.05)
+            self.service.poll_buttons_once(now=100.10)
+            self.service.poll_buttons_once(now=100.15)
+            self.service.poll_buttons_once(now=100.20)
+
+        self.assertEqual(self.service.load_player()["volume"], 40)
 
     def test_encoder_press_uses_module_switch_pin(self):
         write_json(
@@ -969,7 +1127,7 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertTrue(result["hardware"]["wifi_enabled"])
         set_wifi_radio.assert_not_called()
 
-    def test_wifi_is_switched_off_in_standby(self):
+    def test_wifi_stays_enabled_in_standby(self):
         state = self.service.ensure_runtime()
         state["powered_on"] = False
         state["playback_state"] = "stopped"
@@ -978,7 +1136,7 @@ class RuntimeServiceTest(unittest.TestCase):
 
         result = self.service.tick(elapsed_seconds=1)
 
-        self.assertFalse(result["runtime"]["wifi_enabled"])
+        self.assertTrue(result["runtime"]["wifi_enabled"])
 
     def test_auto_wifi_off_does_not_run_while_in_standby(self):
         write_json(
@@ -1001,7 +1159,7 @@ class RuntimeServiceTest(unittest.TestCase):
 
         result = self.service.tick(elapsed_seconds=1)
 
-        self.assertFalse(result["runtime"]["wifi_enabled"])
+        self.assertTrue(result["runtime"]["wifi_enabled"])
         self.assertNotEqual(result["runtime"]["last_event"], "WiFi automatisch aus nach 1 Min")
 
     def test_auto_wifi_off_uses_start_or_wake_timer(self):

@@ -481,62 +481,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  const encoderDebugRoot = document.querySelector("[data-encoder-debug]");
-  if (encoderDebugRoot instanceof HTMLElement) {
-    const refreshButton = encoderDebugRoot.querySelector("[data-encoder-refresh]");
-    const lastButton = encoderDebugRoot.querySelector("[data-encoder-last-button]");
-    const lastEvent = encoderDebugRoot.querySelector("[data-encoder-last-event]");
-    const pressed = encoderDebugRoot.querySelector("[data-encoder-pressed]");
-    const samples = encoderDebugRoot.querySelector("[data-encoder-samples]");
-
-    function setModuleValue(kind, id, value) {
-      const target = encoderDebugRoot.querySelector(`[data-encoder-${kind}="${id}"]`);
-      if (target) {
-        target.textContent = value ?? "-";
-      }
-    }
-
-    async function refreshEncoderDebug() {
-      if (refreshButton instanceof HTMLButtonElement) {
-        refreshButton.disabled = true;
-      }
-      try {
-        const response = await fetch("/api/setup/encoder-debug");
-        const payload = await response.json();
-        for (const module of payload.modules || []) {
-          setModuleValue("clk", module.id, module.clk_level ?? "-");
-          setModuleValue("dt", module.id, module.dt_level ?? "-");
-          setModuleValue("sw", module.id, module.sw_level ?? "-");
-        }
-        if (lastButton) {
-          lastButton.textContent = payload.last_button || "-";
-        }
-        if (lastEvent) {
-          lastEvent.textContent = payload.last_event || "-";
-        }
-        if (pressed) {
-          pressed.textContent = (payload.pressed_buttons || []).join(", ") || "-";
-        }
-        if (samples) {
-          const lines = (payload.samples || []).map((sample) =>
-            `${sample.label} clk=${sample.clk} dt=${sample.dt} dir=${sample.direction || "-"} action=${sample.action || "-"}`
-          );
-          samples.textContent = lines.join("\n") || "-";
-        }
-      } catch {
-        if (lastEvent) {
-          lastEvent.textContent = "Diagnose fehlgeschlagen";
-        }
-      } finally {
-        if (refreshButton instanceof HTMLButtonElement) {
-          refreshButton.disabled = false;
-        }
-      }
-    }
-
-    refreshButton?.addEventListener("click", refreshEncoderDebug);
-  }
-
   const hotspotSecurity = document.querySelector("[data-hotspot-security]");
   const hotspotPasswordField = document.querySelector("[data-hotspot-password-field]");
   if (hotspotSecurity instanceof HTMLSelectElement && hotspotPasswordField instanceof HTMLElement) {

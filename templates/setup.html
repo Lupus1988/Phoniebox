@@ -240,33 +240,6 @@
         </div>
       </article>
 
-      <article class="panel-box" data-encoder-debug>
-        <div class="panel-box-head">
-          <h3>Encoder-Diagnose</h3>
-          <button class="button-like" type="button" data-encoder-refresh>Aktualisieren</button>
-        </div>
-        <div class="encoder-debug-list" data-encoder-modules>
-          {% for module in encoder_debug.modules %}
-            <div class="encoder-debug-card">
-              <strong>{{ module.label }}</strong>
-              <span>CLK: {{ module.clk_pin or "-" }} = <b data-encoder-clk="{{ module.id }}">{{ module.clk_level if module.clk_level is not none else "-" }}</b></span>
-              <span>DT: {{ module.dt_pin or "-" }} = <b data-encoder-dt="{{ module.id }}">{{ module.dt_level if module.dt_level is not none else "-" }}</b></span>
-              <span>SW: {{ module.sw_pin or "-" }} = <b data-encoder-sw="{{ module.id }}">{{ module.sw_level if module.sw_level is not none else "-" }}</b></span>
-            </div>
-          {% endfor %}
-        </div>
-        <div class="encoder-debug-summary">
-          <span>Letzte Taste: <b data-encoder-last-button>{{ encoder_debug.last_button or "-" }}</b></span>
-          <span>Letztes Event: <b data-encoder-last-event>{{ encoder_debug.last_event or "-" }}</b></span>
-          <span>Gedrückt: <b data-encoder-pressed>{{ encoder_debug.pressed_buttons|join(", ") if encoder_debug.pressed_buttons else "-" }}</b></span>
-        </div>
-        <div class="encoder-debug-history">
-          <strong>Letzte Rohschritte</strong>
-          <pre data-encoder-samples>{% if encoder_debug.samples %}{% for sample in encoder_debug.samples %}{{ sample.label }} clk={{ sample.clk }} dt={{ sample.dt }} dir={{ sample.direction or "-" }} action={{ sample.action or "-" }}
-{% endfor %}{% else %}-{% endif %}</pre>
-        </div>
-      </article>
-
       <form method="post" class="panel-box">
         <input type="hidden" name="section" value="leds">
         <input type="hidden" name="led_count" value="{{ setup_data.leds|length }}">

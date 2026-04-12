@@ -1,8 +1,14 @@
 [Unit]
 Description=Phoniebox Runtime Tick
-After=network.target
+After=network.target phoniebox-panel.service
+Wants=phoniebox-panel.service
 
 [Service]
-Type=oneshot
+Type=simple
 WorkingDirectory=/opt/phoniebox-panel
-ExecStart=/opt/phoniebox-panel/.venv/bin/python /opt/phoniebox-panel/scripts/runtime_tick.py
+ExecStart=/opt/phoniebox-panel/.venv/bin/python /opt/phoniebox-panel/scripts/runtime_tick.py --daemon --interval 1.0
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

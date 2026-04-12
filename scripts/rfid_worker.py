@@ -49,6 +49,8 @@ RUNTIME_RFID_REMOVE_URL = f"http://127.0.0.1:{PANEL_PORT}/api/runtime/rfid/remov
 VALID_RC522_VERSION_REG_VALUES = {0x91, 0x92}
 RC522_PROBE_ORDER = ((0, 25), (1, 25))
 RC522_DEFAULT_IRQ_PIN = None
+RFID_BOOT_SUPPRESS_SECONDS = 6.0
+RFID_UID_CONFIRM_SECONDS = 0.25
 
 
 def load_setup():
@@ -649,6 +651,9 @@ def main():
     active_seen_at = 0.0
     last_uid = ""
     last_uid_at = 0.0
+    pending_uid = ""
+    pending_uid_since = 0.0
+    startup_deadline = time.monotonic() + RFID_BOOT_SUPPRESS_SECONDS
 
     try:
         while True:
@@ -662,6 +667,9 @@ def main():
                 last_status = None
                 active_uid = ""
                 active_seen_at = 0.0
+                pending_uid = ""
+                pending_uid_since = 0.0
+                startup_deadline = time.monotonic() + RFID_BOOT_SUPPRESS_SECONDS
 
             if reader is None:
                 time.sleep(0.5)
@@ -701,8 +709,27 @@ def main():
                 last_status = polled_status
 
             if uid:
+                if now < startup_deadline:
+                    pending_uid = uid
+                    pending_uid_since = now
+                    if getattr(reader, "presence_reader", False):
+                        active_uid = uid
+                        active_seen_at = now
+                    continue
                 if uid == active_uid and getattr(reader, "presence_reader", False):
                     active_seen_at = now
+                    continue
+                if uid != pending_uid:
+                    pending_uid = uid
+                    pending_uid_since = now
+                    if getattr(reader, "presence_reader", False):
+                        active_uid = uid
+                        active_seen_at = now
+                    continue
+                if (now - pending_uid_since) < RFID_UID_CONFIRM_SECONDS:
+                    if getattr(reader, "presence_reader", False):
+                        active_uid = uid
+                        active_seen_at = now
                     continue
                 if uid == last_uid and (now - last_uid_at) < 1.5:
                     active_uid = uid if getattr(reader, "presence_reader", False) else active_uid
@@ -711,11 +738,15 @@ def main():
                 if post_uid(uid):
                     last_uid = uid
                     last_uid_at = now
+                    pending_uid = ""
+                    pending_uid_since = 0.0
                     if getattr(reader, "presence_reader", False):
                         active_uid = uid
                         active_seen_at = now
                 continue
 
+            pending_uid = ""
+            pending_uid_since = 0.0
             if getattr(reader, "presence_reader", False) and active_uid and (now - active_seen_at) >= 0.8:
                 if post_remove():
                     active_uid = ""

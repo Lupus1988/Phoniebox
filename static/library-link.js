@@ -59,6 +59,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const deleteCancel = document.getElementById("album-delete-cancel");
   const deleteAlbumId = document.getElementById("album-delete-album-id");
   const deleteForm = document.getElementById("album-delete-form");
+  const coverForm = document.getElementById("album-cover-form");
+  const coverAlbumId = document.getElementById("album-cover-album-id");
+  const coverInput = document.getElementById("album-cover-input");
 
   let activeAlbum = null;
   let pendingAction = null;
@@ -761,6 +764,26 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  async function submitCoverUpload(albumId, file) {
+    if (!albumId || !(file instanceof File)) {
+      return;
+    }
+    const data = new FormData();
+    data.append("action", "replace_cover");
+    data.append("album_id", albumId);
+    data.append("cover_file", file);
+
+    const response = await fetch("/library", {
+      method: "POST",
+      headers: {"X-Requested-With": "XMLHttpRequest"},
+      body: data,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok === false) {
+      throw new Error(payload?.message || "Cover konnte nicht hochgeladen werden.");
+    }
+  }
+
   function openDeleteModal(albumId, albumName) {
     pendingDeleteAlbum = {id: albumId, name: albumName};
     if (deleteAlbumName) {
@@ -864,6 +887,44 @@ document.addEventListener("DOMContentLoaded", () => {
       await submitRuntimeAction(button);
     });
   }
+
+  for (const button of document.querySelectorAll("[data-cover-button]")) {
+    button.addEventListener("click", () => {
+      const albumId = button.dataset.albumId || "";
+      const albumName = button.dataset.albumName || "dieses Album";
+      if (!albumId || !(coverInput instanceof HTMLInputElement) || !(coverAlbumId instanceof HTMLInputElement)) {
+        return;
+      }
+      const confirmed = window.confirm(`Cover für "${albumName}" ersetzen/hochladen?\nUnterstützt: JPG, PNG, WEBP, GIF, BMP.`);
+      if (!confirmed) {
+        return;
+      }
+      coverAlbumId.value = albumId;
+      coverInput.value = "";
+      coverInput.click();
+    });
+  }
+
+  coverInput?.addEventListener("change", async () => {
+    const albumId = coverAlbumId instanceof HTMLInputElement ? coverAlbumId.value : "";
+    const file = coverInput.files?.[0];
+    if (!albumId || !file) {
+      return;
+    }
+    if (coverInput instanceof HTMLInputElement) {
+      coverInput.disabled = true;
+    }
+    try {
+      await submitCoverUpload(albumId, file);
+      window.location.reload();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Cover konnte nicht hochgeladen werden.");
+    } finally {
+      if (coverInput instanceof HTMLInputElement) {
+        coverInput.disabled = false;
+      }
+    }
+  });
 
   for (const button of document.querySelectorAll("[data-delete-album-button]")) {
     button.addEventListener("click", () => {

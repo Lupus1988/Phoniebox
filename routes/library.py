@@ -21,6 +21,7 @@ from services.library_service import (
     refresh_album_metadata,
     remove_track_from_album,
     remove_tracks_from_album,
+    replace_album_cover,
     rename_track_in_album,
     reorder_album_tracks,
     save_library,
@@ -147,6 +148,19 @@ def register_library_routes(app):
                 except ValueError as exc:
                     return library_action_response(False, str(exc), "error", 400)
                 return library_action_response(True, "Titel ergänzt.", "success", album=album)
+
+            if action == "replace_cover":
+                album_id = request.form.get("album_id", "").strip()
+                album = next((entry for entry in albums if entry["id"] == album_id), None)
+                if not album:
+                    return library_action_response(False, "Album nicht gefunden.", "error", 404)
+                cover_file = request.files.get("cover_file")
+                try:
+                    replace_album_cover(album, cover_file)
+                    save_library(library_data)
+                except ValueError as exc:
+                    return library_action_response(False, str(exc), "error", 400)
+                return library_action_response(True, "Cover aktualisiert.", "success", album=album)
 
             if action == "remove_track":
                 album_id = request.form.get("album_id", "").strip()

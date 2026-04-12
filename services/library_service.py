@@ -50,7 +50,7 @@ def is_audio_file(path):
 
 
 def is_cover_file(path):
-    return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+    return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 
 
 def build_playlist(album_dir):
@@ -90,6 +90,30 @@ def detect_cover(album_dir):
         return ""
     preferred = next((path for path in image_files if path.stem.lower() in {"cover", "folder"}), image_files[0])
     return preferred.relative_to(BASE_DIR).as_posix()
+
+
+def replace_album_cover(album, storage):
+    filename = getattr(storage, "filename", "") or ""
+    relative_name = safe_relative_path(filename)
+    if not filename or str(relative_name) in {"", "."}:
+        raise ValueError("Keine Cover-Datei ausgewählt.")
+    if not is_cover_file(relative_name):
+        raise ValueError("Es wurden keine unterstützten Bildformate hochgeladen.")
+
+    album_dir = BASE_DIR / album.get("folder", "")
+    album_dir.mkdir(parents=True, exist_ok=True)
+    suffix = relative_name.suffix.lower()
+
+    for existing in album_dir.iterdir():
+        if not existing.is_file():
+            continue
+        stem = existing.stem.lower()
+        if stem in {"cover", "folder"} and is_cover_file(existing):
+            existing.unlink(missing_ok=True)
+
+    target = album_dir / f"cover{suffix}"
+    storage.save(target)
+    return refresh_album_metadata(album)
 
 
 def album_conflict(albums, album_id, rfid_uid):

@@ -14,13 +14,21 @@
           <input type="hidden" name="album_id" value="{{ album.id }}">
           <div class="library-cell library-album-cell">
             <div class="library-album-name">{{ album.name }}</div>
-            <div class="library-cover-tile">
+            <button
+              type="button"
+              class="library-cover-tile"
+              data-cover-button
+              data-album-id="{{ album.id }}"
+              data-album-name="{{ album.name }}"
+              title="Cover ersetzen oder hochladen"
+              aria-label="Cover für {{ album.name }} ersetzen oder hochladen"
+            >
               {% if album.cover_url %}
                 <img src="{{ album.cover_url }}" alt="Cover von {{ album.name }}">
               {% else %}
                 <span>Cover</span>
               {% endif %}
-            </div>
+            </button>
           </div>
           <div class="library-cell library-status-cell">
             <div class="library-cell-title">Status</div>
@@ -217,6 +225,16 @@
   <form id="album-delete-form" method="post" class="hidden-form">
     <input type="hidden" name="action" value="delete_album">
     <input type="hidden" name="album_id" id="album-delete-album-id" value="">
+  </form>
+  <form id="album-cover-form" method="post" enctype="multipart/form-data" class="hidden-form">
+    <input type="hidden" name="action" value="replace_cover">
+    <input type="hidden" name="album_id" id="album-cover-album-id" value="">
+    <input
+      type="file"
+      name="cover_file"
+      id="album-cover-input"
+      accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,image/jpeg,image/png,image/webp,image/gif,image/bmp"
+    >
   </form>
   <script id="library-albums-json" type="application/json">{{ library_data.albums | tojson }}</script>
   <script src="{{ url_for('static', filename='library-link.js', v=asset_version) }}"></script>

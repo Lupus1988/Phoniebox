@@ -444,29 +444,6 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         prepare_inputs.assert_called_once_with(["GPIO17"])
 
-    def test_encoder_debug_endpoint_returns_gpio_levels_and_runtime_snapshot(self):
-        setup = default_setup()
-        setup["encoder_modules"][0]["clk_pin"] = "GPIO17"
-        setup["encoder_modules"][0]["dt_pin"] = "GPIO27"
-        setup["encoder_modules"][0]["sw_pin"] = "GPIO18"
-        runtime_snapshot = {
-            "last_event": "GPIO erkannt",
-            "last_event_at": 123,
-            "hardware": {"last_button": "Lautstärke +", "last_button_press_type": "kurz", "pressed_buttons": ["GPIO18"]},
-        }
-
-        with patch("app.load_setup", return_value=setup), patch("app.sample_gpio_levels", return_value={"GPIO17": 1, "GPIO27": 0, "GPIO18": 1}), patch(
-            "app.runtime_service.ensure_runtime", return_value=runtime_snapshot
-        ):
-            response = self.client.get("/api/setup/encoder-debug")
-
-        self.assertEqual(response.status_code, 200)
-        payload = response.get_json()
-        self.assertTrue(payload["ok"])
-        self.assertEqual(payload["modules"][0]["clk_level"], 1)
-        self.assertEqual(payload["modules"][0]["dt_level"], 0)
-        self.assertEqual(payload["last_button"], "Lautstärke +")
-
     def test_cross_role_pin_errors_detect_button_led_overlap(self):
         setup = default_setup()
         setup["buttons"][0]["pin"] = "GPIO17"
@@ -636,6 +613,48 @@ class AppRoutesTest(unittest.TestCase):
         self.assertTrue(response.get_json()["ok"])
         add_tracks.assert_called_once()
         save_library.assert_called_once_with(library_payload)
+
+    def test_replace_cover_xhr_returns_json_success(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+        album = {"id": "album-1", "name": "Test", "folder": "media/albums/test", "playlist": "", "track_count": 0, "rfid_uid": "", "cover_url": ""}
+        library_payload = {"albums": [album]}
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "routes.library.load_library", return_value=library_payload
+        ), patch("routes.library.replace_album_cover") as replace_cover, patch("routes.library.save_library") as save_library:
+            response = self.client.post(
+                "/library",
+                data={"action": "replace_cover", "album_id": "album-1", "cover_file": (BytesIO(b"fake-image"), "cover.png")},
+                content_type="multipart/form-data",
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        self.assertTrue(response.get_json()["ok"])
+        replace_cover.assert_called_once()
+        save_library.assert_called_once_with(library_payload)
+
+    def test_replace_cover_xhr_rejects_unsupported_format(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+        album = {"id": "album-1", "name": "Test", "folder": "media/albums/test", "playlist": "", "track_count": 0, "rfid_uid": "", "cover_url": ""}
+        library_payload = {"albums": [album]}
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "routes.library.load_library", return_value=library_payload
+        ), patch("routes.library.replace_album_cover", side_effect=ValueError("Es wurden keine unterstützten Bildformate hochgeladen.")):
+            response = self.client.post(
+                "/library",
+                data={"action": "replace_cover", "album_id": "album-1", "cover_file": (BytesIO(b"fake-image"), "cover.txt")},
+                content_type="multipart/form-data",
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(response.is_json)
+        self.assertFalse(response.get_json()["ok"])
 
     def test_remove_tracks_from_album_requires_selection(self):
         with self.assertRaises(ValueError):

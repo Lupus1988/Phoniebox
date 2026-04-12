@@ -1,10 +1,10 @@
 [Unit]
-Description=Run phoniebox runtime tick every second
+Description=Legacy Phoniebox Runtime Tick Timer
 
 [Timer]
-OnBootSec=5s
-OnUnitActiveSec=1s
-AccuracySec=500ms
+OnBootSec=30s
+OnUnitActiveSec=1d
+AccuracySec=1s
 Unit=phoniebox-runtime-tick.service
 
 [Install]
