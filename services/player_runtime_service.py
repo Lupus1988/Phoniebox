@@ -104,13 +104,28 @@ def runtime_trigger_rfid(payload=None, link_session_loader=None, link_session_sa
     if link_session_loader is not None and link_session_saver is not None:
         session = link_session_loader()
         if session.get("active") and uid:
+            from services.library_service import album_conflict, finish_link_session, load_library
+
+            library_data = load_library()
+            conflict = album_conflict(
+                library_data.get("albums", []),
+                str(session.get("album_id", "")).strip(),
+                uid,
+            )
+            if conflict:
+                updated = finish_link_session(session, "conflict", "Tag bereits anderweitig verlinkt", uid)
+                return {"ok": False, "link_session": updated}, 409
             session["last_uid"] = uid
             session["status"] = "uid_detected"
             session["message"] = "Tag erkannt"
             link_session_saver(session)
             return {"ok": True, "link_session": session}, 200
     result = runtime_service.assign_album_by_rfid(uid)
-    return result, (200 if result.get("ok") else 404)
+    if result.get("ok"):
+        return result, 200
+    if result.get("ignored"):
+        return result, 404
+    return result, 404
 
 
 def runtime_trigger_rfid_remove():
@@ -145,16 +160,26 @@ def runtime_trigger_load_album(payload=None):
     payload = payload or {}
     album_id = str(payload.get("album_id", "")).strip()
     raw_autoplay = payload.get("autoplay", "false")
+    raw_shuffle = payload.get("shuffle", "false")
     if isinstance(raw_autoplay, bool):
         autoplay = raw_autoplay
     else:
         autoplay = str(raw_autoplay).strip().lower() in {"1", "true", "on", "yes"}
-    result = runtime_service.load_album_by_id(album_id, autoplay=autoplay)
+    if isinstance(raw_shuffle, bool):
+        shuffle = raw_shuffle
+    else:
+        shuffle = str(raw_shuffle).strip().lower() in {"1", "true", "on", "yes"}
+    result = runtime_service.load_album_by_id(album_id, autoplay=autoplay, shuffle=shuffle)
     return result, (200 if result.get("ok") else 404)
 
 
 def runtime_trigger_queue_album(payload=None):
     payload = payload or {}
     album_id = str(payload.get("album_id", "")).strip()
-    result = runtime_service.queue_album_by_id(album_id)
+    raw_shuffle = payload.get("shuffle", "false")
+    if isinstance(raw_shuffle, bool):
+        shuffle = raw_shuffle
+    else:
+        shuffle = str(raw_shuffle).strip().lower() in {"1", "true", "on", "yes"}
+    result = runtime_service.queue_album_by_id(album_id, shuffle=shuffle)
     return result, (200 if result.get("ok") else 404)

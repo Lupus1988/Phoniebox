@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 from subprocess import CompletedProcess
+from urllib.error import HTTPError
 
 from scripts import rfid_worker
 
@@ -81,6 +82,14 @@ class ProbeRC522BackendTest(unittest.TestCase):
         self.assertTrue(backend.cleaned)
         self.assertIn("Der Chip antwortet nicht über SPI.", result["details"])
 
+    def test_probe_only_requires_spidev(self):
+        backend = FakeBackend(0x92)
+
+        with patch.dict("sys.modules", {"spidev": object()}), patch.object(rfid_worker, "LowLevelRC522Backend", return_value=backend):
+            result = rfid_worker.probe_rc522_backend()
+
+        self.assertTrue(result["ok"])
+
     def test_worker_suppresses_uid_posts_during_boot_grace_period(self):
         reader = FakeReader(["ABC123", KeyboardInterrupt()])
 
@@ -108,6 +117,144 @@ class ProbeRC522BackendTest(unittest.TestCase):
 
         post_uid.assert_called_once_with("ABC123")
         self.assertTrue(reader.cleaned)
+
+    def test_presence_reader_posts_uid_after_boot_grace_when_tag_stays_present(self):
+        reader = FakeReader(["ABC123", "ABC123", "ABC123", KeyboardInterrupt()])
+        reader.presence_reader = True
+
+        with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
+            rfid_worker, "build_reader", return_value=reader
+        ), patch.object(rfid_worker, "save_reader_status"), patch.object(rfid_worker, "post_uid", return_value=True) as post_uid, patch.object(
+            rfid_worker.time, "monotonic", side_effect=[0.0, 0.1, 6.2, 6.6, 6.9, 7.2]
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                rfid_worker.main()
+
+        post_uid.assert_called_once_with("ABC123")
+        self.assertTrue(reader.cleaned)
+
+    def test_presence_reader_posts_uid_after_boot_grace_with_brief_empty_polls(self):
+        reader = FakeReader(["ABC123", "", "ABC123", "", "ABC123", KeyboardInterrupt()])
+        reader.presence_reader = True
+
+        with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
+            rfid_worker, "build_reader", return_value=reader
+        ), patch.object(rfid_worker, "save_reader_status"), patch.object(rfid_worker, "post_uid", return_value=True) as post_uid, patch.object(
+            rfid_worker.time, "monotonic", side_effect=[0.0, 0.1, 6.0, 6.1, 6.2, 6.3, 6.4, 6.5]
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                rfid_worker.main()
+
+        post_uid.assert_called_once_with("ABC123")
+        self.assertTrue(reader.cleaned)
+
+    def test_post_json_treats_http_404_as_handled(self):
+        error = HTTPError("http://127.0.0.1/api/runtime/rfid", 404, "Not Found", hdrs=None, fp=None)
+
+        with patch.object(rfid_worker.urllib.request, "urlopen", side_effect=error):
+            status_code = rfid_worker.post_json("http://127.0.0.1/api/runtime/rfid", {"uid": "ABC123"})
+
+        self.assertEqual(status_code, 404)
+
+    def test_presence_reader_reposts_same_uid_when_link_session_becomes_active(self):
+        reader = FakeReader(["ABC123", "ABC123", "ABC123", "ABC123", KeyboardInterrupt()])
+        reader.presence_reader = True
+
+        with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
+            rfid_worker, "build_reader", return_value=reader
+        ), patch.object(rfid_worker, "save_reader_status"), patch.object(rfid_worker, "post_uid", return_value=True) as post_uid, patch.object(
+            rfid_worker, "load_link_session_state", side_effect=[
+                {"active": False, "status": "idle", "started_at": 0.0, "last_uid": ""},
+                {"active": False, "status": "idle", "started_at": 0.0, "last_uid": ""},
+                {"active": True, "status": "waiting_for_uid", "started_at": 1.0, "album_id": "a", "last_uid": ""},
+                {"active": True, "status": "waiting_for_uid", "started_at": 1.0, "album_id": "a", "last_uid": ""},
+                {"active": True, "status": "waiting_for_uid", "started_at": 1.0, "album_id": "a", "last_uid": ""},
+            ]
+        ), patch.object(
+            rfid_worker.time, "monotonic", side_effect=[0.0, 0.1, 6.2, 6.6, 7.0, 7.4, 7.8]
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                rfid_worker.main()
+
+        self.assertEqual(post_uid.call_count, 2)
+        post_uid.assert_called_with("ABC123")
+
+    def test_presence_reader_reposts_when_new_link_session_restarts_while_already_active(self):
+        reader = FakeReader(["ABC123", "ABC123", "ABC123", "ABC123", KeyboardInterrupt()])
+        reader.presence_reader = True
+
+        with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
+            rfid_worker, "build_reader", return_value=reader
+        ), patch.object(rfid_worker, "save_reader_status"), patch.object(rfid_worker, "post_uid", return_value=True) as post_uid, patch.object(
+            rfid_worker, "load_link_session_state", side_effect=[
+                {"active": True, "status": "uid_detected", "started_at": 1.0, "album_id": "a", "last_uid": "ABC123"},
+                {"active": True, "status": "uid_detected", "started_at": 1.0, "album_id": "a", "last_uid": "ABC123"},
+                {"active": True, "status": "waiting_for_uid", "started_at": 2.0, "album_id": "a", "last_uid": ""},
+                {"active": True, "status": "waiting_for_uid", "started_at": 2.0, "album_id": "a", "last_uid": ""},
+                {"active": True, "status": "waiting_for_uid", "started_at": 2.0, "album_id": "a", "last_uid": ""},
+            ]
+        ), patch.object(
+            rfid_worker.time, "monotonic", side_effect=[0.0, 0.1, 6.2, 6.6, 7.0, 7.4, 7.8]
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                rfid_worker.main()
+
+        self.assertGreaterEqual(post_uid.call_count, 1)
+
+    def test_link_session_waiting_posts_uid_without_presence_suppression(self):
+        reader = FakeReader(["ABC123", "ABC123", "ABC123", KeyboardInterrupt()])
+        reader.presence_reader = True
+
+        with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
+            rfid_worker, "build_reader", return_value=reader
+        ), patch.object(rfid_worker, "save_reader_status"), patch.object(rfid_worker, "post_uid", return_value=True) as post_uid, patch.object(
+            rfid_worker, "load_link_session_state", return_value={"active": True, "status": "waiting_for_uid", "started_at": 2.0, "album_id": "a", "last_uid": ""}
+        ), patch.object(
+            rfid_worker.time, "monotonic", side_effect=[0.0, 0.1, 6.2, 6.4, 6.7, 7.0]
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                rfid_worker.main()
+
+        post_uid.assert_called_once_with("ABC123")
+
+    def test_link_session_waiting_throttles_duplicate_uid_posts(self):
+        reader = FakeReader(["ABC123", "ABC123", "ABC123", KeyboardInterrupt()])
+        reader.presence_reader = True
+
+        with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
+            rfid_worker, "build_reader", return_value=reader
+        ), patch.object(rfid_worker, "save_reader_status"), patch.object(rfid_worker, "post_uid", return_value=True) as post_uid, patch.object(
+            rfid_worker, "load_link_session_state", return_value={"active": True, "status": "waiting_for_uid", "started_at": 2.0, "album_id": "a", "last_uid": ""}
+        ), patch.object(
+            rfid_worker.time, "monotonic", side_effect=[0.0, 0.1, 6.2, 6.5, 6.8, 7.0]
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                rfid_worker.main()
+
+        post_uid.assert_called_once_with("ABC123")
+
+    def test_presence_reader_reposts_same_uid_after_link_session_ends(self):
+        reader = FakeReader(["ABC123", "ABC123", "ABC123", "ABC123", KeyboardInterrupt()])
+        reader.presence_reader = True
+
+        with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
+            rfid_worker, "build_reader", return_value=reader
+        ), patch.object(rfid_worker, "save_reader_status"), patch.object(rfid_worker, "post_uid", return_value=True) as post_uid, patch.object(
+            rfid_worker, "load_link_session_state", side_effect=[
+                {"active": True, "status": "waiting_for_uid", "started_at": 2.0, "album_id": "a", "last_uid": ""},
+                {"active": True, "status": "uid_detected", "started_at": 2.0, "album_id": "a", "last_uid": "ABC123"},
+                {"active": False, "status": "linked", "started_at": 2.0, "album_id": "a", "last_uid": "ABC123"},
+                {"active": False, "status": "linked", "started_at": 2.0, "album_id": "a", "last_uid": "ABC123"},
+                {"active": False, "status": "linked", "started_at": 2.0, "album_id": "a", "last_uid": "ABC123"},
+            ]
+        ), patch.object(
+            rfid_worker.time, "monotonic", side_effect=[0.0, 0.1, 6.2, 6.6, 7.0, 7.4, 7.8]
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                rfid_worker.main()
+
+        self.assertEqual(post_uid.call_count, 2)
+        post_uid.assert_called_with("ABC123")
 
 
 if __name__ == "__main__":

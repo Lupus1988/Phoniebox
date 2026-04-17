@@ -50,6 +50,10 @@
       <div class="album-editor-table-head slim">
         <span id="track-selection-summary" class="status-pill neutral">Auswahl 0/{{ album.track_count }}</span>
         <button type="button" class="danger" id="track-delete-submit" disabled>Auswahl löschen</button>
+        <label class="status-pill neutral album-shuffle-pill" title="Album immer in zufälliger Reihenfolge laden">
+          <input type="checkbox" id="album-shuffle-toggle" {% if album.get('shuffle_enabled', False) %}checked{% endif %}>
+          <span>Shuffle</span>
+        </label>
         <span class="status-pill neutral" id="album-editor-status">Bereit</span>
       </div>
 
@@ -113,6 +117,6 @@
     </article>
   </section>
 
-  <script id="album-editor-json" type="application/json">{{ {"album": {"id": album.id, "name": album.name, "track_count": album.track_count, "rfid_uid": album.rfid_uid, "playlist": album.playlist}, "track_rows": track_rows} | tojson }}</script>
+  <script id="album-editor-json" type="application/json">{{ {"album": {"id": album.id, "name": album.name, "track_count": album.track_count, "rfid_uid": album.rfid_uid, "playlist": album.playlist, "shuffle_enabled": album.get('shuffle_enabled', False)}, "track_rows": track_rows} | tojson }}</script>
   <script src="{{ url_for('static', filename='album-editor.js', v=asset_version) }}"></script>
 {% endblock %}

@@ -1,9 +1,12 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from hardware import leds as leds_module
 from hardware import manager as manager_module
 from hardware import rfid as rfid_module
+from services import library_service
 
 
 class FakePWM:
@@ -12,6 +15,7 @@ class FakePWM:
         self.freq = freq
         self.started = None
         self.duty = None
+        self.value = 0
 
     def start(self, duty):
         self.started = duty
@@ -21,6 +25,39 @@ class FakePWM:
 
     def stop(self):
         pass
+
+    def off(self):
+        self.value = 0
+
+    def close(self):
+        return None
+
+
+class FakeLEDDevice:
+    def __init__(self, pin, pin_factory=None, initial_value=False, frequency=None):
+        self.pin = pin
+        self.pin_factory = pin_factory
+        self.is_lit = bool(initial_value)
+
+    def on(self):
+        self.is_lit = True
+
+    def off(self):
+        self.is_lit = False
+
+    def close(self):
+        return None
+
+
+class FakePWMLEDDevice(FakeLEDDevice):
+    def __init__(self, pin, pin_factory=None, initial_value=0, frequency=None):
+        super().__init__(pin, pin_factory=pin_factory, initial_value=bool(initial_value), frequency=frequency)
+        self.value = initial_value
+        self.frequency = frequency
+
+
+class FakeFactory:
+    pass
 
 
 class FakeGPIO:
@@ -59,8 +96,12 @@ class HardwareHelpersTest(unittest.TestCase):
         self.assertEqual(rfid_module.decode_keycode_to_char("KEY_Z"), "")
 
     def test_led_controller_handles_digital_and_pwm_outputs(self):
-        fake_gpio = FakeGPIO()
-        with patch.object(leds_module, "GPIO", fake_gpio):
+        with (
+            patch.object(leds_module, "GPIO", None),
+            patch.object(leds_module, "GpioZeroLED", FakeLEDDevice),
+            patch.object(leds_module, "GpioZeroPWMLED", FakePWMLEDDevice),
+            patch.object(leds_module, "LGPIOFactory", FakeFactory),
+        ):
             controller = leds_module.LEDController()
             ok = controller.apply_leds(
                 [
@@ -70,13 +111,17 @@ class HardwareHelpersTest(unittest.TestCase):
             )
 
             self.assertTrue(ok)
-            self.assertEqual(fake_gpio.outputs[23], fake_gpio.HIGH)
+            self.assertTrue(controller._digital[23].is_lit)
             self.assertIn(18, controller._pwm)
-            self.assertEqual(controller._pwm[18].duty, 40)
+            self.assertEqual(controller._pwm[18].value, 0.4)
 
     def test_led_controller_drives_inactive_pwm_pin_low_without_pwm(self):
-        fake_gpio = FakeGPIO()
-        with patch.object(leds_module, "GPIO", fake_gpio):
+        with (
+            patch.object(leds_module, "GPIO", None),
+            patch.object(leds_module, "GpioZeroLED", FakeLEDDevice),
+            patch.object(leds_module, "GpioZeroPWMLED", FakePWMLEDDevice),
+            patch.object(leds_module, "LGPIOFactory", FakeFactory),
+        ):
             controller = leds_module.LEDController()
             ok = controller.apply_leds(
                 [
@@ -86,17 +131,39 @@ class HardwareHelpersTest(unittest.TestCase):
 
             self.assertTrue(ok)
             self.assertNotIn(18, controller._pwm)
-            self.assertEqual(fake_gpio.outputs[18], fake_gpio.LOW)
+            self.assertFalse(controller._digital[18].is_lit)
+
+    def test_led_controller_uses_pwm_on_non_pwm_pin(self):
+        with (
+            patch.object(leds_module, "GPIO", None),
+            patch.object(leds_module, "GpioZeroLED", FakeLEDDevice),
+            patch.object(leds_module, "GpioZeroPWMLED", FakePWMLEDDevice),
+            patch.object(leds_module, "LGPIOFactory", FakeFactory),
+        ):
+            controller = leds_module.LEDController()
+            ok = controller.apply_leds(
+                [
+                    {"pin": "GPIO16", "brightness": 40, "is_on": True},
+                ]
+            )
+
+            self.assertTrue(ok)
+            self.assertIn(16, controller._pwm)
+            self.assertEqual(controller._pwm[16].value, 0.4)
 
     def test_led_controller_returns_false_on_busy_pwm_pin(self):
-        class BusyGPIO(FakeGPIO):
-            def setup(self, pin, mode, initial=None):
+        class BusyPWMLEDDevice(FakePWMLEDDevice):
+            def __init__(self, pin, pin_factory=None, initial_value=0, frequency=None):
                 if pin == 18:
                     raise RuntimeError("GPIO busy")
-                super().setup(pin, mode, initial=initial)
+                super().__init__(pin, pin_factory=pin_factory, initial_value=initial_value, frequency=frequency)
 
-        fake_gpio = BusyGPIO()
-        with patch.object(leds_module, "GPIO", fake_gpio):
+        with (
+            patch.object(leds_module, "GPIO", None),
+            patch.object(leds_module, "GpioZeroLED", FakeLEDDevice),
+            patch.object(leds_module, "GpioZeroPWMLED", BusyPWMLEDDevice),
+            patch.object(leds_module, "LGPIOFactory", FakeFactory),
+        ):
             controller = leds_module.LEDController()
             ok = controller.blink_led("GPIO18", brightness=40)
 
@@ -142,6 +209,19 @@ class HardwareHelpersTest(unittest.TestCase):
 
         self.assertFalse(result["ready"])
         self.assertIn("Kein Reader installiert.", result["notes"])
+
+    def test_detect_cover_appends_cache_token(self):
+        with TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            album_dir = base_dir / "media" / "albums" / "test"
+            album_dir.mkdir(parents=True, exist_ok=True)
+            cover = album_dir / "cover.png"
+            cover.write_bytes(b"png")
+
+            with patch.object(library_service, "BASE_DIR", base_dir):
+                cover_url = library_service.detect_cover(album_dir)
+
+            self.assertTrue(cover_url.startswith("media/albums/test/cover.png?v="))
 
 
 if __name__ == "__main__":

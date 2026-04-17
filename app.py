@@ -12,7 +12,7 @@ import threading
 import time
 from pathlib import Path
 
-from flask import Flask, flash, redirect, render_template, request, send_file, url_for
+from flask import Flask, flash, redirect, render_template, request, send_file, send_from_directory, url_for
 from werkzeug.utils import secure_filename
 try:
     import gpiod
@@ -110,6 +110,13 @@ def create_app():
 
 app = create_app()
 app.secret_key = app.config["SECRET_KEY"]
+
+
+@app.route("/media/<path:filename>")
+def media_files(filename):
+    return send_from_directory(MEDIA_DIR, filename)
+
+
 PWM_PINS = {"GPIO12", "GPIO13", "GPIO18", "GPIO19"}
 BUTTON_FUNCTIONS = [
     "Play/Pause",
@@ -304,8 +311,8 @@ def default_setup():
             "auto_standby_minutes": 30,
             "startup_sound_enabled": True,
             "shutdown_sound_enabled": True,
-            "suppress_shutdown_sound_for_sleep_timer": False,
-            "suppress_shutdown_sound_for_inactivity": False,
+            "play_shutdown_sound_for_sleep_timer": False,
+            "play_shutdown_sound_for_inactivity": False,
         },
         "audio": {
             "output_mode": "usb_dac",
@@ -644,16 +651,28 @@ def normalize_setup_data(data):
         data["buttons"] = [normalize_button_entry(button, button.get("name", "")) for button in default_setup()["buttons"]]
     data["encoder_modules"] = normalize_encoder_modules(data.get("encoder_modules", []))
     power_routines = data.setdefault("power_routines", {})
-    old_combined_suppress = power_routines.get("suppress_shutdown_sound_for_sleep_timer", False)
+    legacy_sleep_suppress = power_routines.get("suppress_shutdown_sound_for_sleep_timer")
+    legacy_inactivity_suppress = power_routines.get("suppress_shutdown_sound_for_inactivity")
     power_routines["auto_standby_enabled"] = power_routines.get("auto_standby_enabled") in {"on", True, "true", "1", 1}
     power_routines["auto_standby_minutes"] = to_int(power_routines.get("auto_standby_minutes"), 30, 1, 720)
     power_routines["startup_sound_enabled"] = power_routines.get("startup_sound_enabled") not in {"off", False, "false", "0", 0}
     power_routines["shutdown_sound_enabled"] = power_routines.get("shutdown_sound_enabled") not in {"off", False, "false", "0", 0}
-    power_routines["suppress_shutdown_sound_for_sleep_timer"] = power_routines.get("suppress_shutdown_sound_for_sleep_timer") in {"on", True, "true", "1", 1}
-    if "suppress_shutdown_sound_for_inactivity" in power_routines:
-        power_routines["suppress_shutdown_sound_for_inactivity"] = power_routines.get("suppress_shutdown_sound_for_inactivity") in {"on", True, "true", "1", 1}
+    if "play_shutdown_sound_for_sleep_timer" in power_routines:
+        power_routines["play_shutdown_sound_for_sleep_timer"] = power_routines.get("play_shutdown_sound_for_sleep_timer") in {"on", True, "true", "1", 1}
+    elif legacy_sleep_suppress is not None:
+        power_routines["play_shutdown_sound_for_sleep_timer"] = legacy_sleep_suppress not in {"on", True, "true", "1", 1}
     else:
-        power_routines["suppress_shutdown_sound_for_inactivity"] = old_combined_suppress in {"on", True, "true", "1", 1}
+        power_routines["play_shutdown_sound_for_sleep_timer"] = False
+    if "play_shutdown_sound_for_inactivity" in power_routines:
+        power_routines["play_shutdown_sound_for_inactivity"] = power_routines.get("play_shutdown_sound_for_inactivity") in {"on", True, "true", "1", 1}
+    elif legacy_inactivity_suppress is not None:
+        power_routines["play_shutdown_sound_for_inactivity"] = legacy_inactivity_suppress not in {"on", True, "true", "1", 1}
+    elif legacy_sleep_suppress is not None:
+        power_routines["play_shutdown_sound_for_inactivity"] = legacy_sleep_suppress not in {"on", True, "true", "1", 1}
+    else:
+        power_routines["play_shutdown_sound_for_inactivity"] = False
+    power_routines.pop("suppress_shutdown_sound_for_sleep_timer", None)
+    power_routines.pop("suppress_shutdown_sound_for_inactivity", None)
     wifi = data.setdefault("wifi", {})
     legacy_allow = wifi.get("allow_button_toggle", True)
     wifi["auto_wifi_off_enabled"] = wifi.get("auto_wifi_off_enabled") in {"on", True, "true", "1", 1}
@@ -1228,7 +1247,13 @@ def collect_conflicts(setup_data):
         if pin:
             led_pins.setdefault(pin, []).append(led.get("name", "LED"))
     for pin, names in led_pins.items():
-        if len(names) > 1:
+        functions = {
+            (led.get("function") or "").strip()
+            for led in leds
+            if (led.get("pin") or "").strip() == pin
+        }
+        wifi_led_overlap_allowed = "wifi_on" in functions and len(functions) == 2
+        if len(names) > 1 and not wifi_led_overlap_allowed:
             warnings.append(f"LED-PIN {pin} ist mehrfach belegt: {', '.join(names)}")
 
     encoder_pins = {}
@@ -1808,11 +1833,11 @@ def setup():
             routines = data.setdefault("power_routines", {})
             routines["startup_sound_enabled"] = request.form.get("startup_sound_enabled") == "on"
             routines["shutdown_sound_enabled"] = request.form.get("shutdown_sound_enabled") == "on"
-            routines["suppress_shutdown_sound_for_sleep_timer"] = (
-                request.form.get("suppress_shutdown_sound_for_sleep_timer") == "on"
+            routines["play_shutdown_sound_for_sleep_timer"] = (
+                request.form.get("play_shutdown_sound_for_sleep_timer") == "on"
             )
-            routines["suppress_shutdown_sound_for_inactivity"] = (
-                request.form.get("suppress_shutdown_sound_for_inactivity") == "on"
+            routines["play_shutdown_sound_for_inactivity"] = (
+                request.form.get("play_shutdown_sound_for_inactivity") == "on"
             )
             save_setup(data)
             flash("Sound-Optionen gespeichert.", "success")

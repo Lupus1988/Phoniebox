@@ -62,12 +62,16 @@ def main():
             has_pulse = False
             for led in led_status:
                 rendered_led = dict(led)
-                if led.get("effect") == "pulse" and led.get("is_on"):
+                if led.get("effect") == "blink" and led.get("is_on"):
                     has_pulse = True
-                    phase = (time.monotonic() % 2.4) / 2.4
+                    phase = (time.monotonic() % 1.8) / 1.8
+                    rendered_led["brightness"] = float(led.get("brightness", 0) or 0) if phase < 0.5 else 0.0
+                elif led.get("effect") == "pulse" and led.get("is_on"):
+                    has_pulse = True
+                    phase = (time.monotonic() % 8.0) / 8.0
                     wave = 0.5 - 0.5 * math.cos(phase * 2.0 * math.pi)
                     base = max(0, min(100, int(led.get("brightness", 0) or 0)))
-                    rendered_led["brightness"] = max(8, int(round(base * (0.22 + 0.78 * wave))))
+                    rendered_led["brightness"] = round(max(5.0, base * (0.05 + 0.95 * wave)), 1)
                 elif led.get("effect") in {"power_ramp_up", "power_ramp_down"} and led.get("is_on"):
                     has_pulse = True
                     progress = max(0.0, min(1.0, float(led.get("effect_progress", 0.0) or 0.0)))
@@ -81,7 +85,7 @@ def main():
                     cycle_duration = max(0.16, cycle_duration)
                     phase = (time.monotonic() / cycle_duration) % 1.0
                     wave = 0.5 - 0.5 * math.cos(phase * 2.0 * math.pi)
-                    rendered_led["brightness"] = max(3, int(round(base * (0.12 + 0.88 * wave))))
+                    rendered_led["brightness"] = round(max(3.0, base * (0.12 + 0.88 * wave)), 1)
                 rendered.append(rendered_led)
             payload = json.dumps(rendered, sort_keys=True, ensure_ascii=False)
             if has_pulse or payload != last_payload:

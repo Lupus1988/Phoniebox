@@ -4,6 +4,7 @@ import shutil
 import socket
 import signal
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -160,6 +161,33 @@ class PlaybackController:
                 Path(socket_path).unlink()
         except OSError:
             pass
+
+    def _cleanup_generated_playlist(self, playlist_path):
+        if not playlist_path:
+            return
+        try:
+            path = Path(playlist_path)
+            if path.exists():
+                path.unlink()
+        except OSError:
+            pass
+
+    def _build_runtime_playlist(self, playlist_relative_path, entries):
+        playlist_path = self._resolve_playlist_path(playlist_relative_path)
+        if not playlist_path or not entries:
+            return ""
+        lines = ["#EXTM3U"]
+        for entry in entries:
+            track_path = self._resolve_track_path(playlist_relative_path, entry)
+            if not track_path:
+                continue
+            lines.append(str(track_path))
+        if len(lines) <= 1:
+            return ""
+        handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".m3u", prefix="phoniebox-runtime-", delete=False)
+        with handle:
+            handle.write("\n".join(lines) + "\n")
+        return handle.name
 
     def _mpv_request(self, session, command):
         socket_path = session.get("socket_path", "")
@@ -356,12 +384,20 @@ class PlaybackController:
         backend = self.status()["active_backend"]
         playlist_path = self._resolve_playlist_path(playlist_relative_path)
         track_path = self._resolve_track_path(playlist_relative_path, entry)
+        runtime_playlist_path = ""
+        playlist_mode = False
+        playlist_source = str(playlist_path) if playlist_path else ""
+        if backend == "mpv" and playlist_path and entries:
+            runtime_playlist_path = self._build_runtime_playlist(playlist_relative_path, entries)
+            playlist_source = runtime_playlist_path or playlist_source
+            playlist_mode = bool(playlist_source)
         return {
             "backend": backend,
             "playlist": playlist_relative_path,
-            "playlist_source": str(playlist_path) if playlist_path else "",
+            "playlist_source": playlist_source,
+            "generated_playlist_source": runtime_playlist_path,
             "playlist_entries": list(entries or []),
-            "playlist_mode": bool(backend == "mpv" and playlist_path and entries),
+            "playlist_mode": playlist_mode,
             "entry": entry,
             "current_index": max(0, int(current_index)),
             "track_path": str(track_path) if track_path else "",
@@ -408,6 +444,8 @@ class PlaybackController:
                     session["started_at"] = None
                     self._cleanup_socket(session.get("socket_path", ""))
                     session["socket_path"] = ""
+                    self._cleanup_generated_playlist(session.get("generated_playlist_source", ""))
+                    session["generated_playlist_source"] = ""
                 else:
                     session["state"] = "paused" if paused else "playing"
                 return session
@@ -514,6 +552,8 @@ class PlaybackController:
         if session.get("backend") != "mock" and session.get("pid"):
             self._terminate_process_group(session["pid"])
         self._cleanup_socket(session.get("socket_path", ""))
+        self._cleanup_generated_playlist(session.get("generated_playlist_source", ""))
+        session["generated_playlist_source"] = ""
         session["state"] = "stopped"
         session["position_seconds"] = 0
         session["started_at"] = None

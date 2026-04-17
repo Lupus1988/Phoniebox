@@ -1,6 +1,7 @@
 import fcntl
 import json
 import os
+import random
 import secrets
 import subprocess
 import sys
@@ -25,7 +26,7 @@ from hardware.manager import detect_hardware
 from hardware.pins import filter_reserved_gpio_names, potential_system_pins, reserved_system_pins
 from runtime.audio import build_track_queue, load_playlist_entries, pick_track_duration, track_title_from_entry
 from services.audio_backends import create_audio_backend
-from system.networking import set_wifi_radio, wifi_radio_enabled
+from system.networking import run_wifi_state_command, wifi_radio_enabled
 
 DATA_DIR = BASE_DIR / "data"
 PLAYER_FILE = DATA_DIR / "player_state.json"
@@ -185,7 +186,8 @@ class RuntimeService:
     PRESENCE_READER_TYPES = {"RC522", "PN532_SPI"}
     ENCODER_ROTATION_EVENTS = {"cw", "ccw"}
     ENCODER_TRANSITION_DEBOUNCE_SECONDS = 0.004
-    ENCODER_STEPS_PER_EVENT = 2
+    ENCODER_STEPS_PER_EVENT = 4
+    ENCODER_ACTIVE_POLL_INTERVAL_SECONDS = 0.005
     ENCODER_CLOCKWISE_TRANSITIONS = {
         (0b00, 0b01),
         (0b01, 0b11),
@@ -302,6 +304,13 @@ class RuntimeService:
     def button_poll_interval_seconds(self):
         profile = self.performance_profile()
         return float(profile.get("button_poll_interval_seconds", 0.05) or 0.05)
+
+    def gpio_poll_interval_seconds(self, setup=None):
+        interval = float(self.button_poll_interval_seconds())
+        active_setup = setup if setup is not None else self.load_setup()
+        if self._encoder_rotation_assignments(active_setup):
+            return min(interval, self.ENCODER_ACTIVE_POLL_INTERVAL_SECONDS)
+        return interval
 
     def sound_path(self, sound_name):
         mapping = {
@@ -1066,14 +1075,14 @@ class RuntimeService:
         self._poll_encoder_rotations(setup, levels, button_now)
 
     def poll_buttons_forever(self, interval_seconds=None):
-        interval = float(interval_seconds if interval_seconds is not None else self.button_poll_interval_seconds())
+        interval = float(interval_seconds if interval_seconds is not None else self.gpio_poll_interval_seconds())
         while True:
             try:
                 self.poll_buttons_once()
             except Exception:
                 time.sleep(max(0.1, interval))
                 continue
-            time.sleep(max(0.02, interval))
+            time.sleep(max(0.001, interval))
 
     def ensure_runtime(self):
         defaults = default_runtime_state()
@@ -1115,10 +1124,10 @@ class RuntimeService:
             return bool(routines.get("startup_sound_enabled", True))
         if not bool(routines.get("shutdown_sound_enabled", True)):
             return False
-        if reason == "sleep_timer" and bool(routines.get("suppress_shutdown_sound_for_sleep_timer", False)):
-            return False
-        if reason == "inactivity" and bool(routines.get("suppress_shutdown_sound_for_inactivity", False)):
-            return False
+        if reason == "sleep_timer":
+            return bool(routines.get("play_shutdown_sound_for_sleep_timer", False))
+        if reason == "inactivity":
+            return bool(routines.get("play_shutdown_sound_for_inactivity", False))
         return True
 
     def _auto_standby_config(self):
@@ -1185,6 +1194,8 @@ class RuntimeService:
         }
 
     def _desired_wifi_state(self, runtime_state):
+        if not bool(runtime_state.get("powered_on", True)):
+            return False
         return bool(runtime_state.get("wifi_enabled", True))
 
     def _set_service_active(self, service_name, active):
@@ -1201,6 +1212,7 @@ class RuntimeService:
 
     def apply_wifi_policy(self, runtime_state):
         desired = self._desired_wifi_state(runtime_state)
+        runtime_state["wifi_enabled"] = bool(desired)
         current_enabled = bool(runtime_state.get("hardware", {}).get("wifi_enabled", self._wifi_enabled_cache))
         cache_age = time.monotonic() - float(self._wifi_enabled_cached_at or 0.0)
         if cache_age < self.WIFI_STATE_TTL_SECONDS:
@@ -1211,7 +1223,7 @@ class RuntimeService:
             runtime_state["hardware"]["wifi_enabled"] = current_enabled
             return runtime_state
 
-        result = set_wifi_radio(desired)
+        result = run_wifi_state_command(desired)
         if result.get("ok"):
             self._wifi_enabled_cache = bool(desired)
             self._wifi_enabled_cached_at = time.monotonic()
@@ -1223,7 +1235,8 @@ class RuntimeService:
     def toggle_wifi(self):
         with self.state_transaction():
             runtime_state = self.ensure_runtime()
-            runtime_state["wifi_enabled"] = not bool(runtime_state.get("wifi_enabled", True))
+            current_enabled = bool(runtime_state.get("wifi_enabled", True))
+            runtime_state["wifi_enabled"] = not current_enabled
             runtime_state = self.add_event(runtime_state, "Wifi an" if runtime_state["wifi_enabled"] else "Wifi aus")
             runtime_state = self.update_hardware_profile(runtime_state)
             runtime_state = self.apply_wifi_policy(runtime_state)
@@ -1271,10 +1284,34 @@ class RuntimeService:
         power_hold = runtime_state.get("power_hold", {})
         override = self._build_power_hold_led_override(runtime_state, leds) if power_hold.get("pressed") else {}
         effect_override = self._build_power_hold_led_effects(runtime_state) if power_hold.get("pressed") else {}
+        wifi_active = bool(runtime_state.get("hardware", {}).get("wifi_enabled", runtime_state.get("wifi_enabled", True)))
+        wifi_led_pins = {
+            (led.get("pin") or "").strip()
+            for led in leds
+            if (led.get("function") or "").strip() == "wifi_on"
+        }
+        active_wifi_led_pins = {pin for pin in wifi_led_pins if pin and wifi_active}
         for led in leds:
             if led.get("pin", "").strip() in reserved:
                 continue
+            pin = (led.get("pin") or "").strip()
             function = led.get("function", "")
+            if pin and function != "wifi_on" and pin in active_wifi_led_pins:
+                is_on = False
+                effect = ""
+                effect_progress = None
+                led_status.append(
+                    {
+                        "id": led.get("id", ""),
+                        "name": led.get("name", "LED"),
+                        "pin": led.get("pin", ""),
+                        "brightness": led.get("brightness", 0),
+                        "is_on": is_on,
+                        "effect": effect,
+                        "effect_progress": effect_progress,
+                    }
+                )
+                continue
             is_on = False
             if function == "power_on":
                 is_on = powered_on
@@ -1287,10 +1324,10 @@ class RuntimeService:
             elif function == "sleep_3":
                 is_on = sleep_level >= 3
             elif function == "wifi_on":
-                is_on = bool(runtime_state.get("hardware", {}).get("wifi_enabled", runtime_state.get("wifi_enabled", True)))
+                is_on = wifi_active
             if function in override:
                 is_on = override[function]
-            effect = "pulse" if function == "wifi_on" and is_on else ""
+            effect = "blink" if function == "wifi_on" and is_on else ""
             effect_progress = None
             if function in effect_override:
                 override_effect = effect_override[function]
@@ -1486,12 +1523,21 @@ class RuntimeService:
         self._rebuild_queue_display(player)
         return runtime_state, player
 
-    def load_album_into_player(self, album, runtime_state=None, player=None, autoplay=False):
+    def _playlist_entries_for_album(self, album, shuffle=False):
+        entries = load_playlist_entries(album.get("playlist", ""))
+        if shuffle and len(entries) > 1:
+            entries = list(entries)
+            random.shuffle(entries)
+        return entries
+
+    def load_album_into_player(self, album, runtime_state=None, player=None, autoplay=False, shuffle=None):
         runtime_state = runtime_state or self.ensure_runtime()
         player = player or self.load_player()
         runtime_state["powered_on"] = True
         runtime_state["wifi_enabled"] = True
-        entries = load_playlist_entries(album.get("playlist", ""))
+        if shuffle is None:
+            shuffle = bool(album.get("shuffle_enabled", False))
+        entries = self._playlist_entries_for_album(album, shuffle=shuffle)
         player["playlist"] = album.get("playlist", "")
         player["playlist_entries"] = entries
         player["current_track_index"] = 0
@@ -1639,7 +1685,7 @@ class RuntimeService:
             else:
                 if runtime_state.get("playback_session"):
                     runtime_state["playback_session"] = self.playback.stop(runtime_state["playback_session"])
-                runtime_state["wifi_enabled"] = True
+                runtime_state["wifi_enabled"] = False
                 runtime_state["wifi_auto_off_started_at"] = int(time.time())
                 runtime_state["sleep_timer"]["remaining_seconds"] = 0
                 runtime_state["sleep_timer"]["level"] = 0
@@ -1750,7 +1796,7 @@ class RuntimeService:
             self.save_player(player)
             return {"runtime": runtime_state, "player": player}
 
-    def load_album_by_id(self, album_id, autoplay=False):
+    def load_album_by_id(self, album_id, autoplay=False, shuffle=None):
         with self.state_transaction():
             runtime_state = self.ensure_runtime()
             player = self.load_player()
@@ -1759,10 +1805,21 @@ class RuntimeService:
                 runtime_state = self.add_event(runtime_state, f"Album nicht gefunden: {album_id}", "warning")
                 self.save_runtime(runtime_state)
                 return {"ok": False, "runtime": runtime_state, "player": player}
-            runtime_state, player = self.load_album_into_player(album, runtime_state, player, autoplay=autoplay)
+            effective_shuffle = bool(album.get("shuffle_enabled", False)) if shuffle is None else bool(shuffle)
+            runtime_state, player = self.load_album_into_player(
+                album,
+                runtime_state,
+                player,
+                autoplay=autoplay,
+                shuffle=effective_shuffle,
+            )
             runtime_state = self.add_event(
                 runtime_state,
-                f"Album geladen: {album.get('name', '')}" if not autoplay else f"Album gestartet: {album.get('name', '')}",
+                (
+                    f"Album geladen: {album.get('name', '')}"
+                    if not autoplay
+                    else f"Album gestartet: {album.get('name', '')}"
+                ) + (" (Shuffle)" if effective_shuffle else ""),
             )
             runtime_state = self.update_hardware_profile(runtime_state)
             runtime_state = self.apply_wifi_policy(runtime_state)
@@ -1771,7 +1828,7 @@ class RuntimeService:
             self.save_player(player)
             return {"ok": True, "runtime": runtime_state, "player": player, "album": album}
 
-    def queue_album_by_id(self, album_id):
+    def queue_album_by_id(self, album_id, shuffle=None):
         with self.state_transaction():
             runtime_state = self.ensure_runtime()
             player = self.load_player()
@@ -1780,7 +1837,7 @@ class RuntimeService:
                 runtime_state = self.add_event(runtime_state, f"Album nicht gefunden: {album_id}", "warning")
                 self.save_runtime(runtime_state)
                 return {"ok": False, "runtime": runtime_state, "player": player}
-            result = self.append_album_to_queue(album, runtime_state, player)
+            result = self.append_album_to_queue(album, runtime_state, player, shuffle=shuffle)
             return {"ok": True, "runtime": result["runtime"], "player": result["player"], "album": album}
 
     def reset_state(self):
@@ -2022,10 +2079,12 @@ class RuntimeService:
             self.save_player(player)
             return {"runtime": runtime_state, "player": player}
 
-    def append_album_to_queue(self, album, runtime_state=None, player=None):
+    def append_album_to_queue(self, album, runtime_state=None, player=None, shuffle=None):
         runtime_state = runtime_state or self.ensure_runtime()
         player = player or self.load_player()
-        entries = load_playlist_entries(album.get("playlist", ""))
+        if shuffle is None:
+            shuffle = bool(album.get("shuffle_enabled", False))
+        entries = self._playlist_entries_for_album(album, shuffle=shuffle)
         queued_items = self._queue_track_items(album, entries)
         if not player.get("current_track") and not player.get("playlist_entries") and queued_items:
             next_item = queued_items.pop(0)
@@ -2033,7 +2092,10 @@ class RuntimeService:
         player["queued_tracks"] = list(player.get("queued_tracks", [])) + queued_items
         self._rebuild_queue_display(player)
         runtime_state["queue_revision"] = secrets.token_hex(4)
-        runtime_state = self.add_event(runtime_state, f"Album zur Warteschlange hinzugefügt: {album.get('name', '')}")
+        runtime_state = self.add_event(
+            runtime_state,
+            f"Album zur Warteschlange hinzugefügt: {album.get('name', '')}" + (" (Shuffle)" if shuffle else ""),
+        )
         self.save_runtime(runtime_state)
         self.save_player(player)
         return {"runtime": runtime_state, "player": player}
@@ -2044,7 +2106,15 @@ class RuntimeService:
             player = self.load_player()
             runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
             action = self.get_reader_behavior()["remove"]
+            active_uid = runtime_state.get("active_rfid_uid", "").strip()
             runtime_state["active_rfid_uid"] = ""
+            if not active_uid:
+                runtime_state = self.update_hardware_profile(runtime_state)
+                runtime_state = self.apply_wifi_policy(runtime_state)
+                runtime_state = self.update_led_status(runtime_state)
+                self.save_runtime(runtime_state)
+                self.save_player(player)
+                return {"runtime": runtime_state, "player": player}
             if action == "stop":
                 if runtime_state.get("playback_session"):
                     runtime_state["playback_session"] = self.playback.stop(runtime_state["playback_session"])
@@ -2077,66 +2147,76 @@ class RuntimeService:
             library = self.load_library()
             behavior = self.get_reader_behavior()
             normalized_uid = uid.strip()
-            for album in library.get("albums", []):
-                if album.get("rfid_uid", "").strip() == normalized_uid:
-                    runtime_state["hardware"]["last_scanned_uid"] = normalized_uid
-                    same_album_active = runtime_state.get("active_album_id", "").strip() == album.get("id", "").strip()
-                    session = runtime_state.get("playback_session", {})
-                    session_has_track = bool(session.get("track_path") or session.get("entry"))
-                    if (
-                        self._reader_supports_presence()
-                        and runtime_state.get("active_rfid_uid", "").strip() == normalized_uid
-                        and same_album_active
-                        and behavior["read"] != "queue_append"
-                    ):
-                        runtime_state = self.update_hardware_profile(runtime_state)
-                        runtime_state = self.apply_wifi_policy(runtime_state)
-                        runtime_state = self.update_led_status(runtime_state)
-                        self.save_runtime(runtime_state)
-                        self.save_player(player)
-                        return {"ok": True, "runtime": runtime_state, "player": player}
+            target_album = next(
+                (album for album in library.get("albums", []) if album.get("rfid_uid", "").strip() == normalized_uid),
+                None,
+            )
+            if not target_album:
+                return {"ok": False, "ignored": True, "runtime": runtime_state, "player": player}
 
-                    runtime_state["active_rfid_uid"] = normalized_uid
-                    mode = behavior["read"]
-                    if mode == "queue_append":
-                        result = self.append_album_to_queue(album, runtime_state, player)
-                        result["runtime"]["active_rfid_uid"] = normalized_uid
-                        result["runtime"]["hardware"]["last_scanned_uid"] = normalized_uid
-                        result["runtime"] = self.add_event(result["runtime"], f"RFID geladen: {album.get('name', '')}")
-                        self.save_runtime(result["runtime"])
-                        return {"ok": True, "runtime": result["runtime"], "player": result["player"]}
-
-                    if (
-                        mode == "play"
-                        and same_album_active
-                        and runtime_state.get("playback_state") == "paused"
-                        and session_has_track
-                    ):
-                        runtime_state["playback_state"] = "playing"
-                        player["is_playing"] = True
-                        runtime_state["playback_session"] = self.playback.play(session)
-                        runtime_state = self.add_event(runtime_state, f"RFID fortgesetzt: {album.get('name', '')}")
-                        runtime_state = self.update_hardware_profile(runtime_state)
-                        runtime_state = self.apply_wifi_policy(runtime_state)
-                        runtime_state = self.update_led_status(runtime_state)
-                        self.save_runtime(runtime_state)
-                        self.save_player(player)
-                        return {"ok": True, "runtime": runtime_state, "player": player}
-
-                    runtime_state, player = self.load_album_into_player(album, runtime_state, player, autoplay=(mode == "play"))
-                    runtime_state = self.add_event(runtime_state, f"RFID geladen: {album.get('name', '')}")
-                    runtime_state = self.update_hardware_profile(runtime_state)
-                    runtime_state = self.apply_wifi_policy(runtime_state)
-                    runtime_state = self.update_led_status(runtime_state)
-                    self.save_runtime(runtime_state)
-                    self.save_player(player)
-                    return {"ok": True, "runtime": runtime_state, "player": player}
             runtime_state["hardware"]["last_scanned_uid"] = normalized_uid
-            runtime_state = self.add_event(runtime_state, f"Unbekannter RFID-Tag: {normalized_uid}", "warning")
+            same_album_active = runtime_state.get("active_album_id", "").strip() == target_album.get("id", "").strip()
+            same_uid_active = runtime_state.get("active_rfid_uid", "").strip() == normalized_uid
+            session = runtime_state.get("playback_session", {})
+            session_has_track = bool(session.get("track_path") or session.get("entry"))
+            mode = behavior["read"]
+
+            if same_uid_active and same_album_active and mode != "queue_append":
+                runtime_state = self.update_hardware_profile(runtime_state)
+                runtime_state = self.apply_wifi_policy(runtime_state)
+                runtime_state = self.update_led_status(runtime_state)
+                self.save_runtime(runtime_state)
+                self.save_player(player)
+                return {"ok": True, "runtime": runtime_state, "player": player}
+
+            if (
+                mode == "play"
+                and same_album_active
+                and runtime_state.get("playback_state") == "playing"
+                and session_has_track
+            ):
+                runtime_state["active_rfid_uid"] = normalized_uid
+                runtime_state = self.update_hardware_profile(runtime_state)
+                runtime_state = self.apply_wifi_policy(runtime_state)
+                runtime_state = self.update_led_status(runtime_state)
+                self.save_runtime(runtime_state)
+                self.save_player(player)
+                return {"ok": True, "runtime": runtime_state, "player": player}
+
+            runtime_state["active_rfid_uid"] = normalized_uid
+            if mode == "queue_append":
+                result = self.append_album_to_queue(target_album, runtime_state, player)
+                result["runtime"]["active_rfid_uid"] = normalized_uid
+                result["runtime"]["hardware"]["last_scanned_uid"] = normalized_uid
+                result["runtime"] = self.add_event(result["runtime"], f"RFID geladen: {target_album.get('name', '')}")
+                self.save_runtime(result["runtime"])
+                return {"ok": True, "runtime": result["runtime"], "player": result["player"]}
+
+            if (
+                mode == "play"
+                and same_album_active
+                and runtime_state.get("playback_state") == "paused"
+                and session_has_track
+            ):
+                runtime_state["playback_state"] = "playing"
+                player["is_playing"] = True
+                runtime_state["playback_session"] = self.playback.play(session)
+                runtime_state = self.add_event(runtime_state, f"RFID fortgesetzt: {target_album.get('name', '')}")
+                runtime_state = self.update_hardware_profile(runtime_state)
+                runtime_state = self.apply_wifi_policy(runtime_state)
+                runtime_state = self.update_led_status(runtime_state)
+                self.save_runtime(runtime_state)
+                self.save_player(player)
+                return {"ok": True, "runtime": runtime_state, "player": player}
+
+            runtime_state, player = self.load_album_into_player(target_album, runtime_state, player, autoplay=(mode == "play"))
+            runtime_state = self.add_event(runtime_state, f"RFID geladen: {target_album.get('name', '')}")
             runtime_state = self.update_hardware_profile(runtime_state)
             runtime_state = self.apply_wifi_policy(runtime_state)
+            runtime_state = self.update_led_status(runtime_state)
             self.save_runtime(runtime_state)
-            return {"ok": False, "runtime": runtime_state, "player": player}
+            self.save_player(player)
+            return {"ok": True, "runtime": runtime_state, "player": player}
 
     def trigger_button(self, name, press_type="kurz"):
         with self.state_transaction():

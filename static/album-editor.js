@@ -12,6 +12,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const selectionSummary = document.getElementById("track-selection-summary");
   const deleteButton = document.getElementById("track-delete-submit");
   const selectAll = document.getElementById("track-select-all");
+  const shuffleToggle = document.getElementById("album-shuffle-toggle");
   const albumId = appRoot?.dataset.albumId || "";
   let state = payloadNode ? JSON.parse(payloadNode.textContent) : {album: {id: albumId, name: "", track_count: 0}, track_rows: []};
   let draggedRow = null;
@@ -170,6 +171,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (albumNameInput instanceof HTMLInputElement) {
       albumNameInput.value = state.album?.name || "";
+    }
+    if (shuffleToggle instanceof HTMLInputElement) {
+      shuffleToggle.checked = Boolean(state.album?.shuffle_enabled);
     }
     document.title = state.album?.name ? `${state.album.name} · Phoniebox Panel` : "Phoniebox Panel";
   }
@@ -491,6 +495,23 @@ document.addEventListener("DOMContentLoaded", () => {
       checkbox.checked = checked;
     }
     syncSelectionState();
+  });
+
+  shuffleToggle?.addEventListener("change", async () => {
+    const data = new FormData();
+    data.append("action", "set_shuffle");
+    data.append("shuffle_enabled", shuffleToggle.checked ? "on" : "off");
+    setStatus("Speichere Shuffle …");
+    shuffleToggle.disabled = true;
+    try {
+      const payload = await postFormData(data);
+      applyPayload(payload, "Shuffle gespeichert");
+    } catch (error) {
+      shuffleToggle.checked = !shuffleToggle.checked;
+      setStatus(error.message || "Shuffle konnte nicht gespeichert werden.", "error");
+    } finally {
+      shuffleToggle.disabled = false;
+    }
   });
 
   renderRows(state.track_rows || []);

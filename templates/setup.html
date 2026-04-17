@@ -211,12 +211,12 @@
           <span>Sound bei Power off</span>
         </label>
         <label class="checkbox-row checkbox-no-wrap sound-option-field">
-          <input type="checkbox" name="suppress_shutdown_sound_for_sleep_timer" {% if setup_data.power_routines.suppress_shutdown_sound_for_sleep_timer %}checked{% endif %}>
-          <span>kein Sound bei Sleeptimer</span>
+          <input type="checkbox" name="play_shutdown_sound_for_sleep_timer" {% if setup_data.power_routines.play_shutdown_sound_for_sleep_timer %}checked{% endif %}>
+          <span>Sound bei Sleeptimer</span>
         </label>
         <label class="checkbox-row checkbox-no-wrap sound-option-field">
-          <input type="checkbox" name="suppress_shutdown_sound_for_inactivity" {% if setup_data.power_routines.suppress_shutdown_sound_for_inactivity %}checked{% endif %}>
-          <span>kein Sound bei Auto-Standby</span>
+          <input type="checkbox" name="play_shutdown_sound_for_inactivity" {% if setup_data.power_routines.play_shutdown_sound_for_inactivity %}checked{% endif %}>
+          <span>Sound bei Auto-Standby</span>
         </label>
       </div>
       <div class="setup-action-row">

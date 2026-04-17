@@ -246,6 +246,11 @@ def register_library_routes(app):
                     reorder_album_tracks(album, request.form.getlist("track_order"))
                     save_library(library_data)
                     return _album_editor_json(album, "Reihenfolge gespeichert.") if is_json_request() else album_editor_response(album_id, True, "Reihenfolge gespeichert.", "success")
+
+                if action == "set_shuffle":
+                    album["shuffle_enabled"] = request.form.get("shuffle_enabled", "").strip().lower() in {"1", "true", "on", "yes"}
+                    save_library(library_data)
+                    return _album_editor_json(album, "Shuffle gespeichert.")
             except ValueError as exc:
                 return album_editor_response(album_id, False, str(exc), "error", 400)
 

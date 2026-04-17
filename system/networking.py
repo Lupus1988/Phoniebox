@@ -1,5 +1,11 @@
+import json
 import shutil
 import subprocess
+import sys
+from pathlib import Path
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 def command_exists(name):
@@ -33,6 +39,43 @@ def set_wifi_radio(enabled):
     return {"ok": result["ok"], "details": details}
 
 
+def wifi_state_command_path(enabled):
+    return BASE_DIR / "scripts" / ("wifi_on.py" if enabled else "wifi_off.py")
+
+
+def run_wifi_state_command(enabled):
+    script = wifi_state_command_path(enabled)
+    if not script.exists():
+        return set_wifi_radio(enabled)
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        action = "aktiviert" if enabled else "deaktiviert"
+        return {"ok": False, "details": [f"WLAN konnte nicht {action} werden: {exc}"]}
+
+    output = (result.stdout or result.stderr or "").strip()
+    if output:
+        try:
+            payload = json.loads(output)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            details = payload.get("details")
+            if isinstance(details, list) and details:
+                return {"ok": result.returncode == 0 and bool(payload.get("ok", True)), "details": details}
+    if result.returncode == 0:
+        return {"ok": True, "details": [output or f"WLAN {'aktiviert' if enabled else 'deaktiviert'}."]}
+    return {
+        "ok": False,
+        "details": [output or f"WLAN konnte nicht {'aktiviert' if enabled else 'deaktiviert'} werden."],
+    }
+
+
 def normalize_hotspot_security(value):
     security = (value or "open").strip().lower()
     if security == "wpa2":
@@ -62,6 +105,15 @@ def connection_exists(name):
     if not result["ok"]:
         return False
     return name in result["output"].splitlines()
+
+
+def delete_connection_if_exists(name):
+    if not connection_exists(name):
+        return {"ok": True, "details": []}
+    result = run_command(["sudo", "nmcli", "connection", "delete", name])
+    if result["ok"]:
+        return {"ok": True, "details": [f"Vorhandenes Profil entfernt: {name}"]}
+    return {"ok": False, "details": [f"Profil {name} konnte nicht entfernt werden: {result['output']}"]}
 
 
 def wifi_devices():
@@ -115,6 +167,10 @@ def activate_hotspot_with_recovery(connection_name="phoniebox-hotspot"):
 def recreate_wifi_client(ssid, password, priority):
     details = []
     if not ssid:
+        return {"ok": True, "details": details}
+
+    if not password:
+        details.append(f"Client-WLAN {ssid} uebersprungen: kein Passwort gespeichert.")
         return {"ok": True, "details": details}
 
     connection_name = f"phonie-client-{ssid}"
@@ -304,6 +360,15 @@ def active_wifi_connected():
     return False
 
 
+def connection_active(name):
+    if not command_exists("nmcli"):
+        return False
+    result = run_command(["nmcli", "-t", "-f", "NAME", "connection", "show", "--active"])
+    if not result["ok"]:
+        return False
+    return name in result["output"].splitlines()
+
+
 def fallback_hotspot_cycle(config):
     if not command_exists("nmcli"):
         return {"ok": False, "summary": "nmcli nicht verfügbar.", "details": ["NetworkManager wird benötigt."]}
@@ -317,7 +382,8 @@ def fallback_hotspot_cycle(config):
         }
 
     if active_wifi_connected():
-        run_command(["sudo", "nmcli", "connection", "down", "phoniebox-hotspot"])
+        if connection_active("phoniebox-hotspot"):
+            run_command(["sudo", "nmcli", "connection", "down", "phoniebox-hotspot"])
         return {
             "ok": True,
             "summary": "Client-WLAN aktiv, Hotspot bleibt aus.",

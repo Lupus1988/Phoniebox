@@ -130,6 +130,35 @@ class AppRoutesTest(unittest.TestCase):
         self.assertNotIn("RC522 nicht erkannt.", body)
         self.assertNotIn("Der Chip antwortet nicht über SPI.", body)
 
+    def test_runtime_rfid_link_session_returns_conflict_for_already_linked_tag(self):
+        session = {
+            "active": True,
+            "album_id": "album-1",
+            "album_name": "Aktiv",
+            "started_at": 1.0,
+            "status": "waiting_for_uid",
+            "message": "",
+            "last_uid": "",
+        }
+        library_payload = {
+            "albums": [
+                {"id": "album-1", "name": "Aktiv", "rfid_uid": "", "folder": "", "playlist": "", "track_count": 0, "cover_url": ""},
+                {"id": "album-2", "name": "Andere", "rfid_uid": "ABC123", "folder": "", "playlist": "", "track_count": 0, "cover_url": ""},
+            ]
+        }
+
+        with patch("routes.player.load_link_session", return_value=dict(session)), patch(
+            "services.library_service.save_link_session"
+        ) as save_link_session, patch("services.library_service.load_library", return_value=library_payload):
+            response = self.client.post("/api/runtime/rfid", json={"uid": "ABC123"})
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["link_session"]["status"], "conflict")
+        self.assertEqual(payload["link_session"]["last_uid"], "ABC123")
+        save_link_session.assert_called_once()
+
     def test_api_endpoints_render(self):
         for path in ("/api/runtime", "/api/audio", "/api/hardware"):
             response = self.client.get(path)
@@ -138,6 +167,19 @@ class AppRoutesTest(unittest.TestCase):
     def test_player_snapshot_endpoint_renders(self):
         response = self.client.get("/api/player/snapshot")
         self.assertEqual(response.status_code, 200)
+
+    def test_media_route_serves_album_files(self):
+        with TemporaryDirectory() as tmpdir:
+            media_dir = Path(tmpdir)
+            target = media_dir / "albums" / "test" / "cover.png"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"png")
+
+            with patch("app.MEDIA_DIR", media_dir):
+                response = self.client.get("/media/albums/test/cover.png")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, b"png")
 
     def test_player_post_xhr_returns_json_snapshot(self):
         with patch(
@@ -308,6 +350,79 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(payload["category"], "error")
         self.assertIn("Albumname bereits vorhanden", payload["message"])
 
+    def test_library_play_album_uses_default_album_setting(self):
+        result = {"ok": True, "runtime": {"last_event": "Album gestartet"}, "player": {}}
+        with patch("routes.library.load_library", return_value={"albums": []}), patch(
+            "routes.library.runtime_service.load_album_by_id", return_value=result
+        ) as load_album:
+            response = self.client.post(
+                "/library",
+                data={"action": "play_album", "album_id": "album-1"},
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        load_album.assert_called_once_with("album-1", autoplay=True)
+
+    def test_library_queue_album_uses_default_album_setting(self):
+        result = {"ok": True, "runtime": {"last_event": "Album zur Warteschlange hinzugefügt"}, "player": {}}
+        with patch("routes.library.load_library", return_value={"albums": []}), patch(
+            "routes.library.runtime_service.queue_album_by_id", return_value=result
+        ) as queue_album:
+            response = self.client.post(
+                "/library",
+                data={"action": "queue_album", "album_id": "album-1"},
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        queue_album.assert_called_once_with("album-1")
+
+    def test_library_album_set_shuffle_persists_flag(self):
+        album = {
+            "id": "album-1",
+            "name": "Test",
+            "folder": "media/albums/test",
+            "playlist": "",
+            "track_count": 2,
+            "rfid_uid": "",
+            "cover_url": "",
+            "shuffle_enabled": False,
+            "track_entries": ["eins.mp3", "zwei.mp3"],
+        }
+        library_payload = {"albums": [album]}
+
+        with patch("routes.library.load_library", return_value=library_payload), patch(
+            "routes.library.save_library"
+        ) as save_library, patch("routes.library.refresh_album_metadata"):
+            response = self.client.post(
+                "/library/album/album-1",
+                data={"action": "set_shuffle", "shuffle_enabled": "on"},
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        self.assertTrue(response.get_json()["ok"])
+        self.assertTrue(album["shuffle_enabled"])
+        save_library.assert_called_once_with(library_payload)
+
+    def test_api_runtime_load_album_accepts_shuffle_flag(self):
+        with patch("routes.player.runtime_trigger_load_album", return_value=({"ok": True}, 200)) as trigger:
+            response = self.client.post("/api/runtime/load-album", json={"album_id": "album-1", "autoplay": True, "shuffle": True})
+
+        self.assertEqual(response.status_code, 200)
+        trigger.assert_called_once_with({"album_id": "album-1", "autoplay": True, "shuffle": True})
+
+    def test_api_runtime_queue_album_accepts_shuffle_flag(self):
+        with patch("routes.player.runtime_trigger_queue_album", return_value=({"ok": True}, 200)) as trigger:
+            response = self.client.post("/api/runtime/queue-album", json={"album_id": "album-1", "shuffle": True})
+
+        self.assertEqual(response.status_code, 200)
+        trigger.assert_called_once_with({"album_id": "album-1", "shuffle": True})
+
     def test_hotspot_password_warning_uses_current_security_value(self):
         setup = default_setup()
         setup["wifi"]["hotspot_security"] = "wpa-psk"
@@ -471,6 +586,15 @@ class AppRoutesTest(unittest.TestCase):
 
         self.assertTrue(any("GPIO25" in warning and "grundsätzlich" in warning for warning in warnings))
 
+    def test_collect_conflicts_allows_wifi_led_overlap_on_same_pin(self):
+        setup = default_setup()
+        setup["leds"][3]["pin"] = "GPIO16"
+        setup["leds"][5]["pin"] = "GPIO16"
+
+        warnings = collect_conflicts(setup)
+
+        self.assertFalse(any("LED-PIN GPIO16 ist mehrfach belegt" in warning for warning in warnings))
+
     def test_pin_choices_hide_potential_reader_and_audio_pins_by_default(self):
         setup = default_setup()
 
@@ -479,6 +603,33 @@ class AppRoutesTest(unittest.TestCase):
 
         self.assertNotIn("GPIO25", button_pins)
         self.assertNotIn("GPIO25", led_pins)
+
+    def test_setup_power_sounds_post_saves_positive_trigger_sound_flags(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+        captured = {}
+
+        def capture_save(data):
+            captured["setup"] = data
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "app.save_setup", side_effect=capture_save
+        ):
+            response = self.client.post(
+                "/setup",
+                data={
+                    "section": "power_sounds",
+                    "startup_sound_enabled": "on",
+                    "shutdown_sound_enabled": "on",
+                    "play_shutdown_sound_for_sleep_timer": "on",
+                },
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 302)
+        routines = captured["setup"]["power_routines"]
+        self.assertTrue(routines["play_shutdown_sound_for_sleep_timer"])
+        self.assertFalse(routines["play_shutdown_sound_for_inactivity"])
 
     def test_unknown_reader_action_does_not_save_setup(self):
         setup = default_setup()

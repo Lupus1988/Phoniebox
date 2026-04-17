@@ -733,13 +733,15 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     stopPolling();
+    pendingAction = null;
     linkModal.close();
     window.location.reload();
   }
 
   async function submitRuntimeAction(button) {
     const action = button.dataset.libraryRuntimeAction;
-    const albumId = button.dataset.albumId || button.closest("form")?.querySelector("[name='album_id']")?.value || "";
+    const form = button.closest("form");
+    const albumId = button.dataset.albumId || form?.querySelector("[name='album_id']")?.value || "";
     if (!action || !albumId || button.disabled) {
       return;
     }

@@ -156,6 +156,7 @@ def api_runtime_load_album():
     payload = request.get_json(silent=True) or {}
     payload["album_id"] = payload.get("album_id", request.form.get("album_id", ""))
     payload["autoplay"] = payload.get("autoplay", request.form.get("autoplay", "false"))
+    payload["shuffle"] = payload.get("shuffle", request.form.get("shuffle", "false"))
     result, status_code = runtime_trigger_load_album(payload)
     return _json_result(result, status_code)
 
@@ -164,5 +165,6 @@ def api_runtime_load_album():
 def api_runtime_queue_album():
     payload = request.get_json(silent=True) or {}
     payload["album_id"] = payload.get("album_id", request.form.get("album_id", ""))
+    payload["shuffle"] = payload.get("shuffle", request.form.get("shuffle", "false"))
     result, status_code = runtime_trigger_queue_album(payload)
     return _json_result(result, status_code)

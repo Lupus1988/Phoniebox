@@ -1,5 +1,7 @@
 import signal
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from runtime import playback as playback_module
@@ -159,6 +161,51 @@ class PlaybackControllerTest(unittest.TestCase):
 
         mpv_request.assert_called_once_with(session, ["playlist-next", "force"])
         self.assertEqual(updated["current_index"], 1)
+
+    def test_open_track_creates_runtime_playlist_for_shuffled_mpv_entries(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            album_dir = base_dir / "media" / "albums" / "test"
+            album_dir.mkdir(parents=True, exist_ok=True)
+            playlist = album_dir / "playlist.m3u"
+            playlist.write_text("#EXTM3U\n01.mp3\n02.mp3\n", encoding="utf-8")
+            (album_dir / "01.mp3").write_bytes(b"")
+            (album_dir / "02.mp3").write_bytes(b"")
+
+            with patch.object(playback_module, "BASE_DIR", base_dir), patch.object(
+                self.controller, "status", return_value={"active_backend": "mpv"}
+            ):
+                session = self.controller.open_track(
+                    "media/albums/test/playlist.m3u",
+                    "02.mp3",
+                    current_index=0,
+                    entries=["02.mp3", "01.mp3"],
+                )
+
+            runtime_playlist = Path(session["generated_playlist_source"])
+            self.assertTrue(runtime_playlist.exists())
+            self.assertTrue(session["playlist_mode"])
+            lines = runtime_playlist.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(lines[1:], [str((album_dir / "02.mp3").resolve()), str((album_dir / "01.mp3").resolve())])
+            runtime_playlist.unlink()
+
+    def test_stop_cleans_up_generated_runtime_playlist(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".m3u", delete=False) as handle:
+            playlist_path = handle.name
+
+        session = {
+            "backend": "mpv",
+            "state": "paused",
+            "pid": None,
+            "socket_path": "",
+            "generated_playlist_source": playlist_path,
+            "position_seconds": 0,
+        }
+
+        stopped = self.controller.stop(session)
+
+        self.assertEqual(stopped["state"], "stopped")
+        self.assertFalse(Path(playlist_path).exists())
 
 
 if __name__ == "__main__":

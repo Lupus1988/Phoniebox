@@ -1,5 +1,6 @@
 import secrets
 import shutil
+import time
 from pathlib import Path
 
 from werkzeug.utils import secure_filename
@@ -23,6 +24,7 @@ def default_link_session():
         "active": False,
         "album_id": "",
         "album_name": "",
+        "started_at": 0.0,
         "status": "idle",
         "message": "",
         "last_uid": "",
@@ -89,7 +91,8 @@ def detect_cover(album_dir):
     if not image_files:
         return ""
     preferred = next((path for path in image_files if path.stem.lower() in {"cover", "folder"}), image_files[0])
-    return preferred.relative_to(BASE_DIR).as_posix()
+    cache_token = int(preferred.stat().st_mtime_ns)
+    return f"{preferred.relative_to(BASE_DIR).as_posix()}?v={cache_token}"
 
 
 def replace_album_cover(album, storage):
@@ -271,6 +274,7 @@ def create_empty_album(album_name, rfid_uid=""):
         "track_count": 0,
         "rfid_uid": rfid_uid.strip(),
         "cover_url": "",
+        "shuffle_enabled": False,
     }
     conflict = album_conflict(library_data["albums"], album_entry["id"], album_entry["rfid_uid"])
     if conflict:
@@ -454,6 +458,7 @@ def track_rows(album):
 
 def enrich_library_data(library_data):
     for album in library_data.get("albums", []):
+        album["shuffle_enabled"] = bool(album.get("shuffle_enabled", False))
         refresh_album_metadata(album)
     return library_data
 
@@ -513,6 +518,7 @@ def album_editor_payload(album, message=""):
             "track_count": int(album.get("track_count", 0) or 0),
             "rfid_uid": album.get("rfid_uid", ""),
             "playlist": album.get("playlist", ""),
+            "shuffle_enabled": bool(album.get("shuffle_enabled", False)),
         },
         "track_rows": track_rows(album),
     }
@@ -523,6 +529,7 @@ def start_link_session(album):
         "active": True,
         "album_id": album.get("id", ""),
         "album_name": album.get("name", ""),
+        "started_at": time.time(),
         "status": "waiting_for_uid",
         "message": "Tag-scannen oder ID eingeben",
         "last_uid": "",

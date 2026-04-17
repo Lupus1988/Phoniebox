@@ -39,10 +39,16 @@ else:
     categorize = None
     ecodes = None
 
+try:
+    import lgpio
+except ImportError:
+    lgpio = None
+
 
 DATA_DIR = BASE_DIR / "data"
 SETUP_FILE = DATA_DIR / "setup.json"
 READER_STATUS_FILE = DATA_DIR / "reader_status.json"
+LINK_SESSION_FILE = DATA_DIR / "rfid_link_session.json"
 PANEL_PORT = int(os.environ.get("PHONIEBOX_PORT", "80"))
 RUNTIME_RFID_URL = f"http://127.0.0.1:{PANEL_PORT}/api/runtime/rfid"
 RUNTIME_RFID_REMOVE_URL = f"http://127.0.0.1:{PANEL_PORT}/api/runtime/rfid/remove"
@@ -62,6 +68,26 @@ def load_setup():
         return {}
 
 
+def link_session_active():
+    if not LINK_SESSION_FILE.exists():
+        return False
+    try:
+        payload = json.loads(LINK_SESSION_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool((payload or {}).get("active"))
+
+
+def load_link_session_state():
+    if not LINK_SESSION_FILE.exists():
+        return {}
+    try:
+        payload = json.loads(LINK_SESSION_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def post_json(url, payload=None):
     raw = json.dumps(payload or {}).encode("utf-8")
     request = urllib.request.Request(
@@ -71,10 +97,12 @@ def post_json(url, payload=None):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=3):
-            return True
+        with urllib.request.urlopen(request, timeout=3) as response:
+            return int(getattr(response, "status", 200) or 200)
+    except urllib.error.HTTPError as exc:
+        return int(getattr(exc, "code", 500) or 500)
     except (urllib.error.URLError, TimeoutError):
-        return False
+        return None
 
 
 def post_uid(uid):
@@ -166,10 +194,10 @@ class LowLevelRC522Backend:
 
     def __init__(self, spi_bus=0, spi_device=0, rst_pin=25):
         import spidev
-        import RPi.GPIO as GPIO
 
         self._spidev = spidev
-        self._gpio = GPIO
+        self._gpio = None
+        self._gpiochip = None
         self.spi_bus = spi_bus
         self.spi_device = spi_device
         self.rst_pin = rst_pin
@@ -177,15 +205,26 @@ class LowLevelRC522Backend:
         self._open()
 
     def _open(self):
-        self._gpio.setwarnings(False)
-        self._gpio.setmode(self._gpio.BCM)
-        self._gpio.setup(self.rst_pin, self._gpio.OUT)
-        self._gpio.output(self.rst_pin, self._gpio.HIGH)
+        self._open_reset_pin()
         self.spi = self._spidev.SpiDev()
         self.spi.open(self.spi_bus, self.spi_device)
         self.spi.max_speed_hz = 1_000_000
         self.spi.mode = 0
         self.reset()
+
+    def _open_reset_pin(self):
+        if lgpio is not None:
+            self._gpiochip = lgpio.gpiochip_open(0)
+            lgpio.gpio_claim_output(self._gpiochip, self.rst_pin, 1)
+            return
+
+        import RPi.GPIO as GPIO
+
+        self._gpio = GPIO
+        self._gpio.setwarnings(False)
+        self._gpio.setmode(self._gpio.BCM)
+        self._gpio.setup(self.rst_pin, self._gpio.OUT)
+        self._gpio.output(self.rst_pin, self._gpio.HIGH)
 
     def _write_reg(self, addr, value):
         self.spi.xfer2([((addr << 1) & 0x7E), value])
@@ -292,21 +331,36 @@ class LowLevelRC522Backend:
             except Exception:
                 pass
             self.spi = None
-        try:
-            self._gpio.cleanup()
-        except Exception:
-            pass
+        if self._gpiochip is not None and lgpio is not None:
+            try:
+                lgpio.gpio_write(self._gpiochip, self.rst_pin, 0)
+            except Exception:
+                pass
+            try:
+                lgpio.gpio_free(self._gpiochip, self.rst_pin)
+            except Exception:
+                pass
+            try:
+                lgpio.gpiochip_close(self._gpiochip)
+            except Exception:
+                pass
+            self._gpiochip = None
+        if self._gpio is not None:
+            try:
+                self._gpio.cleanup()
+            except Exception:
+                pass
+            self._gpio = None
 
 
 def probe_rc522_backend():
     try:
         import spidev  # noqa: F401
-        import RPi.GPIO  # noqa: F401
     except Exception as exc:
         return {
             "ok": False,
             "message": f"RC522-Treiber fehlen: {exc}",
-            "details": ["Für RC522 werden `spidev` und `RPi.GPIO` benötigt."],
+            "details": ["Für RC522 wird `spidev` benötigt."],
             "backend": None,
         }
 
@@ -647,13 +701,17 @@ def main():
     reader = None
     reader_type = None
     last_status = None
-    active_uid = ""
-    active_seen_at = 0.0
-    last_uid = ""
-    last_uid_at = 0.0
-    pending_uid = ""
-    pending_uid_since = 0.0
+    present_uid = ""
+    present_seen_at = 0.0
+    ignored_uid = ""
+    ignored_seen_at = 0.0
+    observed_uid = ""
+    observed_since = 0.0
+    observed_seen_at = 0.0
+    last_link_uid = ""
+    last_link_uid_at = 0.0
     startup_deadline = time.monotonic() + RFID_BOOT_SUPPRESS_SECONDS
+    last_link_session_marker = None
 
     try:
         while True:
@@ -665,10 +723,15 @@ def main():
                 reader = build_reader(configured_type)
                 reader_type = configured_type
                 last_status = None
-                active_uid = ""
-                active_seen_at = 0.0
-                pending_uid = ""
-                pending_uid_since = 0.0
+                present_uid = ""
+                present_seen_at = 0.0
+                ignored_uid = ""
+                ignored_seen_at = 0.0
+                observed_uid = ""
+                observed_since = 0.0
+                observed_seen_at = 0.0
+                last_link_uid = ""
+                last_link_uid_at = 0.0
                 startup_deadline = time.monotonic() + RFID_BOOT_SUPPRESS_SECONDS
 
             if reader is None:
@@ -692,6 +755,35 @@ def main():
 
             uid = reader.poll()
             now = time.monotonic()
+            link_session = load_link_session_state()
+            current_link_session_active = bool(link_session.get("active"))
+            current_link_session_marker = (
+                current_link_session_active,
+                str(link_session.get("album_id", "")),
+                str(link_session.get("status", "")),
+                float(link_session.get("started_at", 0.0) or 0.0),
+            )
+            link_session_waiting_for_uid = (
+                current_link_session_active
+                and str(link_session.get("status", "")) == "waiting_for_uid"
+            )
+            should_reset_for_link_session = (
+                link_session_waiting_for_uid
+                and not str(link_session.get("last_uid", "")).strip()
+                and current_link_session_marker != last_link_session_marker
+            )
+            link_session_ended = bool(last_link_session_marker and last_link_session_marker[0] and not current_link_session_active)
+            if should_reset_for_link_session or link_session_ended:
+                present_uid = ""
+                present_seen_at = 0.0
+                ignored_uid = ""
+                ignored_seen_at = 0.0
+                observed_uid = ""
+                observed_since = 0.0
+                observed_seen_at = 0.0
+                last_link_uid = ""
+                last_link_uid_at = 0.0
+            last_link_session_marker = current_link_session_marker
 
             polled_status = (
                 reader_type,
@@ -709,50 +801,65 @@ def main():
                 last_status = polled_status
 
             if uid:
-                if now < startup_deadline:
-                    pending_uid = uid
-                    pending_uid_since = now
-                    if getattr(reader, "presence_reader", False):
-                        active_uid = uid
-                        active_seen_at = now
+                if link_session_waiting_for_uid:
+                    if uid == last_link_uid and (now - last_link_uid_at) < 1.0:
+                        continue
+                    status_code = post_uid(uid)
+                    if status_code is not None and status_code < 500:
+                        last_link_uid = uid
+                        last_link_uid_at = now
                     continue
-                if uid == active_uid and getattr(reader, "presence_reader", False):
-                    active_seen_at = now
+
+                if uid != observed_uid:
+                    observed_uid = uid
+                    observed_since = now
+                observed_seen_at = now
+
+                if uid == present_uid:
+                    present_seen_at = now
                     continue
-                if uid != pending_uid:
-                    pending_uid = uid
-                    pending_uid_since = now
-                    if getattr(reader, "presence_reader", False):
-                        active_uid = uid
-                        active_seen_at = now
+                if uid == ignored_uid:
+                    ignored_seen_at = now
                     continue
-                if (now - pending_uid_since) < RFID_UID_CONFIRM_SECONDS:
-                    if getattr(reader, "presence_reader", False):
-                        active_uid = uid
-                        active_seen_at = now
+                if now < startup_deadline or (now - observed_since) < RFID_UID_CONFIRM_SECONDS:
                     continue
-                if uid == last_uid and (now - last_uid_at) < 1.5:
-                    active_uid = uid if getattr(reader, "presence_reader", False) else active_uid
-                    active_seen_at = now
+
+                status_code = post_uid(uid)
+                if status_code is None or status_code >= 500:
                     continue
-                if post_uid(uid):
-                    last_uid = uid
-                    last_uid_at = now
-                    pending_uid = ""
-                    pending_uid_since = 0.0
-                    if getattr(reader, "presence_reader", False):
-                        active_uid = uid
-                        active_seen_at = now
+                observed_uid = ""
+                observed_since = 0.0
+                observed_seen_at = 0.0
+                if status_code < 300:
+                    present_uid = uid
+                    present_seen_at = now
+                    ignored_uid = ""
+                    ignored_seen_at = 0.0
+                elif 400 <= status_code < 500:
+                    ignored_uid = uid
+                    ignored_seen_at = now
                 continue
 
-            pending_uid = ""
-            pending_uid_since = 0.0
-            if getattr(reader, "presence_reader", False) and active_uid and (now - active_seen_at) >= 0.8:
-                if post_remove():
-                    active_uid = ""
-                    active_seen_at = 0.0
+            if (
+                getattr(reader, "presence_reader", False)
+                and observed_uid
+                and (now - observed_seen_at) < RFID_UID_CONFIRM_SECONDS
+            ):
+                continue
+            observed_uid = ""
+            observed_since = 0.0
+            observed_seen_at = 0.0
+            if getattr(reader, "presence_reader", False) and present_uid and (now - present_seen_at) >= 0.8:
+                status_code = post_remove()
+                if status_code is not None and status_code < 500:
+                    present_uid = ""
+                    present_seen_at = 0.0
                 else:
                     time.sleep(0.2)
+                continue
+            if getattr(reader, "presence_reader", False) and ignored_uid and (now - ignored_seen_at) >= 0.8:
+                ignored_uid = ""
+                ignored_seen_at = 0.0
     finally:
         if reader is not None:
             reader.cleanup()

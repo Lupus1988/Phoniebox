@@ -1,3 +1,4 @@
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -61,6 +62,54 @@ class NetworkingTest(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["summary"], "Fallback-Hotspot aktiviert.")
+
+    def test_fallback_hotspot_cycle_does_not_touch_inactive_hotspot_when_client_is_up(self):
+        config = {"mode": "client_with_fallback_hotspot", "fallback_hotspot": True}
+        calls = []
+
+        def fake_run(command):
+            calls.append(command)
+            return {"ok": True, "output": ""}
+
+        with patch.object(networking, "command_exists", return_value=True), patch.object(
+            networking, "active_wifi_connected", return_value=True
+        ), patch.object(
+            networking, "connection_active", return_value=False
+        ), patch.object(
+            networking, "run_command", side_effect=fake_run
+        ):
+            result = networking.fallback_hotspot_cycle(config)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["summary"], "Client-WLAN aktiv, Hotspot bleibt aus.")
+        self.assertEqual(calls, [])
+
+    def test_recreate_wifi_client_skips_profile_without_password(self):
+        with patch.object(networking, "run_command") as run_command:
+            result = networking.recreate_wifi_client("Hausnetz", "", 100)
+
+        self.assertTrue(result["ok"])
+        self.assertIn("uebersprungen", result["details"][0])
+        run_command.assert_not_called()
+
+    def test_run_wifi_state_command_uses_script_output(self):
+        fake = '{"ok": true, "details": ["WLAN aktiviert."]}'
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout=fake, stderr="")
+        with patch.object(networking.subprocess, "run", return_value=completed):
+            result = networking.run_wifi_state_command(True)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["details"], ["WLAN aktiviert."])
+
+    def test_run_wifi_state_command_falls_back_to_set_wifi_radio_without_script(self):
+        with patch.object(networking, "wifi_state_command_path", return_value=networking.BASE_DIR / "scripts" / "missing.py"), patch.object(
+            networking, "set_wifi_radio", return_value={"ok": True, "details": ["fallback"]}
+        ) as set_wifi_radio:
+            result = networking.run_wifi_state_command(False)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["details"], ["fallback"])
+        set_wifi_radio.assert_called_once_with(False)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ Wants=NetworkManager.service network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/phoniebox-panel
-ExecStart=/opt/phoniebox-panel/.venv/bin/python /opt/phoniebox-panel/scripts/bootstrap_network.py
+ExecStart=/opt/phoniebox-panel/.venv/bin/python /opt/phoniebox-panel/scripts/bootstrap_network.py --seed-only
 
 [Install]
 WantedBy=multi-user.target

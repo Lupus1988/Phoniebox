@@ -13,7 +13,13 @@ WPA_SUPPLICANT_FILE = Path("/etc/wpa_supplicant/wpa_supplicant.conf")
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from system.networking import apply_wifi_profile, recreate_hotspot_profile, recreate_wifi_client
+from system.networking import (
+    apply_wifi_profile,
+    connection_exists,
+    delete_connection_if_exists,
+    recreate_hotspot_profile,
+    recreate_wifi_client,
+)
 
 
 def load_setup():
@@ -42,6 +48,17 @@ def detect_active_ssid():
     ok, output = run_command(["iwgetid", "-r"])
     if ok and output:
         return output.strip()
+    return ""
+
+
+def detect_active_connection_name():
+    ok, output = run_command(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show", "--active"])
+    if not ok:
+        return ""
+    for line in output.splitlines():
+        name, _, kind = line.partition(":")
+        if name and kind == "802-11-wireless":
+            return name
     return ""
 
 
@@ -88,8 +105,21 @@ def find_password_in_wpa_supplicant(ssid):
     return None
 
 
-def find_current_wifi_password(ssid):
-    return find_password_in_nmconnections(ssid) or find_password_in_wpa_supplicant(ssid)
+def find_password_via_nmcli(connection_name):
+    if not connection_name:
+        return None
+    ok, output = run_command(["sudo", "nmcli", "-s", "-g", "802-11-wireless-security.psk", "connection", "show", connection_name])
+    if ok and output:
+        return output.strip()
+    return None
+
+
+def find_current_wifi_password(ssid, connection_name=""):
+    return (
+        find_password_via_nmcli(connection_name)
+        or find_password_in_nmconnections(ssid)
+        or find_password_in_wpa_supplicant(ssid)
+    )
 
 
 def normalize_saved_networks(saved_networks):
@@ -117,6 +147,7 @@ def ensure_current_network_saved(config):
     wifi["saved_networks"] = saved_networks
 
     ssid = detect_active_ssid()
+    connection_name = detect_active_connection_name()
     if not ssid:
         changed = False
         if not saved_networks and wifi.get("mode") != "hotspot_only":
@@ -125,7 +156,7 @@ def ensure_current_network_saved(config):
         wifi["fallback_hotspot"] = True
         return changed, "Kein aktives WLAN zum Import gefunden."
 
-    password = find_current_wifi_password(ssid) or ""
+    password = find_current_wifi_password(ssid, connection_name=connection_name) or ""
     existing = next((entry for entry in saved_networks if entry["ssid"] == ssid), None)
     changed = False
     if existing is None:
@@ -151,9 +182,40 @@ def ensure_current_network_saved(config):
     return changed, f"Aktives WLAN {ssid} importiert."
 
 
+def cleanup_stale_client_profile(ssid, active_connection_name, password):
+    details = []
+    if not ssid:
+        return {"ok": True, "details": details}
+
+    phonie_connection_name = f"phonie-client-{ssid}"
+    if active_connection_name == phonie_connection_name:
+        return {"ok": True, "details": details}
+
+    # If another system-managed profile currently owns this SSID, remove the
+    # parallel Phoniebox client profile to avoid future autoconnect races.
+    if active_connection_name:
+        result = delete_connection_if_exists(phonie_connection_name)
+        details.extend(result["details"])
+        return {"ok": result["ok"], "details": details}
+
+    result = delete_connection_if_exists(phonie_connection_name)
+    details.extend(result["details"])
+    return {"ok": result["ok"], "details": details}
+
+
+def ensure_hotspot_profile(config):
+    wifi = config.get("wifi", {})
+    hotspot_name = "phoniebox-hotspot"
+    if connection_exists(hotspot_name):
+        return {"ok": True, "details": [f"Hotspot-Profil bereits vorhanden: {wifi.get('hotspot_ssid', 'Phonie-hotspot')}"]}
+    return recreate_hotspot_profile(wifi)
+
+
 def prepare_network_profiles(config):
     wifi = config.get("wifi", {})
     details = []
+    active_ssid = detect_active_ssid()
+    active_connection_name = detect_active_connection_name()
 
     ok, output = run_command(["sudo", "nmcli", "radio", "wifi", "on"])
     if not ok:
@@ -161,16 +223,25 @@ def prepare_network_profiles(config):
     details.append("WLAN-Funk aktiviert.")
 
     for network in wifi.get("saved_networks", []):
+        ssid = network.get("ssid", "").strip()
+        password = network.get("password", "").strip()
+        cleanup = cleanup_stale_client_profile(ssid, active_connection_name, password)
+        details.extend(cleanup["details"])
+        if not cleanup["ok"]:
+            return {"ok": False, "details": details}
+        if active_ssid and ssid == active_ssid and active_connection_name and active_connection_name != f"phonie-client-{ssid}":
+            details.append(f"Vorhandenes Systemprofil bleibt aktiv fuer {ssid}: {active_connection_name}")
+            continue
         result = recreate_wifi_client(
-            network.get("ssid", "").strip(),
-            network.get("password", "").strip(),
+            ssid,
+            password,
             network.get("priority", 10),
         )
         details.extend(result["details"])
         if not result["ok"]:
             return {"ok": False, "details": details}
 
-    hotspot = recreate_hotspot_profile(wifi)
+    hotspot = ensure_hotspot_profile(config)
     details.extend(hotspot["details"])
     return {"ok": hotspot["ok"], "details": details}
 

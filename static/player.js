@@ -71,6 +71,41 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function updateCover(player) {
+    const stage = document.querySelector(".cover-stage");
+    if (!(stage instanceof HTMLElement)) {
+      return;
+    }
+    const coverUrl = String(player.cover_url || "").trim();
+    const albumName = String(player.current_album || "").trim();
+    const initial = albumName ? albumName.slice(0, 1).toUpperCase() : "P";
+    const existingImage = document.getElementById("player-cover-image");
+    const existingPlaceholder = document.getElementById("player-cover-placeholder");
+
+    if (coverUrl) {
+      let image = existingImage;
+      if (!(image instanceof HTMLImageElement)) {
+        image = document.createElement("img");
+        image.id = "player-cover-image";
+        stage.innerHTML = "";
+        stage.appendChild(image);
+      }
+      image.src = coverUrl;
+      image.alt = albumName ? `Cover von ${albumName}` : "Albumcover";
+      return;
+    }
+
+    let placeholder = existingPlaceholder;
+    if (!(placeholder instanceof HTMLElement)) {
+      placeholder = document.createElement("div");
+      placeholder.id = "player-cover-placeholder";
+      placeholder.className = "cover-art-placeholder";
+      stage.innerHTML = "";
+      stage.appendChild(placeholder);
+    }
+    placeholder.innerHTML = `<span>${initial}</span>`;
+  }
+
   function setStatus(message, tone = "neutral") {
     if (!statusNode) {
       return;
@@ -139,6 +174,7 @@ document.addEventListener("DOMContentLoaded", () => {
     setText("player-album", player.current_album || "");
     setText("player-album-secondary", player.current_album || "");
     setText("player-track", player.current_track || "");
+    updateCover(player);
     setText("player-volume-value", `${payload.volume_percent}%`);
     const volumeValue = document.getElementById("player-volume-value");
     if (volumeValue) {
