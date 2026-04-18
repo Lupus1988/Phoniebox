@@ -1153,6 +1153,10 @@ label {
   transition: width 140ms ease;
 }
 
+.audio-progress-bar {
+  background: linear-gradient(90deg, #2a8f6a 0%, #70bf73 100%);
+}
+
 .upload-file-list {
   display: grid;
   gap: 0.5rem;
@@ -1250,7 +1254,15 @@ dialog[data-power-routine-dialog] {
   color: inherit;
 }
 
-dialog[data-power-routine-dialog]::backdrop {
+dialog[data-led-tuning-dialog] {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+dialog[data-power-routine-dialog]::backdrop,
+dialog[data-led-tuning-dialog]::backdrop {
   background: rgba(5, 7, 10, 0.62);
 }
 
@@ -1780,8 +1792,53 @@ dialog[data-power-routine-dialog]::backdrop {
 }
 
 .album-track-actions-cell {
-  width: 104px;
+  width: 238px;
   text-align: center;
+}
+
+.album-volume-edit-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.32rem 0.5rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 0.8rem;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.album-volume-edit-wrap span {
+  white-space: nowrap;
+}
+
+.album-volume-edit-input {
+  width: 4.7rem;
+  min-height: 36px;
+  padding: 0.3rem 0.45rem;
+}
+
+.album-processing-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 1.2rem;
+  background: rgba(8, 13, 18, 0.78);
+}
+
+.album-processing-overlay[hidden] {
+  display: none;
+}
+
+.album-processing-card {
+  width: min(36rem, 100%);
+  padding: 1rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 1rem;
+  background: var(--surface);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.38);
 }
 
 .link-album-copy,
@@ -2195,11 +2252,23 @@ dialog[data-power-routine-dialog]::backdrop {
 
 .led-table-head,
 .led-row {
-  grid-template-columns: 1fr 0.9fr 0.9fr auto;
+  grid-template-columns: 1.1fr 0.9fr 0.8fr auto;
 }
 
 .led-save-button {
   margin-top: 1rem;
+}
+
+.led-global-tuning-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+  margin-top: 0.9rem;
+}
+
+.led-global-tuning-row label {
+  display: grid;
+  gap: 0.35rem;
 }
 
 .led-test-button {
@@ -2524,6 +2593,10 @@ dialog[data-sleep-rotation-dialog]::backdrop {
   .mapping-actions {
     display: grid;
     justify-content: stretch;
+  }
+
+  .led-global-tuning-row {
+    grid-template-columns: 1fr;
   }
 
   .reader-select-inline {

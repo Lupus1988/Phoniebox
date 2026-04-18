@@ -45,6 +45,7 @@ class RuntimeServiceTest(unittest.TestCase):
                 "queue": [],
                 "playlist": "",
                 "playlist_entries": [],
+                "playlist_tracks": [],
                 "current_track_index": 0,
                 "queued_tracks": [],
             },
@@ -157,6 +158,51 @@ class RuntimeServiceTest(unittest.TestCase):
 
         self.assertEqual(snapshot["player"]["queue"], ["02 weiter", "03 bonus"])
 
+    def test_load_album_uses_persisted_track_durations(self):
+        library = self.service.load_library()
+        library["albums"][0]["tracks"] = [
+            {"path": "01-start.mp3", "title": "Erster Titel", "duration_seconds": 321},
+            {"path": "02-weiter.mp3", "title": "Zweiter Titel", "duration_seconds": 222},
+        ]
+        write_json(self.data_dir / "library.json", library)
+
+        with patch.object(service_module, "pick_track_duration", side_effect=AssertionError("fallback should not be used")):
+            result = self.service.load_album_by_id("album-1", autoplay=False)
+
+        self.assertEqual(result["player"]["current_track"], "Erster Titel")
+        self.assertEqual(result["player"]["duration_seconds"], 321)
+
+    def test_load_album_recomputes_zero_persisted_track_duration(self):
+        library = self.service.load_library()
+        library["albums"][0]["tracks"] = [
+            {"path": "01-start.mp3", "title": "Erster Titel", "duration_seconds": 0},
+            {"path": "02-weiter.mp3", "title": "Zweiter Titel", "duration_seconds": 222},
+        ]
+        write_json(self.data_dir / "library.json", library)
+
+        with patch.object(service_module, "pick_track_duration", return_value=333):
+            result = self.service.load_album_by_id("album-1", autoplay=False)
+
+        self.assertEqual(result["player"]["current_track"], "Erster Titel")
+        self.assertEqual(result["player"]["duration_seconds"], 333)
+        self.assertEqual(result["player"]["playlist_tracks"][0]["duration_seconds"], 333)
+
+    def test_save_runtime_skips_unchanged_state(self):
+        state = self.service.ensure_runtime()
+
+        with patch.object(service_module, "save_json") as save_json:
+            self.service.save_runtime(state)
+
+        save_json.assert_not_called()
+
+    def test_save_player_skips_unchanged_state(self):
+        player = self.service.load_player()
+
+        with patch.object(service_module, "save_json") as save_json:
+            self.service.save_player(player)
+
+        save_json.assert_not_called()
+
     def test_next_track_continues_into_queued_album(self):
         self.service.load_album_by_id("album-1", autoplay=True)
         self.service.queue_album_by_id("album-2")
@@ -187,6 +233,24 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(result["player"]["queue"], ["01 start"])
         self.assertEqual(result["runtime"]["last_event"], "Album gestartet: Testalbum (Shuffle)")
 
+    def test_load_album_by_id_shuffle_keeps_each_track_exactly_once(self):
+        (self.album_dir / "playlist.m3u").write_text(
+            "#EXTM3U\n01-start.mp3\n02-weiter.mp3\n01-start.mp3\n02-weiter.mp3\n",
+            encoding="utf-8",
+        )
+
+        with patch.object(service_module.random, "shuffle", side_effect=lambda items: items.reverse()):
+            result = self.service.load_album_by_id("album-1", autoplay=True, shuffle=True)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["player"]["playlist_entries"], ["02-weiter.mp3", "01-start.mp3"])
+        self.assertEqual(set(result["player"]["playlist_entries"]), {"01-start.mp3", "02-weiter.mp3"})
+        self.assertEqual(len(result["player"]["playlist_entries"]), 2)
+        self.assertEqual(
+            [track["path"] for track in result["player"]["playlist_tracks"]],
+            result["player"]["playlist_entries"],
+        )
+
     def test_queue_album_by_id_shuffle_uses_randomized_order(self):
         with patch.object(service_module.random, "shuffle", side_effect=lambda items: items.reverse()):
             result = self.service.queue_album_by_id("album-1", shuffle=True)
@@ -199,6 +263,20 @@ class RuntimeServiceTest(unittest.TestCase):
         )
         self.assertEqual(result["player"]["queue"], ["01 start"])
         self.assertEqual(result["runtime"]["last_event"], "Album zur Warteschlange hinzugefügt: Testalbum (Shuffle)")
+
+    def test_queue_album_by_id_shuffle_keeps_each_track_exactly_once(self):
+        (self.album_dir / "playlist.m3u").write_text(
+            "#EXTM3U\n01-start.mp3\n02-weiter.mp3\n01-start.mp3\n02-weiter.mp3\n",
+            encoding="utf-8",
+        )
+
+        with patch.object(service_module.random, "shuffle", side_effect=lambda items: items.reverse()):
+            result = self.service.queue_album_by_id("album-1", shuffle=True)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["player"]["current_track"], "02 weiter")
+        self.assertEqual([item["entry"] for item in result["player"]["queued_tracks"]], ["01-start.mp3"])
+        self.assertEqual(result["player"]["queue"], ["01 start"])
 
     def test_load_album_by_id_uses_saved_album_shuffle_setting(self):
         library = self.service.load_library()
@@ -238,6 +316,51 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(removed["runtime"]["active_album_id"], "")
         self.assertEqual(removed["player"]["current_album"], "")
         self.assertFalse(removed["player"]["is_playing"])
+
+    def test_previous_track_after_threshold_restarts_current_track(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        self.service.next_track(autoplay=True)
+        self.service.seek(35)
+
+        result = self.service.previous_track()
+
+        self.assertEqual(result["player"]["current_track_index"], 1)
+        self.assertEqual(result["player"]["current_track"], "02 weiter")
+        self.assertEqual(result["player"]["position_seconds"], 0)
+        self.assertEqual(result["runtime"]["playback_session"]["position_seconds"], 0)
+        self.assertEqual(result["runtime"]["last_event"], "Titel neu gestartet: 02 weiter")
+
+    def test_previous_track_within_threshold_moves_to_previous_track(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        self.service.next_track(autoplay=True)
+        self.service.seek(2)
+
+        result = self.service.previous_track()
+
+        self.assertEqual(result["player"]["current_track_index"], 0)
+        self.assertEqual(result["player"]["current_track"], "01 start")
+        self.assertEqual(result["player"]["position_seconds"], 0)
+        self.assertEqual(result["runtime"]["last_event"], "Vorheriger Titel: 01 start")
+
+    def test_sync_playback_session_marks_runtime_stopped_when_backend_stops_unexpectedly(self):
+        runtime_state = self.service.ensure_runtime()
+        player = self.service.load_player()
+        runtime_state, player = self.service.load_album_into_player(
+            self.service._album_by_id("album-1"),
+            runtime_state,
+            player,
+            autoplay=True,
+        )
+
+        stopped_session = dict(runtime_state["playback_session"])
+        stopped_session["state"] = "stopped"
+
+        with patch.object(self.service.playback, "sync_session", return_value=stopped_session):
+            updated_runtime, updated_player, session_finished = self.service._sync_playback_session(runtime_state, player)
+
+        self.assertTrue(session_finished)
+        self.assertEqual(updated_runtime["playback_state"], "stopped")
+        self.assertFalse(updated_player["is_playing"])
 
     def test_remove_rfid_pause_uses_settings_and_preserves_position(self):
         write_json(
@@ -422,6 +545,7 @@ class RuntimeServiceTest(unittest.TestCase):
         self.service.load_album_by_id("album-1", autoplay=True)
         runtime_state = self.service.ensure_runtime()
         player = self.service.load_player()
+        player["playlist_tracks"] = []
         runtime_state["playback_state"] = "playing"
         runtime_state["playback_session"] = {
             **runtime_state["playback_session"],
@@ -1792,7 +1916,7 @@ class RuntimeServiceTest(unittest.TestCase):
 
         self.assertAlmostEqual(interval, 0.07, places=3)
 
-    def test_gpio_poll_interval_is_tightened_for_active_encoder_rotation(self):
+    def test_gpio_poll_interval_uses_deeper_idle_for_encoder_without_recent_activity(self):
         write_json(
             self.data_dir / "settings.json",
             {
@@ -1821,9 +1945,9 @@ class RuntimeServiceTest(unittest.TestCase):
             },
         )
 
-        interval = self.service.gpio_poll_interval_seconds()
+        interval = self.service.current_gpio_poll_interval_seconds(now=0.0)
 
-        self.assertAlmostEqual(interval, 0.005, places=3)
+        self.assertAlmostEqual(interval, 0.02, places=3)
 
     def test_gpio_poll_interval_stays_on_profile_without_encoder_rotation(self):
         write_json(
@@ -1853,9 +1977,77 @@ class RuntimeServiceTest(unittest.TestCase):
             },
         )
 
-        interval = self.service.gpio_poll_interval_seconds()
+        interval = self.service.current_gpio_poll_interval_seconds(now=0.0)
 
         self.assertAlmostEqual(interval, 0.07, places=3)
+
+    def test_gpio_poll_interval_switches_to_fast_mode_after_encoder_activity(self):
+        write_json(
+            self.data_dir / "settings.json",
+            {
+                "max_volume": 85,
+                "volume_step": 5,
+                "sleep_timer_step": 5,
+                "rfid_read_action": "play",
+                "rfid_remove_action": "stop",
+                "performance_profile": "pi_zero2w",
+            },
+        )
+        setup = {
+            "reader": {"type": "USB", "connection_hint": ""},
+            "hardware_buttons_enabled": True,
+            "buttons": [
+                {"id": "btn-1", "name": "Lautstärke +", "pin": "", "press_type": "kurz", "input_mode": "encoder", "encoder_slot": "encoder-1", "encoder_event": "cw"},
+                {"id": "btn-2", "name": "Lautstärke -", "pin": "", "press_type": "kurz", "input_mode": "encoder", "encoder_slot": "encoder-1", "encoder_event": "ccw"},
+            ],
+            "encoder_modules": [
+                {"id": "encoder-1", "label": "Modul 1", "clk_pin": "GPIO17", "dt_pin": "GPIO27", "sw_pin": ""},
+            ],
+            "leds": [],
+            "wifi": {},
+        }
+        write_json(self.data_dir / "setup.json", setup)
+
+        self.service._encoder_fast_poll_until = 0.0
+        self.service._poll_encoder_rotations(setup, {"GPIO17": 0, "GPIO27": 0}, now=1.0)
+        self.service._poll_encoder_rotations(setup, {"GPIO17": 0, "GPIO27": 1}, now=1.02)
+
+        interval = self.service.current_gpio_poll_interval_seconds(setup=setup, now=1.05)
+
+        self.assertAlmostEqual(interval, 0.005, places=3)
+
+    def test_gpio_poll_interval_stays_in_active_idle_window_after_recent_button_activity(self):
+        write_json(
+            self.data_dir / "settings.json",
+            {
+                "max_volume": 85,
+                "volume_step": 5,
+                "sleep_timer_step": 5,
+                "rfid_read_action": "play",
+                "rfid_remove_action": "stop",
+                "performance_profile": "pi_zero2w",
+            },
+        )
+        setup = {
+            "reader": {"type": "USB", "connection_hint": ""},
+            "hardware_buttons_enabled": True,
+            "buttons": [
+                {"id": "btn-1", "name": "Lautstärke +", "pin": "", "press_type": "kurz", "input_mode": "encoder", "encoder_slot": "encoder-1", "encoder_event": "cw"},
+                {"id": "btn-2", "name": "Lautstärke -", "pin": "", "press_type": "kurz", "input_mode": "encoder", "encoder_slot": "encoder-1", "encoder_event": "ccw"},
+            ],
+            "encoder_modules": [
+                {"id": "encoder-1", "label": "Modul 1", "clk_pin": "GPIO17", "dt_pin": "GPIO27", "sw_pin": ""},
+            ],
+            "leds": [],
+            "wifi": {},
+        }
+        write_json(self.data_dir / "setup.json", setup)
+
+        self.service._gpio_activity_until = 2.0
+
+        interval = self.service.current_gpio_poll_interval_seconds(setup=setup, now=1.5)
+
+        self.assertAlmostEqual(interval, 0.012, places=3)
 
     def test_performance_profile_falls_back_to_auto_for_invalid_setting(self):
         write_json(

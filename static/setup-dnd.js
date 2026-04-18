@@ -595,6 +595,8 @@ document.addEventListener("DOMContentLoaded", () => {
   for (const ledRow of document.querySelectorAll(".led-row")) {
     const pinSelect = ledRow.querySelector("[data-led-pin]");
     const brightnessInput = ledRow.querySelector("[data-led-brightness]");
+    const pwmFrequencyInput = ledRow.querySelector("[data-led-pwm-frequency]");
+    const brightnessGammaInput = ledRow.querySelector("[data-led-brightness-gamma]");
     const testButton = ledRow.querySelector("[data-led-test-button]");
     if (!(pinSelect instanceof HTMLSelectElement) || !(testButton instanceof HTMLButtonElement)) {
       continue;
@@ -619,6 +621,8 @@ document.addEventListener("DOMContentLoaded", () => {
           body: JSON.stringify({
             pin: pinSelect.value,
             brightness: brightnessInput instanceof HTMLInputElement ? brightnessInput.value : 100,
+            pwm_frequency_hz: pwmFrequencyInput instanceof HTMLInputElement ? pwmFrequencyInput.value : 800,
+            brightness_gamma: brightnessGammaInput instanceof HTMLInputElement ? brightnessGammaInput.value : 1.0,
           }),
         });
       } finally {

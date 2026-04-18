@@ -160,15 +160,18 @@ def runtime_trigger_load_album(payload=None):
     payload = payload or {}
     album_id = str(payload.get("album_id", "")).strip()
     raw_autoplay = payload.get("autoplay", "false")
-    raw_shuffle = payload.get("shuffle", "false")
     if isinstance(raw_autoplay, bool):
         autoplay = raw_autoplay
     else:
         autoplay = str(raw_autoplay).strip().lower() in {"1", "true", "on", "yes"}
-    if isinstance(raw_shuffle, bool):
-        shuffle = raw_shuffle
+    if "shuffle" in payload:
+        raw_shuffle = payload.get("shuffle")
+        if isinstance(raw_shuffle, bool):
+            shuffle = raw_shuffle
+        else:
+            shuffle = str(raw_shuffle).strip().lower() in {"1", "true", "on", "yes"}
     else:
-        shuffle = str(raw_shuffle).strip().lower() in {"1", "true", "on", "yes"}
+        shuffle = None
     result = runtime_service.load_album_by_id(album_id, autoplay=autoplay, shuffle=shuffle)
     return result, (200 if result.get("ok") else 404)
 
@@ -176,10 +179,13 @@ def runtime_trigger_load_album(payload=None):
 def runtime_trigger_queue_album(payload=None):
     payload = payload or {}
     album_id = str(payload.get("album_id", "")).strip()
-    raw_shuffle = payload.get("shuffle", "false")
-    if isinstance(raw_shuffle, bool):
-        shuffle = raw_shuffle
+    if "shuffle" in payload:
+        raw_shuffle = payload.get("shuffle")
+        if isinstance(raw_shuffle, bool):
+            shuffle = raw_shuffle
+        else:
+            shuffle = str(raw_shuffle).strip().lower() in {"1", "true", "on", "yes"}
     else:
-        shuffle = str(raw_shuffle).strip().lower() in {"1", "true", "on", "yes"}
+        shuffle = None
     result = runtime_service.queue_album_by_id(album_id, shuffle=shuffle)
     return result, (200 if result.get("ok") else 404)

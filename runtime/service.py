@@ -89,6 +89,7 @@ def default_player():
         "is_playing": False,
         "playlist": "",
         "playlist_entries": [],
+        "playlist_tracks": [],
         "current_track_index": 0,
         "queued_tracks": [],
         "queue": [],
@@ -155,6 +156,8 @@ def default_button_detect():
 class RuntimeService:
     HARDWARE_PROFILE_TTL_SECONDS = 5.0
     WIFI_STATE_TTL_SECONDS = 5.0
+    SETUP_CACHE_TTL_SECONDS = 0.5
+    SETTINGS_CACHE_TTL_SECONDS = 1.0
     PERFORMANCE_PROFILES = {
         "pi_zero2w": {
             "label": "Raspberry Pi Zero 2 W",
@@ -184,10 +187,15 @@ class RuntimeService:
     SLEEP_TIMER_FADE_SECONDS = 5.0
     SLEEP_TIMER_FADE_STEPS = 10
     PRESENCE_READER_TYPES = {"RC522", "PN532_SPI"}
+    PREVIOUS_TRACK_RESTART_THRESHOLD_SECONDS = 3
     ENCODER_ROTATION_EVENTS = {"cw", "ccw"}
     ENCODER_TRANSITION_DEBOUNCE_SECONDS = 0.004
     ENCODER_STEPS_PER_EVENT = 4
     ENCODER_ACTIVE_POLL_INTERVAL_SECONDS = 0.005
+    ENCODER_IDLE_POLL_INTERVAL_SECONDS = 0.012
+    ENCODER_DEEP_IDLE_POLL_INTERVAL_SECONDS = 0.02
+    ENCODER_ACTIVE_HOLD_SECONDS = 0.2
+    GPIO_ACTIVITY_HOLD_SECONDS = 1.0
     ENCODER_CLOCKWISE_TRANSITIONS = {
         (0b00, 0b01),
         (0b01, 0b11),
@@ -218,10 +226,20 @@ class RuntimeService:
         self._wifi_enabled_cache = True
         self._wifi_enabled_cached_at = 0.0
         self._device_model_cache = None
+        self._settings_cache = None
+        self._settings_cached_at = 0.0
+        self._settings_cache_stat = (-1, -1)
+        self._setup_cache = None
+        self._setup_cached_at = 0.0
+        self._setup_cache_stat = (-1, -1)
+        self._button_poll_config_cache = None
+        self._button_poll_config_cache_key = None
         self._state_lock = threading.RLock()
         self._state_lock_handle = None
         self._state_lock_depth = 0
         self._boot_recovery_checked = False
+        self._encoder_fast_poll_until = 0.0
+        self._gpio_activity_until = 0.0
 
     def _wifi_radio_enabled_cached(self, force_refresh=False):
         now = time.monotonic()
@@ -312,6 +330,18 @@ class RuntimeService:
             return min(interval, self.ENCODER_ACTIVE_POLL_INTERVAL_SECONDS)
         return interval
 
+    def current_gpio_poll_interval_seconds(self, setup=None, now=None):
+        interval = float(self.button_poll_interval_seconds())
+        active_setup = setup if setup is not None else self.load_setup()
+        if not self._encoder_rotation_assignments(active_setup):
+            return interval
+        current_now = time.monotonic() if now is None else float(now)
+        if current_now < float(self._encoder_fast_poll_until or 0.0):
+            return min(interval, self.ENCODER_ACTIVE_POLL_INTERVAL_SECONDS)
+        if current_now < float(self._gpio_activity_until or 0.0):
+            return min(interval, self.ENCODER_IDLE_POLL_INTERVAL_SECONDS)
+        return min(interval, self.ENCODER_DEEP_IDLE_POLL_INTERVAL_SECONDS)
+
     def sound_path(self, sound_name):
         mapping = {
             "power_on": SOUNDS_DIR / "power_on.mp3",
@@ -388,13 +418,17 @@ class RuntimeService:
         return load_json(self.runtime_path, default_runtime_state())
 
     def save_runtime(self, state):
-        save_json(self.runtime_path, state)
+        current = load_json(self.runtime_path, default_runtime_state())
+        if current != state:
+            save_json(self.runtime_path, state)
 
     def load_player(self):
         return merge_defaults(load_json(PLAYER_FILE, default_player()), default_player())
 
     def save_player(self, state):
-        save_json(PLAYER_FILE, state)
+        current = merge_defaults(load_json(PLAYER_FILE, default_player()), default_player())
+        if current != state:
+            save_json(PLAYER_FILE, state)
 
     def _current_boot_id(self):
         return current_boot_id()
@@ -419,6 +453,7 @@ class RuntimeService:
                 "duration_seconds": 0,
                 "playlist": "",
                 "playlist_entries": [],
+                "playlist_tracks": [],
                 "current_track_index": 0,
                 "queued_tracks": [],
                 "queue": [],
@@ -433,6 +468,39 @@ class RuntimeService:
             return "", 0
         current_index = max(0, min(len(entries) - 1, int(player.get("current_track_index", 0) or 0)))
         return entries[current_index], current_index
+
+    def _track_metadata_for_entry(self, player, entry):
+        for item in player.get("playlist_tracks", []) or []:
+            if str(item.get("path", "") or "") == str(entry):
+                return dict(item)
+        return {}
+
+    def _track_title_for_entry(self, player, entry):
+        metadata = self._track_metadata_for_entry(player, entry)
+        return str(metadata.get("title", "") or track_title_from_entry(entry))
+
+    def _track_duration_for_entry(self, player, playlist, entry):
+        metadata = self._track_metadata_for_entry(player, entry)
+        duration = int(metadata.get("duration_seconds", 0) or 0)
+        if duration > 0:
+            return duration
+        return pick_track_duration(playlist, entry)
+
+    def _ordered_album_tracks(self, album, entries):
+        track_map = {
+            str(item.get("path", "") or ""): dict(item)
+            for item in (album.get("tracks", []) or [])
+            if isinstance(item, dict)
+        }
+        ordered = []
+        for entry in entries:
+            metadata = dict(track_map.get(entry, {}))
+            metadata["path"] = entry
+            metadata["title"] = str(metadata.get("title", "") or track_title_from_entry(entry))
+            if int(metadata.get("duration_seconds", 0) or 0) <= 0:
+                metadata["duration_seconds"] = pick_track_duration(album.get("playlist", ""), entry)
+            ordered.append(metadata)
+        return ordered
 
     def _reopen_current_track_session(self, runtime_state, player, autoplay=False):
         entry, current_index = self._current_player_entry(player)
@@ -483,10 +551,42 @@ class RuntimeService:
         return load_json(LIBRARY_FILE, {"albums": []})
 
     def load_settings(self):
-        return load_json(SETTINGS_FILE, {})
+        try:
+            stat = SETTINGS_FILE.stat()
+            current_stat = (int(stat.st_mtime_ns), int(stat.st_size))
+        except OSError:
+            current_stat = (-1, -1)
+        now = time.monotonic()
+        if (
+            self._settings_cache is not None
+            and self._settings_cache_stat == current_stat
+            and (now - self._settings_cached_at) < self.SETTINGS_CACHE_TTL_SECONDS
+        ):
+            return self._settings_cache
+        self._settings_cache = load_json(SETTINGS_FILE, {})
+        self._settings_cached_at = now
+        self._settings_cache_stat = current_stat
+        return self._settings_cache
 
     def load_setup(self):
-        return load_json(SETUP_FILE, {})
+        try:
+            stat = SETUP_FILE.stat()
+            current_stat = (int(stat.st_mtime_ns), int(stat.st_size))
+        except OSError:
+            current_stat = (-1, -1)
+        now = time.monotonic()
+        if (
+            self._setup_cache is not None
+            and self._setup_cache_stat == current_stat
+            and (now - self._setup_cached_at) < self.SETUP_CACHE_TTL_SECONDS
+        ):
+            return self._setup_cache
+        self._setup_cache = load_json(SETUP_FILE, {})
+        self._setup_cached_at = now
+        self._setup_cache_stat = current_stat
+        self._button_poll_config_cache = None
+        self._button_poll_config_cache_key = None
+        return self._setup_cache
 
     def load_button_detect(self):
         return merge_defaults(load_json(BUTTON_DETECT_FILE, default_button_detect()), default_button_detect())
@@ -783,9 +883,47 @@ class RuntimeService:
             assignments.setdefault(slot, {})[event] = button.get("name", "")
         return assignments
 
-    def _poll_encoder_rotations(self, setup, levels, now):
-        modules = self._encoder_module_map(setup)
-        assignments = self._encoder_rotation_assignments(setup)
+    def _button_poll_config(self, setup):
+        cache_key = id(setup)
+        if self._button_poll_config_cache_key == cache_key and self._button_poll_config_cache is not None:
+            return self._button_poll_config_cache
+
+        encoder_modules = self._encoder_module_map(setup)
+        encoder_assignments = self._encoder_rotation_assignments(setup)
+        encoder_press_pins = {
+            module.get("sw_pin", "").strip()
+            for module in encoder_modules.values()
+            if module.get("sw_pin", "").strip()
+        }
+        normal_button_pins = {
+            button.get("pin", "").strip()
+            for button in setup.get("buttons", [])
+            if button.get("pin", "").strip() and (button.get("input_mode") or "").strip() != "encoder"
+        }
+        encoder_rotation_pins = {
+            pin
+            for module in encoder_modules.values()
+            for pin in (module.get("clk_pin", "").strip(), module.get("dt_pin", "").strip())
+            if pin
+        }
+        config = {
+            "encoder_modules": encoder_modules,
+            "encoder_assignments": encoder_assignments,
+            "configured_pins": sorted(
+                filter_reserved_gpio_names(
+                    normal_button_pins | encoder_press_pins | encoder_rotation_pins,
+                    setup,
+                )
+            ),
+            "active_button_pins": set(filter_reserved_gpio_names(normal_button_pins | encoder_press_pins, setup)),
+        }
+        self._button_poll_config_cache_key = cache_key
+        self._button_poll_config_cache = config
+        return config
+
+    def _poll_encoder_rotations(self, setup, levels, now, modules=None, assignments=None):
+        modules = modules if modules is not None else self._encoder_module_map(setup)
+        assignments = assignments if assignments is not None else self._encoder_rotation_assignments(setup)
         active_slots = set(assignments)
         for slot in list(self._encoder_poll_state):
             if slot not in active_slots:
@@ -822,6 +960,8 @@ class RuntimeService:
 
             step_delta = self._encoder_transition_delta(previous_state, current_state)
             state["state"] = current_state
+            self._encoder_fast_poll_until = max(self._encoder_fast_poll_until, now + self.ENCODER_ACTIVE_HOLD_SECONDS)
+            self._gpio_activity_until = max(self._gpio_activity_until, now + self.GPIO_ACTIVITY_HOLD_SECONDS)
             if step_delta == 0:
                 state["accumulator"] = 0
                 state["last_direction"] = 0
@@ -974,35 +1114,14 @@ class RuntimeService:
                 self.save_runtime(runtime_state)
             return
 
-        encoder_modules = self._encoder_module_map(setup)
-        encoder_press_pins = {
-            module.get("sw_pin", "").strip()
-            for module in encoder_modules.values()
-            if module.get("sw_pin", "").strip()
-        }
-        normal_button_pins = {
-            button.get("pin", "").strip()
-            for button in setup.get("buttons", [])
-            if button.get("pin", "").strip() and (button.get("input_mode") or "").strip() != "encoder"
-        }
-        encoder_rotation_pins = {
-            pin
-            for module in encoder_modules.values()
-            for pin in (module.get("clk_pin", "").strip(), module.get("dt_pin", "").strip())
-            if pin
-        }
-        configured_pins = sorted(
-            filter_reserved_gpio_names(
-                normal_button_pins | encoder_press_pins | encoder_rotation_pins,
-                setup,
-            )
-        )
+        poll_config = self._button_poll_config(setup)
+        configured_pins = poll_config.get("configured_pins", [])
         levels = self._read_gpio_levels(configured_pins)
         if not configured_pins or not levels:
             self._set_pressed_buttons([])
             return
 
-        active_button_pins = set(filter_reserved_gpio_names(normal_button_pins | encoder_press_pins, setup))
+        active_button_pins = set(poll_config.get("active_button_pins", set()))
         for pin in list(self._button_poll_state):
             if pin not in active_button_pins:
                 self._button_poll_state.pop(pin, None)
@@ -1016,6 +1135,8 @@ class RuntimeService:
             is_pressed = int(level) == self._button_active_level(setup, pin)
             if is_pressed:
                 pressed_now.append(pin)
+        if pressed_now:
+            self._gpio_activity_until = max(self._gpio_activity_until, button_now + self.GPIO_ACTIVITY_HOLD_SECONDS)
         self._set_pressed_buttons(pressed_now)
 
         for pin in active_button_pins:
@@ -1028,6 +1149,7 @@ class RuntimeService:
                 state["pressed"] = True
                 state["pressed_at"] = button_now
                 state["long_triggered"] = False
+                self._gpio_activity_until = max(self._gpio_activity_until, button_now + self.GPIO_ACTIVITY_HOLD_SECONDS)
                 if self._is_power_hold_pin(setup, pin):
                     runtime_state = self.ensure_runtime()
                     self._update_power_hold_state(runtime_state, pin, button_now, released=False)
@@ -1053,6 +1175,7 @@ class RuntimeService:
             held_seconds = max(0.0, button_now - float(state.get("pressed_at", button_now)))
             state["pressed"] = False
             state["pressed_at"] = 0.0
+            self._gpio_activity_until = max(self._gpio_activity_until, button_now + self.GPIO_ACTIVITY_HOLD_SECONDS)
             if self._is_power_hold_pin(setup, pin):
                 runtime_state = self.ensure_runtime()
                 hold_was_completed = bool(runtime_state.get("power_hold", {}).get("completed"))
@@ -1072,17 +1195,32 @@ class RuntimeService:
                 continue
             self.trigger_gpio_pin(pin, press_type="kurz", held_seconds=held_seconds)
             state["long_triggered"] = False
-        self._poll_encoder_rotations(setup, levels, button_now)
+        self._poll_encoder_rotations(
+            setup,
+            levels,
+            button_now,
+            modules=poll_config.get("encoder_modules"),
+            assignments=poll_config.get("encoder_assignments"),
+        )
 
     def poll_buttons_forever(self, interval_seconds=None):
-        interval = float(interval_seconds if interval_seconds is not None else self.gpio_poll_interval_seconds())
         while True:
             try:
                 self.poll_buttons_once()
             except Exception:
-                time.sleep(max(0.1, interval))
+                fallback_interval = (
+                    float(interval_seconds)
+                    if interval_seconds is not None
+                    else self.current_gpio_poll_interval_seconds()
+                )
+                time.sleep(max(0.1, fallback_interval))
                 continue
-            time.sleep(max(0.001, interval))
+            current_interval = (
+                float(interval_seconds)
+                if interval_seconds is not None
+                else self.current_gpio_poll_interval_seconds()
+            )
+            time.sleep(max(0.001, current_interval))
 
     def ensure_runtime(self):
         defaults = default_runtime_state()
@@ -1275,6 +1413,7 @@ class RuntimeService:
 
     def update_led_status(self, runtime_state):
         setup = self.load_setup()
+        led_tuning = dict(setup.get("led_tuning") or {})
         reserved = reserved_system_pins(setup)
         leds = setup.get("leds", [])
         sleep_level = runtime_state.get("sleep_timer", {}).get("level", 0)
@@ -1306,6 +1445,9 @@ class RuntimeService:
                         "name": led.get("name", "LED"),
                         "pin": led.get("pin", ""),
                         "brightness": led.get("brightness", 0),
+                        "pwm_frequency_hz": led_tuning.get("pwm_frequency_hz", 800),
+                        "brightness_gamma": led_tuning.get("brightness_gamma", 1.0),
+                        "update_rate_ms": led_tuning.get("update_rate_ms", 70),
                         "is_on": is_on,
                         "effect": effect,
                         "effect_progress": effect_progress,
@@ -1341,6 +1483,9 @@ class RuntimeService:
                     "name": led.get("name", "LED"),
                     "pin": led.get("pin", ""),
                     "brightness": led.get("brightness", 0),
+                    "pwm_frequency_hz": led_tuning.get("pwm_frequency_hz", 800),
+                    "brightness_gamma": led_tuning.get("brightness_gamma", 1.0),
+                    "update_rate_ms": led_tuning.get("update_rate_ms", 70),
                     "is_on": is_on,
                     "effect": effect,
                     "effect_progress": effect_progress,
@@ -1439,17 +1584,22 @@ class RuntimeService:
         if entries:
             current_index = max(0, min(len(entries) - 1, int(session.get("current_index", player.get("current_track_index", 0)))))
             player["current_track_index"] = current_index
-            player["current_track"] = track_title_from_entry(entries[current_index])
-            actual_duration = pick_track_duration(player.get("playlist", ""), entries[current_index])
+            player["current_track"] = self._track_title_for_entry(player, entries[current_index])
+            actual_duration = self._track_duration_for_entry(player, player.get("playlist", ""), entries[current_index])
             player["duration_seconds"] = max(0, int(actual_duration or session.get("duration_seconds", 0)))
         if desired_state == "stopped" or session.get("state") == "stopped":
             player["position_seconds"] = 0
         else:
             player["position_seconds"] = max(0, int(session.get("position_seconds", player.get("position_seconds", 0))))
         self._rebuild_queue_display(player)
+        session_finished = (
+            runtime_state.get("playback_state") == "playing" and session.get("state") == "stopped" and was_playing
+        )
         if runtime_state.get("playback_state") == "playing" and session.get("state") == "paused":
             runtime_state["playback_state"] = "paused"
-        if runtime_state.get("playback_state") == "playing" and session.get("state") == "stopped" and was_playing:
+        if session.get("state") == "stopped" and runtime_state.get("playback_state") != "stopped":
+            runtime_state["playback_state"] = "stopped"
+        if session_finished:
             player["is_playing"] = False
             return runtime_state, player, True
         player["is_playing"] = runtime_state.get("playback_state") == "playing" and session.get("state") == "playing"
@@ -1467,6 +1617,11 @@ class RuntimeService:
         return next((album for album in library.get("albums", []) if album.get("id") == album_id), None)
 
     def _queue_track_items(self, album, entries):
+        track_map = {
+            str(item.get("path", "") or ""): dict(item)
+            for item in (album.get("tracks", []) or [])
+            if isinstance(item, dict)
+        }
         return [
             {
                 "album": album.get("name", ""),
@@ -1474,7 +1629,8 @@ class RuntimeService:
                 "cover_url": album.get("cover_url", ""),
                 "playlist": album.get("playlist", ""),
                 "entry": entry,
-                "title": track_title_from_entry(entry),
+                "title": str(track_map.get(entry, {}).get("title", "") or track_title_from_entry(entry)),
+                "duration_seconds": int(track_map.get(entry, {}).get("duration_seconds", 0) or 0),
             }
             for entry in entries
         ]
@@ -1496,11 +1652,18 @@ class RuntimeService:
         runtime_state["wifi_enabled"] = True
         player["playlist"] = playlist
         player["playlist_entries"] = [entry]
+        player["playlist_tracks"] = [
+            {
+                "path": entry,
+                "title": track_item.get("title", track_title_from_entry(entry)),
+                "duration_seconds": int(track_item.get("duration_seconds", 0) or 0),
+            }
+        ]
         player["current_track_index"] = 0
         player["current_track"] = track_item.get("title", track_title_from_entry(entry))
         player["current_album"] = track_item.get("album", player.get("current_album", ""))
         player["cover_url"] = track_item.get("cover_url", "")
-        player["duration_seconds"] = pick_track_duration(playlist, entry)
+        player["duration_seconds"] = int(track_item.get("duration_seconds", 0) or pick_track_duration(playlist, entry))
         player["position_seconds"] = 0
         runtime_state["active_album_id"] = track_item.get("album_id", "")
         runtime_state["playback_session"] = self.playback.open_track(
@@ -1523,8 +1686,19 @@ class RuntimeService:
         self._rebuild_queue_display(player)
         return runtime_state, player
 
+    def _unique_playlist_entries(self, entries):
+        unique_entries = []
+        seen = set()
+        for entry in entries or []:
+            normalized = str(entry or "").strip()
+            if not normalized or normalized in seen:
+                continue
+            unique_entries.append(normalized)
+            seen.add(normalized)
+        return unique_entries
+
     def _playlist_entries_for_album(self, album, shuffle=False):
-        entries = load_playlist_entries(album.get("playlist", ""))
+        entries = self._unique_playlist_entries(load_playlist_entries(album.get("playlist", "")))
         if shuffle and len(entries) > 1:
             entries = list(entries)
             random.shuffle(entries)
@@ -1540,11 +1714,12 @@ class RuntimeService:
         entries = self._playlist_entries_for_album(album, shuffle=shuffle)
         player["playlist"] = album.get("playlist", "")
         player["playlist_entries"] = entries
+        player["playlist_tracks"] = self._ordered_album_tracks(album, entries)
         player["current_track_index"] = 0
         player["queued_tracks"] = []
         if entries:
-            player["current_track"] = track_title_from_entry(entries[0])
-            player["duration_seconds"] = pick_track_duration(album.get("playlist", ""), entries[0])
+            player["current_track"] = self._track_title_for_entry(player, entries[0])
+            player["duration_seconds"] = self._track_duration_for_entry(player, album.get("playlist", ""), entries[0])
             runtime_state["playback_session"] = self.playback.open_track(
                 album.get("playlist", ""),
                 entries[0],
@@ -1860,6 +2035,7 @@ class RuntimeService:
                 "queue": [],
                 "playlist": "",
                 "playlist_entries": [],
+                "playlist_tracks": [],
                 "current_track_index": 0,
                 "queued_tracks": [],
             }
@@ -1998,7 +2174,13 @@ class RuntimeService:
             runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
             entries = list(player.get("playlist_entries", []))
             current_index = int(player.get("current_track_index", 0))
-            if entries and current_index > 0:
+            position_seconds = float(player.get("position_seconds", 0) or 0)
+            should_restart_current = bool(entries) and position_seconds >= self.PREVIOUS_TRACK_RESTART_THRESHOLD_SECONDS
+            if should_restart_current:
+                if runtime_state.get("playback_session"):
+                    runtime_state["playback_session"] = self.playback.seek(runtime_state["playback_session"], 0)
+                runtime_state = self.add_event(runtime_state, f"Titel neu gestartet: {player.get('current_track', '')}")
+            elif entries and current_index > 0:
                 current_index -= 1
                 runtime_state["playback_session"] = self.playback.open_track(
                     player.get("playlist", ""),

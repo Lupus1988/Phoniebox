@@ -11,6 +11,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const createTrackInput = document.getElementById("album-track-input-create");
   const createTrackTrigger = document.getElementById("album-track-trigger-create");
   const createUploadStatus = document.getElementById("album-create-upload-status");
+  const createAudioStatus = document.getElementById("album-create-audio-status");
   const createSubmitButton = document.getElementById("album-create-submit");
 
   const editModal = document.getElementById("album-edit-modal");
@@ -127,12 +128,19 @@ document.addEventListener("DOMContentLoaded", () => {
       createWarning.hidden = true;
     }
     createModalBody?.classList.remove("create-warning-surface");
+    hideAudioTracker(createAudioStatus);
     createModal.showModal();
     window.setTimeout(() => createNameInput?.focus(), 60);
   }
 
   function closeCreateModal() {
     createModal?.close();
+  }
+
+  function hideAudioTracker(root) {
+    if (root instanceof HTMLElement) {
+      root.hidden = true;
+    }
   }
 
   function createNameExists(name) {
@@ -270,6 +278,111 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function renderAudioProcessingTracker(root, entries, progressRatio = 0, completed = false, titleText = "", summaryText = "") {
+    if (!(root instanceof HTMLElement)) {
+      return;
+    }
+    const normalizedEntries = Array.from(entries || []);
+    if (!normalizedEntries.length) {
+      root.hidden = true;
+      return;
+    }
+
+    const title = root.querySelector("[data-audio-title]");
+    const summary = root.querySelector("[data-audio-summary]");
+    const bar = root.querySelector("[data-audio-progress-bar]");
+    const list = root.querySelector("[data-audio-file-list]");
+
+    root.hidden = false;
+    if (title) {
+      title.textContent = titleText || (completed ? "Audio-Verarbeitung abgeschlossen" : "Audio wird verarbeitet");
+    }
+    if (summary) {
+      summary.textContent = summaryText || `${normalizedEntries.length} Titel`;
+    }
+    if (bar instanceof HTMLElement) {
+      bar.style.width = `${Math.max(0, Math.min(100, Math.round(progressRatio * 100)))}%`;
+    }
+    if (!(list instanceof HTMLElement)) {
+      return;
+    }
+
+    list.innerHTML = "";
+    for (const entry of normalizedEntries) {
+      const row = document.createElement("div");
+      row.className = "upload-file-row";
+      const stateName = String(entry.state || "");
+      row.classList.add(
+        stateName === "normalized" || stateName === "unchanged" ? "is-done" : stateName === "failed" ? "is-pending" : "is-active"
+      );
+
+      const meta = document.createElement("div");
+      meta.className = "upload-file-meta";
+
+      const name = document.createElement("div");
+      name.className = "upload-file-name";
+      name.textContent = entry.name || entry.path || "Datei";
+
+      const detail = document.createElement("div");
+      detail.className = "upload-file-detail";
+      detail.textContent = entry.detail || "";
+
+      const state = document.createElement("div");
+      state.className = "upload-file-state";
+      if (stateName === "normalized" || stateName === "unchanged" || stateName === "failed") {
+        state.textContent = entry.detail || "Fertig";
+      } else {
+        state.textContent = `${Math.max(0, Math.min(100, Math.round(Number(entry.progress_ratio || 0) * 100)))}%`;
+      }
+
+      meta.appendChild(name);
+      meta.appendChild(detail);
+      row.appendChild(meta);
+      row.appendChild(state);
+      list.appendChild(row);
+    }
+  }
+
+  async function pollAudioProcessingJobs(jobIds, statusRoot) {
+    const uniqueJobIds = Array.from(new Set((jobIds || []).filter(Boolean)));
+    if (!uniqueJobIds.length) {
+      hideAudioTracker(statusRoot);
+      return;
+    }
+
+    const query = new URLSearchParams();
+    for (const jobId of uniqueJobIds) {
+      query.append("job_id", jobId);
+    }
+
+    while (true) {
+      const response = await fetch(`/api/library/audio-processing-status?${query.toString()}`, {
+        headers: {"X-Requested-With": "XMLHttpRequest"},
+      });
+      const payload = await parseJsonResponse(response);
+      const audio = payload?.audio_processing || {};
+      const jobs = Array.isArray(audio.jobs) ? audio.jobs : [];
+      const files = [];
+      for (const job of jobs) {
+        for (const file of Array.isArray(job.files) ? job.files : []) {
+          files.push(file);
+        }
+      }
+      renderAudioProcessingTracker(
+        statusRoot,
+        files,
+        Number(audio.progress_ratio || 0),
+        Boolean(audio.complete),
+        Boolean(audio.complete) ? "Audio-Verarbeitung abgeschlossen" : "Audio wird verarbeitet",
+        `${Number(audio.completed_files || 0)} / ${Number(audio.total_files || files.length || 0)} Dateien verarbeitet`
+      );
+      if (!audio.active) {
+        return audio;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 700));
+    }
+  }
+
   function extractUploadErrorMessage(request) {
     const fallback = request.status >= 400
       ? `Der Upload wurde vom Server abgelehnt (${request.status}).`
@@ -370,6 +483,7 @@ document.addEventListener("DOMContentLoaded", () => {
       event.preventDefault();
       submitButton?.setAttribute("disabled", "disabled");
       renderUploadTracker(statusRoot, files, 0, false);
+      hideAudioTracker(createAudioStatus);
 
       const createPayload = new FormData();
       createPayload.append("action", "import_album");
@@ -401,18 +515,28 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const totalBytes = files.reduce((sum, item) => sum + (item.size || 0), 0);
         let bytesDone = 0;
+        const scheduledJobs = [];
         for (const file of files) {
-          await uploadSingleTrack(postUrl, albumId, file, files, statusRoot, bytesDone, totalBytes);
+          const uploadPayload = await uploadSingleTrack(postUrl, albumId, file, files, statusRoot, bytesDone, totalBytes);
+          const audioProcessing = uploadPayload?.audio_processing || {};
+          for (const job of Array.isArray(audioProcessing.jobs) ? audioProcessing.jobs : []) {
+            if (job?.job) {
+              scheduledJobs.push(job.job);
+            }
+          }
           bytesDone += file.size || 0;
           const ratio = totalBytes > 0 ? Math.min(1, bytesDone / totalBytes) : 1;
           renderUploadTracker(statusRoot, files, ratio, false);
         }
 
         renderUploadTracker(statusRoot, files, 1, true);
-        window.setTimeout(() => window.location.reload(), 280);
+        await pollAudioProcessingJobs(scheduledJobs, createAudioStatus);
+        closeCreateModal();
+        window.setTimeout(() => window.location.assign("/library"), 120);
       } catch (error) {
         submitButton?.removeAttribute("disabled");
         renderUploadError(statusRoot, files, error instanceof Error ? error.message : "Upload fehlgeschlagen.");
+        hideAudioTracker(createAudioStatus);
       }
     });
   }

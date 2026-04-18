@@ -60,6 +60,40 @@ class FakeFactory:
     pass
 
 
+class FakeLGPIO:
+    def __init__(self):
+        self.opened = []
+        self.claimed = []
+        self.pwm_calls = []
+        self.write_calls = []
+        self.freed = []
+        self.closed = []
+
+    def gpiochip_open(self, chip):
+        self.opened.append(chip)
+        return 99
+
+    def gpio_claim_output(self, handle, gpio, level=0, lFlags=0):
+        self.claimed.append((handle, gpio, level, lFlags))
+        return 0
+
+    def tx_pwm(self, handle, gpio, frequency, duty_cycle, pulse_offset=0, pulse_cycles=0):
+        self.pwm_calls.append((handle, gpio, frequency, duty_cycle, pulse_offset, pulse_cycles))
+        return 0
+
+    def gpio_write(self, handle, gpio, level):
+        self.write_calls.append((handle, gpio, level))
+        return 0
+
+    def gpio_free(self, handle, gpio):
+        self.freed.append((handle, gpio))
+        return 0
+
+    def gpiochip_close(self, handle):
+        self.closed.append(handle)
+        return 0
+
+
 class FakeGPIO:
     BCM = "BCM"
     OUT = "OUT"
@@ -97,6 +131,7 @@ class HardwareHelpersTest(unittest.TestCase):
 
     def test_led_controller_handles_digital_and_pwm_outputs(self):
         with (
+            patch.object(leds_module, "lgpio", None),
             patch.object(leds_module, "GPIO", None),
             patch.object(leds_module, "GpioZeroLED", FakeLEDDevice),
             patch.object(leds_module, "GpioZeroPWMLED", FakePWMLEDDevice),
@@ -114,9 +149,11 @@ class HardwareHelpersTest(unittest.TestCase):
             self.assertTrue(controller._digital[23].is_lit)
             self.assertIn(18, controller._pwm)
             self.assertEqual(controller._pwm[18].value, 0.4)
+            self.assertEqual(controller._pwm[18].frequency, controller.GPIOZERO_PWM_FREQUENCY)
 
     def test_led_controller_drives_inactive_pwm_pin_low_without_pwm(self):
         with (
+            patch.object(leds_module, "lgpio", None),
             patch.object(leds_module, "GPIO", None),
             patch.object(leds_module, "GpioZeroLED", FakeLEDDevice),
             patch.object(leds_module, "GpioZeroPWMLED", FakePWMLEDDevice),
@@ -135,6 +172,7 @@ class HardwareHelpersTest(unittest.TestCase):
 
     def test_led_controller_uses_pwm_on_non_pwm_pin(self):
         with (
+            patch.object(leds_module, "lgpio", None),
             patch.object(leds_module, "GPIO", None),
             patch.object(leds_module, "GpioZeroLED", FakeLEDDevice),
             patch.object(leds_module, "GpioZeroPWMLED", FakePWMLEDDevice),
@@ -150,6 +188,46 @@ class HardwareHelpersTest(unittest.TestCase):
             self.assertTrue(ok)
             self.assertIn(16, controller._pwm)
             self.assertEqual(controller._pwm[16].value, 0.4)
+            self.assertEqual(controller._pwm[16].frequency, controller.GPIOZERO_PWM_FREQUENCY)
+
+    def test_led_controller_uses_higher_rpigpio_pwm_frequency(self):
+        fake_gpio = FakeGPIO()
+        with (
+            patch.object(leds_module, "lgpio", None),
+            patch.object(leds_module, "GPIO", fake_gpio),
+        ):
+            controller = leds_module.LEDController()
+            ok = controller.apply_leds(
+                [
+                    {"pin": "GPIO18", "brightness": 40, "is_on": True},
+                ]
+            )
+
+        self.assertTrue(ok)
+        self.assertIn(18, controller._pwm)
+        self.assertEqual(controller._pwm[18].freq, controller.RPI_GPIO_PWM_FREQUENCY)
+
+    def test_led_controller_prefers_direct_lgpio_backend(self):
+        fake_lgpio = FakeLGPIO()
+        with (
+            patch.object(leds_module, "lgpio", fake_lgpio),
+            patch.object(leds_module, "GPIO", None),
+            patch.object(leds_module, "GpioZeroLED", None),
+            patch.object(leds_module, "GpioZeroPWMLED", None),
+            patch.object(leds_module, "LGPIOFactory", None),
+        ):
+            controller = leds_module.LEDController()
+            ok = controller.apply_leds(
+                [
+                    {"pin": "GPIO12", "brightness": 50, "is_on": True},
+                    {"pin": "GPIO21", "brightness": 100, "is_on": False},
+                ]
+            )
+
+        self.assertTrue(ok)
+        self.assertEqual(fake_lgpio.opened, [0])
+        self.assertIn((99, 12, controller.LGPIO_PWM_FREQUENCY, 50.0, 0, 0), fake_lgpio.pwm_calls)
+        self.assertIn((99, 21, 0), fake_lgpio.write_calls)
 
     def test_led_controller_returns_false_on_busy_pwm_pin(self):
         class BusyPWMLEDDevice(FakePWMLEDDevice):
@@ -159,6 +237,7 @@ class HardwareHelpersTest(unittest.TestCase):
                 super().__init__(pin, pin_factory=pin_factory, initial_value=initial_value, frequency=frequency)
 
         with (
+            patch.object(leds_module, "lgpio", None),
             patch.object(leds_module, "GPIO", None),
             patch.object(leds_module, "GpioZeroLED", FakeLEDDevice),
             patch.object(leds_module, "GpioZeroPWMLED", BusyPWMLEDDevice),

@@ -36,6 +36,8 @@ def consume_led_preview(controller):
         ok = controller.blink_led(
             pin,
             brightness=int(preview.get("brightness", 100) or 100),
+            pwm_frequency_hz=int(preview.get("pwm_frequency_hz", 800) or 800),
+            brightness_gamma=float(preview.get("brightness_gamma", 1.0) or 1.0),
             repeats=max(1, int(preview.get("repeats", 3) or 3)),
             on_seconds=max(0.02, float(preview.get("on_seconds", 0.22) or 0.22)),
             off_seconds=max(0.02, float(preview.get("off_seconds", 0.18) or 0.18)),
@@ -88,10 +90,14 @@ def main():
                     rendered_led["brightness"] = round(max(3.0, base * (0.12 + 0.88 * wave)), 1)
                 rendered.append(rendered_led)
             payload = json.dumps(rendered, sort_keys=True, ensure_ascii=False)
+            update_rate_ms = min(
+                max(20, int(float(led.get("update_rate_ms", 200) or 200)))
+                for led in rendered
+            ) if rendered else 200
             if has_pulse or payload != last_payload:
                 controller.apply_leds(rendered)
                 last_payload = payload
-            time.sleep(0.07 if has_pulse else 0.2)
+            time.sleep((update_rate_ms / 1000.0) if has_pulse else max(0.02, update_rate_ms / 1000.0))
     finally:
         controller.cleanup()
 

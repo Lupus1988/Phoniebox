@@ -13,6 +13,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
+ensure_boot_config_setting() {
+  local config_file=""
+  local candidate
+  for candidate in /boot/firmware/config.txt /boot/config.txt; do
+    if sudo test -f "$candidate"; then
+      config_file="$candidate"
+      break
+    fi
+  done
+  [ -n "$config_file" ] || return 0
+
+  if ! sudo grep -qxF "$1" "$config_file"; then
+    printf '%s\n' "$1" | sudo tee -a "$config_file" >/dev/null
+  fi
+}
+
 ensure_panel_env_file() {
   local env_file=/etc/default/phoniebox-panel
   local current_secret=""
@@ -178,6 +194,9 @@ sudo systemctl daemon-reload
 sudo systemctl enable NetworkManager.service
 sudo systemctl disable --now bluetooth.service 2>/dev/null || true
 sudo systemctl disable --now hciuart.service 2>/dev/null || true
+ensure_boot_config_setting "dtoverlay=disable-bt"
+ensure_boot_config_setting "hdmi_ignore_hotplug=1"
+ensure_boot_config_setting "display_auto_detect=0"
 if command -v rfkill >/dev/null 2>&1; then
   sudo rfkill block bluetooth || true
 fi

@@ -13,6 +13,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 MP3_FRAMES_PER_SECOND = 38.28125
 
 
+def configured_backend():
+    setup_path = BASE_DIR / "data" / "setup.json"
+    try:
+        payload = json.loads(setup_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "auto"
+    audio = payload.get("audio") or {}
+    preferred = str(audio.get("playback_backend", "auto") or "auto").strip().lower()
+    return preferred if preferred in {"auto", "mpv", "mpg123", "cvlc"} else "auto"
+
+
 def backend_candidates():
     candidates = []
     if shutil.which("mpv"):
@@ -25,12 +36,16 @@ def backend_candidates():
     return candidates
 
 
-def detect_backend():
+def detect_backend(preferred_backend=None):
     candidates = backend_candidates()
-    backend = candidates[0] if candidates else "mock"
+    preferred = str(preferred_backend or configured_backend() or "auto").strip().lower()
+    if preferred not in {"auto", "mpv", "mpg123", "cvlc"}:
+        preferred = "auto"
+    backend = preferred if preferred != "auto" and preferred in candidates else (candidates[0] if candidates else "mock")
     return {
         "active_backend": backend,
         "available_backends": candidates,
+        "preferred_backend": preferred,
         "system_ready": backend != "mock",
     }
 
@@ -425,7 +440,6 @@ class PlaybackController:
                 position = self._mpv_get_property(session, "time-pos", session.get("position_seconds", 0))
                 paused = bool(self._mpv_get_property(session, "pause", session.get("state") == "paused"))
                 idle_active = bool(self._mpv_get_property(session, "idle-active", False))
-                eof_reached = bool(self._mpv_get_property(session, "eof-reached", False))
                 playlist_pos = self._mpv_get_property(session, "playlist-pos", session.get("current_index", 0))
                 duration_seconds = self._mpv_get_property(session, "duration", session.get("duration_seconds", 0))
                 current_path = self._mpv_get_property(session, "path", session.get("track_path", ""))
@@ -438,7 +452,10 @@ class PlaybackController:
                     if current_entry:
                         session["entry"] = current_entry
                 session["started_at"] = None if paused else time.time() - session["position_seconds"]
-                if idle_active or eof_reached:
+                # `eof-reached` can transiently flip to true while mpv is still
+                # alive and advancing within the current playlist. Treat only an
+                # actually idle player as a finished session.
+                if idle_active:
                     session["state"] = "stopped"
                     session["pid"] = None
                     session["started_at"] = None

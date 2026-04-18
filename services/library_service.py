@@ -1,10 +1,15 @@
 import secrets
+import json
+import os
 import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 
 from werkzeug.utils import secure_filename
 
+from runtime.audio import track_duration_seconds, track_title_from_entry
 from utils import load_json, safe_relative_path, save_json, slugify_name
 
 
@@ -13,6 +18,15 @@ MEDIA_DIR = BASE_DIR / "media"
 ALBUMS_DIR = MEDIA_DIR / "albums"
 LIBRARY_FILE = BASE_DIR / "data" / "library.json"
 LINK_SESSION_FILE = BASE_DIR / "data" / "rfid_link_session.json"
+AUDIO_PROCESSING_QUEUE_DIR = BASE_DIR / "data" / "audio-processing"
+AUDIO_PROCESSING_STATUS_DIR = BASE_DIR / "data" / "audio-processing-status"
+AUDIO_PROCESSING_RESULTS_DIR = BASE_DIR / "data" / "audio-processing-results"
+AUDIO_PROCESSING_WORKER_PID_FILE = AUDIO_PROCESSING_QUEUE_DIR / "worker.pid"
+AUDIO_NORMALIZE_TARGET_I = -16.0
+AUDIO_NORMALIZE_TARGET_TP = -1.5
+AUDIO_NORMALIZE_TARGET_LRA = 11.0
+AUDIO_NORMALIZE_TOLERANCE_LU = 1.0
+AUDIO_NORMALIZE_TOLERANCE_TP = 0.2
 
 
 def default_library():
@@ -55,6 +69,553 @@ def is_cover_file(path):
     return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 
 
+def default_audio_processing_report():
+    return {
+        "tool_available": False,
+        "scheduled": 0,
+        "checked": 0,
+        "normalized": 0,
+        "unchanged": 0,
+        "failed": 0,
+        "skipped": 0,
+        "issue": "",
+        "jobs": [],
+    }
+
+
+def merge_audio_processing_reports(*reports):
+    merged = default_audio_processing_report()
+    for report in reports:
+        if not isinstance(report, dict):
+            continue
+        merged["tool_available"] = merged["tool_available"] or bool(report.get("tool_available", False))
+        for key in ("scheduled", "checked", "normalized", "unchanged", "failed", "skipped"):
+            merged[key] += int(report.get(key, 0) or 0)
+        if not merged.get("issue") and str(report.get("issue", "") or "").strip():
+            merged["issue"] = str(report.get("issue", "")).strip()
+        for job in report.get("jobs", []) or []:
+            if isinstance(job, dict):
+                merged["jobs"].append(dict(job))
+    return merged
+
+
+def describe_audio_processing(report):
+    if not isinstance(report, dict):
+        return ""
+    checked = int(report.get("checked", 0) or 0)
+    normalized = int(report.get("normalized", 0) or 0)
+    unchanged = int(report.get("unchanged", 0) or 0)
+    failed = int(report.get("failed", 0) or 0)
+    skipped = int(report.get("skipped", 0) or 0)
+    scheduled = int(report.get("scheduled", 0) or 0)
+    issue = str(report.get("issue", "") or "").strip()
+    if not any((scheduled, checked, normalized, unchanged, failed, skipped)) and not issue:
+        return ""
+    if scheduled:
+        return f" Audio-Normalisierung läuft im Hintergrund für {scheduled} Titel."
+    if issue:
+        return f" {issue}"
+    if skipped and not bool(report.get("tool_available", False)):
+        return " Audio-Prüfung übersprungen, weil ffmpeg/ffprobe fehlen."
+    parts = [f"Audio geprüft: {checked}"]
+    if normalized:
+        parts.append(f"{normalized} normalisiert")
+    if unchanged:
+        parts.append(f"{unchanged} unverändert")
+    if failed:
+        parts.append(f"{failed} mit Prüffehler")
+    return " " + ", ".join(parts) + "."
+
+
+def audio_processing_tools_available():
+    return bool(shutil.which("ffmpeg")) and bool(shutil.which("ffprobe"))
+
+
+def _run_media_command(command):
+    return subprocess.run(command, check=False, capture_output=True, text=True)
+
+
+def _ffmpeg_json_object(text):
+    decoder = json.JSONDecoder()
+    for index in range(len(text) - 1, -1, -1):
+        if text[index] != "{":
+            continue
+        snippet = text[index:].strip()
+        try:
+            payload, end_index = decoder.raw_decode(snippet)
+        except json.JSONDecodeError:
+            continue
+        if snippet[end_index:].strip():
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
+def _probe_audio_file(path):
+    result = _run_media_command(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_type",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "json",
+            str(path),
+        ]
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return None
+    streams = payload.get("streams") or []
+    if not streams:
+        return None
+    return payload
+
+
+def _analyze_audio_loudness(path):
+    result = _run_media_command(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-nostdin",
+            "-threads",
+            "1",
+            "-i",
+            str(path),
+            "-af",
+            f"loudnorm=I={AUDIO_NORMALIZE_TARGET_I}:TP={AUDIO_NORMALIZE_TARGET_TP}:LRA={AUDIO_NORMALIZE_TARGET_LRA}:print_format=json",
+            "-f",
+            "null",
+            "-",
+        ]
+    )
+    if result.returncode != 0:
+        return {}
+    return _ffmpeg_json_object(result.stderr or "")
+
+
+def _float_or_none(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalization_needed(metrics):
+    input_i = _float_or_none(metrics.get("input_i"))
+    input_tp = _float_or_none(metrics.get("input_tp"))
+    if input_i is None:
+        return True
+    if abs(input_i - AUDIO_NORMALIZE_TARGET_I) > AUDIO_NORMALIZE_TOLERANCE_LU:
+        return True
+    if input_tp is not None and input_tp > (AUDIO_NORMALIZE_TARGET_TP + AUDIO_NORMALIZE_TOLERANCE_TP):
+        return True
+    return False
+
+
+def _normalization_filter(metrics):
+    base = f"loudnorm=I={AUDIO_NORMALIZE_TARGET_I}:TP={AUDIO_NORMALIZE_TARGET_TP}:LRA={AUDIO_NORMALIZE_TARGET_LRA}"
+    measured = {
+        "measured_I": _float_or_none(metrics.get("input_i")),
+        "measured_LRA": _float_or_none(metrics.get("input_lra")),
+        "measured_TP": _float_or_none(metrics.get("input_tp")),
+        "measured_thresh": _float_or_none(metrics.get("input_thresh")),
+        "offset": _float_or_none(metrics.get("target_offset")),
+    }
+    if not all(value is not None for value in measured.values()):
+        return base
+    return (
+        base
+        + f":measured_I={measured['measured_I']}"
+        + f":measured_LRA={measured['measured_LRA']}"
+        + f":measured_TP={measured['measured_TP']}"
+        + f":measured_thresh={measured['measured_thresh']}"
+        + f":offset={measured['offset']}"
+        + ":linear=true"
+    )
+
+
+def _normalization_encoder_args(path):
+    suffix = path.suffix.lower()
+    if suffix == ".mp3":
+        return ["-codec:a", "libmp3lame", "-q:a", "2"]
+    if suffix in {".m4a", ".aac", ".mp4", ".m4b"}:
+        return ["-codec:a", "aac", "-b:a", "192k"]
+    if suffix == ".flac":
+        return ["-codec:a", "flac"]
+    if suffix in {".wav"}:
+        return ["-codec:a", "pcm_s16le"]
+    if suffix in {".aif", ".aiff"}:
+        return ["-codec:a", "pcm_s16be"]
+    if suffix in {".opus"}:
+        return ["-codec:a", "libopus", "-b:a", "128k"]
+    if suffix in {".ogg", ".oga"}:
+        return ["-codec:a", "libvorbis", "-q:a", "5"]
+    return []
+
+
+def _normalize_audio_file(path, metrics):
+    temp_path = path.with_name(f"{path.stem}.normalized-{secrets.token_hex(4)}{path.suffix}")
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-threads",
+        "1",
+        "-i",
+        str(path),
+        "-map_metadata",
+        "0",
+        "-af",
+        _normalization_filter(metrics),
+        *_normalization_encoder_args(path),
+        str(temp_path),
+    ]
+    result = _run_media_command(command)
+    if result.returncode != 0 or not temp_path.exists():
+        temp_path.unlink(missing_ok=True)
+        return False
+    temp_path.replace(path)
+    return True
+
+
+def _apply_gain_to_audio_file(path, gain_db):
+    temp_path = path.with_name(f"{path.stem}.gain-{secrets.token_hex(4)}{path.suffix}")
+    gain_db = round(float(gain_db), 1)
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-threads",
+        "1",
+        "-i",
+        str(path),
+        "-map_metadata",
+        "0",
+        "-af",
+        f"volume={gain_db}dB",
+        *_normalization_encoder_args(path),
+        str(temp_path),
+    ]
+    result = _run_media_command(command)
+    if result.returncode != 0 or not temp_path.exists():
+        temp_path.unlink(missing_ok=True)
+        return False
+    temp_path.replace(path)
+    return True
+
+
+def process_uploaded_audio_files(paths, progress_callback=None):
+    report = default_audio_processing_report()
+    files = [Path(path) for path in paths if Path(path).exists()]
+    if not files:
+        return report
+    if not audio_processing_tools_available():
+        report["skipped"] = len(files)
+        return report
+    report["tool_available"] = True
+    for path in files:
+        if callable(progress_callback):
+            progress_callback(path, "probing", 0.15, "Datei wird geprüft")
+        probe = _probe_audio_file(path)
+        if probe is None:
+            if callable(progress_callback):
+                progress_callback(path, "failed", 1.0, "Audio-Prüfung fehlgeschlagen")
+            report["failed"] += 1
+            continue
+        report["checked"] += 1
+        if callable(progress_callback):
+            progress_callback(path, "analyzing", 0.45, "Lautheit wird analysiert")
+        metrics = _analyze_audio_loudness(path)
+        if not _normalization_needed(metrics):
+            if callable(progress_callback):
+                progress_callback(path, "unchanged", 1.0, "Bereits passend")
+            report["unchanged"] += 1
+            continue
+        if callable(progress_callback):
+            progress_callback(path, "normalizing", 0.78, "Wird normalisiert")
+        if _normalize_audio_file(path, metrics):
+            if callable(progress_callback):
+                progress_callback(path, "normalized", 1.0, "Normalisiert")
+            report["normalized"] += 1
+            continue
+        if callable(progress_callback):
+            progress_callback(path, "failed", 1.0, "Normalisierung fehlgeschlagen")
+        report["failed"] += 1
+    return report
+
+
+def process_volume_adjustment(paths, gain_db, progress_callback=None):
+    report = default_audio_processing_report()
+    files = [Path(path) for path in paths if Path(path).exists()]
+    if not files:
+        return report
+    if not audio_processing_tools_available():
+        report["skipped"] = len(files)
+        report["issue"] = "Lautstärke-Anpassung übersprungen, weil ffmpeg fehlt."
+        return report
+    report["tool_available"] = True
+    for path in files:
+        if callable(progress_callback):
+            progress_callback(path, "processing", 0.25, "Lautstärke wird angepasst")
+        if abs(float(gain_db)) < 0.05:
+            if callable(progress_callback):
+                progress_callback(path, "unchanged", 1.0, "Keine Änderung")
+            report["unchanged"] += 1
+            continue
+        if _apply_gain_to_audio_file(path, gain_db):
+            if callable(progress_callback):
+                progress_callback(path, "normalized", 1.0, f"{gain_db:+.1f} dB angewendet")
+            report["normalized"] += 1
+            continue
+        if callable(progress_callback):
+            progress_callback(path, "failed", 1.0, "Lautstärke-Anpassung fehlgeschlagen")
+        report["failed"] += 1
+    return report
+
+
+def _audio_processing_script_path():
+    return BASE_DIR / "scripts" / "audio_postprocess.py"
+
+
+def audio_processing_status_path(job_name):
+    return AUDIO_PROCESSING_STATUS_DIR / f"{Path(job_name).stem}.status.json"
+
+
+def audio_processing_worker_running():
+    try:
+        pid = int(AUDIO_PROCESSING_WORKER_PID_FILE.read_text(encoding="utf-8").strip())
+    except (FileNotFoundError, OSError, ValueError):
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        AUDIO_PROCESSING_WORKER_PID_FILE.unlink(missing_ok=True)
+        return False
+
+
+def _spawn_audio_processing_worker():
+    kwargs = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "stdin": subprocess.DEVNULL,
+        "start_new_session": True,
+        "cwd": str(BASE_DIR),
+    }
+    if os.name == "posix":
+        kwargs["preexec_fn"] = lambda: os.nice(15)
+    return subprocess.Popen([sys.executable, str(_audio_processing_script_path())], **kwargs)
+
+
+def audio_processing_result_path(job_name):
+    return AUDIO_PROCESSING_RESULTS_DIR / f"{Path(job_name).stem}.result.json"
+
+
+def _audio_file_status_entry(path, state="queued", progress_ratio=0.0, detail="Wartet"):
+    source = Path(path)
+    return {
+        "path": str(source),
+        "name": source.name,
+        "state": state,
+        "progress_ratio": float(progress_ratio),
+        "detail": str(detail or ""),
+    }
+
+
+def _audio_job_payload(job_name, paths, state="queued", file_statuses=None, report=None, issue=""):
+    statuses = list(file_statuses or [_audio_file_status_entry(path) for path in paths])
+    completed = sum(1 for item in statuses if item.get("state") in {"normalized", "unchanged", "failed", "skipped"})
+    total = len(statuses)
+    return {
+        "job": job_name,
+        "state": state,
+        "created_at": int(time.time()),
+        "total_files": total,
+        "completed_files": completed,
+        "progress_ratio": (completed / total) if total else 1.0,
+        "issue": str(issue or ""),
+        "files": statuses,
+        "report": report or default_audio_processing_report(),
+    }
+
+
+def save_audio_processing_status(job_name, payload):
+    AUDIO_PROCESSING_STATUS_DIR.mkdir(parents=True, exist_ok=True)
+    save_json(audio_processing_status_path(job_name), payload)
+
+
+def load_audio_processing_snapshot(job_name):
+    status = load_json(audio_processing_status_path(job_name), {})
+    if status:
+        return status
+    result = load_json(audio_processing_result_path(job_name), {})
+    if not result:
+        return {}
+    report = result.get("report", {}) if isinstance(result, dict) else {}
+    statuses = []
+    for raw_path in result.get("paths", []) or []:
+        outcome = "normalized" if int(report.get("normalized", 0) or 0) > 0 else "unchanged"
+        if int(report.get("failed", 0) or 0) > 0:
+            outcome = "failed"
+        detail = {
+            "normalized": "Normalisiert",
+            "unchanged": "Bereits passend",
+            "failed": "Fehlgeschlagen",
+        }.get(outcome, "Fertig")
+        statuses.append(_audio_file_status_entry(raw_path, state=outcome, progress_ratio=1.0, detail=detail))
+    if not statuses:
+        return {}
+    snapshot = _audio_job_payload(
+        result.get("job", job_name),
+        result.get("paths", []),
+        state="completed",
+        file_statuses=statuses,
+        report=report,
+        issue=report.get("issue", ""),
+    )
+    snapshot["created_at"] = int(result.get("created_at", snapshot["created_at"]))
+    snapshot["finished_at"] = int(result.get("finished_at", snapshot["created_at"]))
+    snapshot["progress_ratio"] = 1.0
+    snapshot["completed_files"] = snapshot["total_files"]
+    return snapshot
+
+
+def audio_processing_status_summary(job_names):
+    jobs = []
+    for job_name in job_names or []:
+        snapshot = load_audio_processing_snapshot(job_name)
+        if snapshot:
+            jobs.append(snapshot)
+    total_files = sum(int(job.get("total_files", 0) or 0) for job in jobs)
+    completed_files = sum(int(job.get("completed_files", 0) or 0) for job in jobs)
+    active = any(job.get("state") not in {"completed", "failed"} for job in jobs)
+    failed = any(
+        file_status.get("state") == "failed"
+        for job in jobs
+        for file_status in (job.get("files", []) or [])
+        if isinstance(file_status, dict)
+    )
+    progress_ratio = (completed_files / total_files) if total_files else 1.0
+    return {
+        "ok": True,
+        "job_count": len(jobs),
+        "total_files": total_files,
+        "completed_files": completed_files,
+        "progress_ratio": progress_ratio,
+        "active": active,
+        "complete": bool(jobs) and not active,
+        "failed": failed,
+        "jobs": jobs,
+    }
+
+
+def save_audio_processing_result(job_name, payload):
+    AUDIO_PROCESSING_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    save_json(audio_processing_result_path(job_name), payload)
+
+
+def schedule_uploaded_audio_processing(paths):
+    report = default_audio_processing_report()
+    files = [str(Path(path).resolve()) for path in paths if Path(path).exists()]
+    if not files:
+        return report
+    if not audio_processing_tools_available():
+        report["skipped"] = len(files)
+        report["issue"] = "Audio-Prüfung übersprungen, weil ffmpeg/ffprobe fehlen."
+        return report
+    AUDIO_PROCESSING_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    manifest_path = AUDIO_PROCESSING_QUEUE_DIR / f"job-{int(time.time())}-{secrets.token_hex(4)}.json"
+    manifest_payload = {
+        "created_at": int(time.time()),
+        "paths": files,
+    }
+    save_json(manifest_path, manifest_payload)
+    save_audio_processing_status(
+        manifest_path.name,
+        _audio_job_payload(manifest_path.name, files, state="queued"),
+    )
+    if audio_processing_worker_running():
+        report["tool_available"] = True
+        report["scheduled"] = len(files)
+        report["jobs"] = [{"job": manifest_path.name, "paths": files}]
+        return report
+    try:
+        _spawn_audio_processing_worker()
+    except OSError:
+        manifest_path.unlink(missing_ok=True)
+        audio_processing_status_path(manifest_path.name).unlink(missing_ok=True)
+        report["tool_available"] = True
+        report["failed"] = len(files)
+        report["issue"] = "Audio-Normalisierung konnte nicht im Hintergrund gestartet werden."
+        return report
+    report["tool_available"] = True
+    report["scheduled"] = len(files)
+    report["jobs"] = [{"job": manifest_path.name, "paths": files}]
+    return report
+
+
+def schedule_volume_adjustment(path, gain_db):
+    report = default_audio_processing_report()
+    track_path = Path(path)
+    if not track_path.exists():
+        report["failed"] = 1
+        report["issue"] = "Titel konnte nicht gefunden werden."
+        return report
+    if not audio_processing_tools_available():
+        report["skipped"] = 1
+        report["issue"] = "Lautstärke-Anpassung übersprungen, weil ffmpeg fehlt."
+        return report
+    AUDIO_PROCESSING_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    manifest_path = AUDIO_PROCESSING_QUEUE_DIR / f"job-{int(time.time())}-{secrets.token_hex(4)}.json"
+    manifest_payload = {
+        "created_at": int(time.time()),
+        "operation": "volume_adjust",
+        "gain_db": round(float(gain_db), 1),
+        "paths": [str(track_path.resolve())],
+    }
+    save_json(manifest_path, manifest_payload)
+    gain_label = f"{manifest_payload['gain_db']:+.1f} dB"
+    save_audio_processing_status(
+        manifest_path.name,
+        _audio_job_payload(
+            manifest_path.name,
+            manifest_payload["paths"],
+            state="queued",
+            file_statuses=[_audio_file_status_entry(track_path, state="queued", progress_ratio=0.0, detail=f"Wartet auf {gain_label}")],
+        ),
+    )
+    if audio_processing_worker_running():
+        report["tool_available"] = True
+        report["scheduled"] = 1
+        report["jobs"] = [{"job": manifest_path.name, "paths": manifest_payload["paths"]}]
+        return report
+    try:
+        _spawn_audio_processing_worker()
+    except OSError:
+        manifest_path.unlink(missing_ok=True)
+        audio_processing_status_path(manifest_path.name).unlink(missing_ok=True)
+        report["tool_available"] = True
+        report["failed"] = 1
+        report["issue"] = "Lautstärke-Anpassung konnte nicht gestartet werden."
+        return report
+    report["tool_available"] = True
+    report["scheduled"] = 1
+    report["jobs"] = [{"job": manifest_path.name, "paths": manifest_payload["paths"]}]
+    return report
+
+
 def build_playlist(album_dir):
     audio_files = sorted(
         [path for path in album_dir.rglob("*") if path.is_file() and is_audio_file(path)],
@@ -84,6 +645,44 @@ def write_playlist_entries(album_dir, entries):
     playlist_lines = ["#EXTM3U", *entries]
     playlist_path.write_text("\n".join(playlist_lines) + "\n", encoding="utf-8")
     return playlist_path
+
+
+def build_track_metadata(album_dir, entries, existing_tracks=None):
+    existing_map = {}
+    for item in existing_tracks or []:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path", "") or "").strip()
+        if path:
+            existing_map[path] = dict(item)
+
+    tracks = []
+    for entry in entries:
+        track_path = album_dir / entry
+        try:
+            stat = track_path.stat()
+        except OSError:
+            continue
+        metadata = existing_map.get(entry, {})
+        modified_ns = int(stat.st_mtime_ns)
+        size_bytes = int(stat.st_size)
+        if (
+            int(metadata.get("modified_ns", -1) or -1) == modified_ns
+            and int(metadata.get("size_bytes", -1) or -1) == size_bytes
+        ):
+            duration_seconds = int(metadata.get("duration_seconds", 0) or 0)
+        else:
+            duration_seconds = int(track_duration_seconds(track_path) or 0)
+        tracks.append(
+            {
+                "path": entry,
+                "title": str(metadata.get("title", "") or track_title_from_entry(entry)),
+                "duration_seconds": duration_seconds,
+                "modified_ns": modified_ns,
+                "size_bytes": size_bytes,
+            }
+        )
+    return tracks
 
 
 def detect_cover(album_dir):
@@ -149,6 +748,7 @@ def import_album_folder(files, album_name, rfid_uid=""):
         if first_parts and len(first_parts) == len(raw_paths) and len(set(first_parts)) == 1:
             root_prefix = first_parts[0]
 
+    uploaded_audio_paths = []
     for storage, raw_path in zip(files, raw_paths):
         source_name = getattr(storage, "filename", "") or ""
         relative_path = raw_path
@@ -159,6 +759,10 @@ def import_album_folder(files, album_name, rfid_uid=""):
         target = album_dir / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
         storage.save(target)
+        if is_audio_file(target):
+            uploaded_audio_paths.append(target)
+
+    audio_report = default_audio_processing_report()
 
     playlist_path, audio_files = build_playlist(album_dir)
     if not audio_files:
@@ -175,6 +779,7 @@ def import_album_folder(files, album_name, rfid_uid=""):
         "rfid_uid": rfid_uid.strip(),
         "cover_url": cover_url,
     }
+    album_entry = refresh_album_metadata(album_entry)
 
     conflict = album_conflict(library_data["albums"], album_entry["id"], album_entry["rfid_uid"])
     if conflict:
@@ -183,7 +788,7 @@ def import_album_folder(files, album_name, rfid_uid=""):
 
     library_data["albums"].append(album_entry)
     save_library(library_data)
-    return album_entry
+    return album_entry, audio_report
 
 
 def unique_album_dir(album_name):
@@ -255,6 +860,7 @@ def refresh_album_metadata(album):
     album["playlist"] = playlist_path.relative_to(BASE_DIR).as_posix()
     album["track_count"] = len(track_entries)
     album["cover_url"] = detect_cover(album_dir)
+    album["tracks"] = build_track_metadata(album_dir, track_entries, existing_tracks=album.get("tracks", []))
     album["track_entries"] = track_entries
     return album
 
@@ -275,6 +881,7 @@ def create_empty_album(album_name, rfid_uid=""):
         "rfid_uid": rfid_uid.strip(),
         "cover_url": "",
         "shuffle_enabled": False,
+        "tracks": [],
     }
     conflict = album_conflict(library_data["albums"], album_entry["id"], album_entry["rfid_uid"])
     if conflict:
@@ -292,7 +899,7 @@ def create_album_with_tracks(files, album_name, rfid_uid=""):
 
     album_entry = create_empty_album(album_name, rfid_uid)
     try:
-        add_tracks_to_album(album_entry, valid_files)
+        album_entry, audio_report = add_tracks_to_album(album_entry, valid_files)
     except Exception:
         album_dir = BASE_DIR / album_entry.get("folder", "")
         if album_dir.exists() and ALBUMS_DIR in album_dir.parents:
@@ -307,10 +914,10 @@ def create_album_with_tracks(files, album_name, rfid_uid=""):
     if target is None:
         library_data.setdefault("albums", []).append(album_entry)
         save_library(library_data)
-        return album_entry
+        return album_entry, audio_report
     target.update(album_entry)
     save_library(library_data)
-    return target
+    return target, audio_report
 
 
 def add_tracks_to_album(album, files):
@@ -328,6 +935,7 @@ def add_tracks_to_album(album, files):
             root_prefix = first_parts[0]
 
     saved_audio = 0
+    uploaded_audio_paths = []
     for storage, raw_path in zip(valid_files, raw_paths):
         relative_path = raw_path
         if root_prefix and relative_path.parts and relative_path.parts[0] == root_prefix:
@@ -340,10 +948,12 @@ def add_tracks_to_album(album, files):
         target.parent.mkdir(parents=True, exist_ok=True)
         storage.save(target)
         saved_audio += 1
+        uploaded_audio_paths.append(target)
 
     if not saved_audio:
         raise ValueError("Es wurden keine unterstützten Audiodateien hochgeladen.")
-    return refresh_album_metadata(album)
+    audio_report = default_audio_processing_report()
+    return refresh_album_metadata(album), audio_report
 
 
 def remove_tracks_from_album(album, track_paths):
@@ -444,13 +1054,20 @@ def track_display_name(track_path):
 
 def track_rows(album):
     rows = []
+    track_map = {
+        str(item.get("path", "") or ""): dict(item)
+        for item in (album.get("tracks", []) or [])
+        if isinstance(item, dict)
+    }
     for index, track in enumerate(album.get("track_entries", []), start=1):
+        metadata = track_map.get(track, {})
         rows.append(
             {
                 "index": index,
                 "path": track,
                 "filename": Path(track).name,
-                "display_name": track_display_name(track),
+                "display_name": str(metadata.get("title", "") or track_display_name(track)),
+                "duration_seconds": int(metadata.get("duration_seconds", 0) or 0),
             }
         )
     return rows

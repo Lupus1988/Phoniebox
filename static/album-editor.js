@@ -13,6 +13,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const deleteButton = document.getElementById("track-delete-submit");
   const selectAll = document.getElementById("track-select-all");
   const shuffleToggle = document.getElementById("album-shuffle-toggle");
+  const processingOverlay = document.getElementById("album-processing-overlay");
+  const processingTitle = document.getElementById("album-processing-title");
+  const processingSummary = document.getElementById("album-processing-summary");
+  const processingBar = document.getElementById("album-processing-progress-bar");
+  const processingFileList = document.getElementById("album-processing-file-list");
   const albumId = appRoot?.dataset.albumId || "";
   let state = payloadNode ? JSON.parse(payloadNode.textContent) : {album: {id: albumId, name: "", track_count: 0}, track_rows: []};
   let draggedRow = null;
@@ -132,6 +137,74 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function setEditorBusy(busy) {
+    for (const element of appRoot.querySelectorAll("button, input")) {
+      if (busy) {
+        element.setAttribute("disabled", "disabled");
+      } else if (
+        !(element === uploadSubmitButton && uploadSubmitButton.disabled)
+        && !(element === trackInput && trackInput.disabled)
+      ) {
+        element.removeAttribute("disabled");
+      }
+    }
+  }
+
+  function renderProcessingOverlay(files, progressRatio = 0, completed = false, summaryText = "") {
+    if (!(processingOverlay instanceof HTMLElement) || !(processingFileList instanceof HTMLElement)) {
+      return;
+    }
+    const normalizedFiles = Array.from(files || []);
+    if (!normalizedFiles.length) {
+      processingOverlay.hidden = true;
+      return;
+    }
+    processingOverlay.hidden = false;
+    if (processingTitle instanceof HTMLElement) {
+      processingTitle.textContent = completed ? "Lautstärke-Anpassung abgeschlossen" : "Lautstärke-Anpassung läuft";
+    }
+    if (processingSummary instanceof HTMLElement) {
+      processingSummary.textContent = summaryText || `${normalizedFiles.length} Titel`;
+    }
+    if (processingBar instanceof HTMLElement) {
+      processingBar.style.width = `${Math.max(0, Math.min(100, Math.round(progressRatio * 100)))}%`;
+    }
+    processingFileList.innerHTML = "";
+    for (const entry of normalizedFiles) {
+      const row = document.createElement("div");
+      row.className = "upload-file-row";
+      const stateName = String(entry.state || "");
+      row.classList.add(
+        stateName === "normalized" || stateName === "unchanged" ? "is-done" : stateName === "failed" ? "is-pending" : "is-active"
+      );
+      const meta = document.createElement("div");
+      meta.className = "upload-file-meta";
+      const name = document.createElement("div");
+      name.className = "upload-file-name";
+      name.textContent = entry.name || "Titel";
+      const detail = document.createElement("div");
+      detail.className = "upload-file-detail";
+      detail.textContent = entry.detail || "";
+      const state = document.createElement("div");
+      state.className = "upload-file-state";
+      state.textContent =
+        stateName === "normalized" || stateName === "unchanged" || stateName === "failed"
+          ? (entry.detail || "Fertig")
+          : `${Math.max(0, Math.min(100, Math.round(Number(entry.progress_ratio || 0) * 100)))}%`;
+      meta.appendChild(name);
+      meta.appendChild(detail);
+      row.appendChild(meta);
+      row.appendChild(state);
+      processingFileList.appendChild(row);
+    }
+  }
+
+  function hideProcessingOverlay() {
+    if (processingOverlay instanceof HTMLElement) {
+      processingOverlay.hidden = true;
+    }
+  }
+
   function setStatus(message, kind = "neutral") {
     if (!(statusNode instanceof HTMLElement)) {
       return;
@@ -214,8 +287,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const renameForm = row.querySelector("[data-track-rename-form]");
     const saveButton = row.querySelector("[data-track-save-button]");
     const deleteSingleButton = row.querySelector("[data-track-delete-button]");
+    const gainButton = row.querySelector("[data-track-gain-button]");
     saveButton?.addEventListener("click", async () => {
       await submitRename(renameForm);
+    });
+    gainButton?.addEventListener("click", async () => {
+      await submitGainEdit(row);
     });
     deleteSingleButton?.addEventListener("click", async () => {
       const trackPath = row.dataset.trackPath || "";
@@ -259,6 +336,16 @@ document.addEventListener("DOMContentLoaded", () => {
         </td>
         <td class="album-track-actions-cell">
           <div class="album-track-actions-wrap">
+            <label class="album-volume-edit-wrap" title="Lautstärke in 0,5 dB-Schritten anpassen">
+              <span>Vol.-edit</span>
+              <input type="number" class="album-volume-edit-input" data-track-gain-input step="0.5" min="-12" max="12" value="0.0" inputmode="decimal" aria-label="Lautstärkeanpassung in dB">
+            </label>
+            <button type="button" class="album-icon-button album-track-gain-button" data-track-gain-button aria-label="Lautstärke anpassen" title="Lautstärke anpassen">
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <path d="M14 38h10l12 10V16L24 26H14z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"></path>
+                <path d="M44 24c3 2 5 5 5 8s-2 6-5 8M50 18c5 4 8 8 8 14s-3 10-8 14" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"></path>
+              </svg>
+            </button>
             <button type="button" class="album-icon-button album-track-save-button" data-track-save-button aria-label="Titel speichern" title="Titel speichern">
               <svg viewBox="0 0 64 64" aria-hidden="true">
                 <path d="M14 12h30l6 6v34H14z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"></path>
@@ -309,6 +396,17 @@ document.addEventListener("DOMContentLoaded", () => {
     const payload = await response.json();
     if (!response.ok || payload.ok === false) {
       throw new Error(payload?.message || "Speichern fehlgeschlagen.");
+    }
+    return payload;
+  }
+
+  async function fetchAlbumPayload() {
+    const response = await fetch(`/api/library/album/${encodeURIComponent(albumId)}`, {
+      headers: {"X-Requested-With": "XMLHttpRequest"},
+    });
+    const payload = await response.json();
+    if (!response.ok || payload.ok === false) {
+      throw new Error(payload?.message || "Albumdaten konnten nicht geladen werden.");
     }
     return payload;
   }
@@ -377,6 +475,82 @@ document.addEventListener("DOMContentLoaded", () => {
       applyPayload(payload, "Titel gespeichert");
     } catch (error) {
       setStatus(error.message || "Titel konnte nicht gespeichert werden.", "error");
+    }
+  }
+
+  async function pollAudioProcessingJobs(jobIds) {
+    const uniqueJobIds = Array.from(new Set((jobIds || []).filter(Boolean)));
+    if (!uniqueJobIds.length) {
+      hideProcessingOverlay();
+      return;
+    }
+    const query = new URLSearchParams();
+    for (const jobId of uniqueJobIds) {
+      query.append("job_id", jobId);
+    }
+    while (true) {
+      const response = await fetch(`/api/library/audio-processing-status?${query.toString()}`, {
+        headers: {"X-Requested-With": "XMLHttpRequest"},
+      });
+      const payload = await response.json();
+      const audio = payload?.audio_processing || {};
+      const jobs = Array.isArray(audio.jobs) ? audio.jobs : [];
+      const files = [];
+      for (const job of jobs) {
+        for (const file of Array.isArray(job.files) ? job.files : []) {
+          files.push(file);
+        }
+      }
+      renderProcessingOverlay(
+        files,
+        Number(audio.progress_ratio || 0),
+        Boolean(audio.complete),
+        `${Number(audio.completed_files || 0)} / ${Number(audio.total_files || files.length || 0)} Dateien verarbeitet`
+      );
+      if (!audio.active) {
+        return audio;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 700));
+    }
+  }
+
+  async function submitGainEdit(row) {
+    const trackPath = row?.dataset?.trackPath || "";
+    const input = row?.querySelector("[data-track-gain-input]");
+    if (!(input instanceof HTMLInputElement) || !trackPath) {
+      return;
+    }
+    const gainValue = Number(input.value || 0);
+    if (!Number.isFinite(gainValue)) {
+      setStatus("Ungültiger dB-Wert.", "error");
+      return;
+    }
+    const rounded = Math.round(gainValue * 2) / 2;
+    input.value = rounded.toFixed(1);
+    const titleInput = row.querySelector(".album-track-title-input");
+    const data = new FormData();
+    data.append("action", "volume_edit");
+    data.append("track_path", trackPath);
+    data.append("gain_db", rounded.toFixed(1));
+    setEditorBusy(true);
+    renderProcessingOverlay(
+      [{name: titleInput instanceof HTMLInputElement ? titleInput.value : trackPath, detail: `${rounded >= 0 ? "+" : ""}${rounded.toFixed(1)} dB`, state: "queued", progress_ratio: 0}],
+      0,
+      false,
+      "Wartet auf Start"
+    );
+    setStatus("Lautstärke-Anpassung wird gestartet …");
+    try {
+      const payload = await postFormData(data);
+      const jobs = Array.isArray(payload?.audio_processing?.jobs) ? payload.audio_processing.jobs.map((job) => job.job).filter(Boolean) : [];
+      await pollAudioProcessingJobs(jobs);
+      const refreshed = await fetchAlbumPayload();
+      applyPayload(refreshed, `Vol.-edit ${rounded >= 0 ? "+" : ""}${rounded.toFixed(1)} dB angewendet`);
+    } catch (error) {
+      setStatus(error.message || "Lautstärke-Anpassung fehlgeschlagen.", "error");
+    } finally {
+      hideProcessingOverlay();
+      setEditorBusy(false);
     }
   }
 
@@ -516,6 +690,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   renderRows(state.track_rows || []);
   updateCounters();
+  hideProcessingOverlay();
   setStatus("Bereit");
   trackInput?.addEventListener("change", () => {
     const files = selectedUploadFiles();

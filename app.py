@@ -304,6 +304,11 @@ def default_setup():
             {"id": "led-5", "name": "Sleep 3/3", "pin": "", "function": "sleep_3", "brightness": 90},
             {"id": "led-6", "name": "Wifi", "pin": "", "function": "wifi_on", "brightness": 55},
         ],
+        "led_tuning": {
+            "pwm_frequency_hz": 800,
+            "brightness_gamma": 1.0,
+            "update_rate_ms": 70,
+        },
         "power_routines": {
             "power_on": "sleep_count_up_5",
             "power_off": "sleep_count_down_5",
@@ -317,6 +322,7 @@ def default_setup():
         "audio": {
             "output_mode": "usb_dac",
             "i2s_profile": "auto",
+            "playback_backend": "auto",
             "connection_hint": "Onboard- oder USB-Soundkarte auswählen",
         },
         "wifi": {
@@ -649,6 +655,33 @@ def normalize_setup_data(data):
         data["buttons"] = [normalize_button_entry(button, button.get("name", "")) for button in buttons]
     else:
         data["buttons"] = [normalize_button_entry(button, button.get("name", "")) for button in default_setup()["buttons"]]
+    leds = data.get("leds", [])
+    default_leds = default_setup()["leds"]
+    default_led_tuning = default_setup()["led_tuning"]
+    if isinstance(leds, list):
+        normalized_leds = []
+        for index, led in enumerate(leds):
+            fallback = default_leds[index] if index < len(default_leds) else default_leds[-1]
+            normalized_leds.append(
+                {
+                    "id": (led.get("id") or fallback.get("id") or f"led-{index + 1}").strip(),
+                    "name": (led.get("name") or fallback.get("name") or f"LED {index + 1}").strip(),
+                    "pin": (led.get("pin") or "").strip(),
+                    "function": (led.get("function") or fallback.get("function") or "").strip(),
+                    "brightness": to_int(led.get("brightness"), fallback.get("brightness", 50), 0, 100),
+                }
+            )
+        data["leds"] = normalized_leds
+    else:
+        data["leds"] = list(default_leds)
+    tuning = data.get("led_tuning", {})
+    if not isinstance(tuning, dict):
+        tuning = {}
+    data["led_tuning"] = {
+        "pwm_frequency_hz": to_int(tuning.get("pwm_frequency_hz"), default_led_tuning.get("pwm_frequency_hz", 800), 50, 10000),
+        "brightness_gamma": round(to_float(tuning.get("brightness_gamma"), default_led_tuning.get("brightness_gamma", 1.0), 0.2, 3.0), 2),
+        "update_rate_ms": to_int(tuning.get("update_rate_ms"), default_led_tuning.get("update_rate_ms", 70), 20, 1000),
+    }
     data["encoder_modules"] = normalize_encoder_modules(data.get("encoder_modules", []))
     power_routines = data.setdefault("power_routines", {})
     legacy_sleep_suppress = power_routines.get("suppress_shutdown_sound_for_sleep_timer")
@@ -796,7 +829,10 @@ def apply_reader_install_action(data, action, selected_type):
 
 def build_audio_runtime_config(audio_setup, settings):
     config = dict(audio_setup or {})
-    config["playback_backend"] = "mpv"
+    selected_backend = str(config.get("playback_backend", "auto") or "auto").strip().lower()
+    if selected_backend not in {"auto", "mpv", "mpg123", "cvlc"}:
+        selected_backend = "auto"
+    config["playback_backend"] = selected_backend
     config["mixer_control"] = "auto"
     config["preferred_output"] = "auto"
     config["mono_downmix"] = False
@@ -1798,13 +1834,23 @@ def setup():
             ]
             candidate = dict(data)
             candidate["leds"] = candidate_leds
+            candidate["led_tuning"] = {
+                "pwm_frequency_hz": to_int(request.form.get("led_tuning_pwm_frequency_hz"), data.get("led_tuning", {}).get("pwm_frequency_hz", 800), 50, 10000),
+                "brightness_gamma": round(to_float(request.form.get("led_tuning_brightness_gamma"), data.get("led_tuning", {}).get("brightness_gamma", 1.0), 0.2, 3.0), 2),
+                "update_rate_ms": to_int(request.form.get("led_tuning_update_rate_ms"), data.get("led_tuning", {}).get("update_rate_ms", 70), 20, 1000),
+            }
             errors = cross_role_pin_errors(candidate)
             if errors:
                 for error in errors:
                     flash(error, "error")
                 return redirect(url_for("setup"))
             data["leds"] = candidate_leds
+            data["led_tuning"] = candidate["led_tuning"]
             save_setup(data)
+            runtime_state = runtime_service.ensure_runtime()
+            runtime_state = runtime_service.update_hardware_profile(runtime_state)
+            runtime_state = runtime_service.update_led_status(runtime_state)
+            runtime_service.save_runtime(runtime_state)
             flash("LED-Zuweisungen gespeichert.", "success")
             return redirect(url_for("setup"))
 
@@ -1848,6 +1894,9 @@ def setup():
             audio["output_mode"] = request.form.get("output_mode", audio.get("output_mode", "usb_dac")).strip() or "usb_dac"
             if audio["output_mode"] not in {"analog_jack", "usb_dac"}:
                 audio["output_mode"] = "usb_dac"
+            audio["playback_backend"] = request.form.get("playback_backend", audio.get("playback_backend", "auto")).strip() or "auto"
+            if audio["playback_backend"] not in {"auto", "mpv", "mpg123", "cvlc"}:
+                audio["playback_backend"] = "auto"
             audio["i2s_profile"] = "auto"
             save_setup(data)
             audio_config = build_audio_runtime_config(audio, load_settings())
@@ -2080,6 +2129,8 @@ def api_setup_led_blink():
     payload = request.get_json(silent=True) or {}
     pin = str(payload.get("pin", request.form.get("pin", ""))).strip()
     brightness = to_int(payload.get("brightness", request.form.get("brightness", 100)), 100, 0, 100)
+    pwm_frequency_hz = to_int(payload.get("pwm_frequency_hz", request.form.get("pwm_frequency_hz", 800)), 800, 50, 10000)
+    brightness_gamma = round(to_float(payload.get("brightness_gamma", request.form.get("brightness_gamma", 1.0)), 1.0, 0.2, 3.0), 2)
     if not pin:
         return json_error("Kein LED-PIN ausgewählt.", status_code=400, details=["Kein LED-PIN ausgewählt."])
     detect_state = load_button_detect()
@@ -2094,6 +2145,8 @@ def api_setup_led_blink():
             "id": secrets.token_hex(6),
             "pin": pin,
             "brightness": brightness,
+            "pwm_frequency_hz": pwm_frequency_hz,
+            "brightness_gamma": brightness_gamma,
             "repeats": 3,
             "on_seconds": 0.22,
             "off_seconds": 0.18,

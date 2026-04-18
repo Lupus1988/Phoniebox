@@ -416,12 +416,26 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         trigger.assert_called_once_with({"album_id": "album-1", "autoplay": True, "shuffle": True})
 
+    def test_api_runtime_load_album_preserves_default_shuffle_when_omitted(self):
+        with patch("routes.player.runtime_trigger_load_album", return_value=({"ok": True}, 200)) as trigger:
+            response = self.client.post("/api/runtime/load-album", json={"album_id": "album-1", "autoplay": True})
+
+        self.assertEqual(response.status_code, 200)
+        trigger.assert_called_once_with({"album_id": "album-1", "autoplay": True})
+
     def test_api_runtime_queue_album_accepts_shuffle_flag(self):
         with patch("routes.player.runtime_trigger_queue_album", return_value=({"ok": True}, 200)) as trigger:
             response = self.client.post("/api/runtime/queue-album", json={"album_id": "album-1", "shuffle": True})
 
         self.assertEqual(response.status_code, 200)
         trigger.assert_called_once_with({"album_id": "album-1", "shuffle": True})
+
+    def test_api_runtime_queue_album_preserves_default_shuffle_when_omitted(self):
+        with patch("routes.player.runtime_trigger_queue_album", return_value=({"ok": True}, 200)) as trigger:
+            response = self.client.post("/api/runtime/queue-album", json={"album_id": "album-1"})
+
+        self.assertEqual(response.status_code, 200)
+        trigger.assert_called_once_with({"album_id": "album-1"})
 
     def test_hotspot_password_warning_uses_current_security_value(self):
         setup = default_setup()
@@ -439,6 +453,63 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(setup["wifi"]["saved_networks"], [])
         self.assertFalse(setup["wifi"]["auto_wifi_off_enabled"])
         self.assertEqual(setup["wifi"]["auto_wifi_off_minutes"], 30)
+        self.assertEqual(setup["audio"]["playback_backend"], "auto")
+
+    def test_setup_audio_save_accepts_playback_backend(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+
+        with patch("app.load_setup", return_value=setup), patch("app.save_setup") as save_setup, patch(
+            "app.runtime_service.status", return_value=runtime_snapshot
+        ), patch("app.apply_audio_profile"), patch("app.deploy_audio_profile", return_value={"ok": True, "details": ["ok"]}), patch(
+            "app.save_apply_report"
+        ):
+            response = self.client.post("/setup", data={"section": "audio", "output_mode": "usb_dac", "playback_backend": "mpg123"})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(setup["audio"]["playback_backend"], "mpg123")
+        save_setup.assert_called_once_with(setup)
+
+    def test_default_setup_includes_global_led_tuning_fields(self):
+        setup = default_setup()
+
+        self.assertEqual(setup["led_tuning"]["pwm_frequency_hz"], 800)
+        self.assertEqual(setup["led_tuning"]["brightness_gamma"], 1.0)
+        self.assertEqual(setup["led_tuning"]["update_rate_ms"], 70)
+
+    def test_setup_led_save_accepts_global_led_tuning_fields(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+        captured = {}
+        payload = {"section": "leds", "led_count": str(len(setup["leds"]))}
+        for index, led in enumerate(setup["leds"]):
+            payload[f"led_name_{index}"] = led["name"]
+            payload[f"led_pin_{index}"] = "GPIO12" if index == 0 else ""
+            payload[f"led_function_{index}"] = led["function"]
+            payload[f"led_brightness_{index}"] = "55" if index == 0 else str(led["brightness"])
+        payload["led_tuning_pwm_frequency_hz"] = "1200"
+        payload["led_tuning_brightness_gamma"] = "1.35"
+        payload["led_tuning_update_rate_ms"] = "45"
+
+        def capture_save(data):
+            captured["setup"] = data
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "app.save_setup", side_effect=capture_save
+        ), patch("app.runtime_service.ensure_runtime", return_value={"hardware": {}, "led_status": []}), patch(
+            "app.runtime_service.update_hardware_profile", side_effect=lambda state: state
+        ), patch("app.runtime_service.update_led_status", side_effect=lambda state: state), patch(
+            "app.runtime_service.save_runtime"
+        ):
+            response = self.client.post("/setup", data=payload, follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+        saved_led = captured["setup"]["leds"][0]
+        self.assertEqual(saved_led["pin"], "GPIO12")
+        self.assertEqual(saved_led["brightness"], 55)
+        self.assertEqual(captured["setup"]["led_tuning"]["pwm_frequency_hz"], 1200)
+        self.assertEqual(captured["setup"]["led_tuning"]["brightness_gamma"], 1.35)
+        self.assertEqual(captured["setup"]["led_tuning"]["update_rate_ms"], 45)
 
     def test_normalize_setup_adds_auto_wifi_off_defaults(self):
         setup = normalize_setup_data({"wifi": {"mode": "hotspot_only"}, "audio": {"output_mode": "usb_dac"}})
@@ -489,6 +560,8 @@ class AppRoutesTest(unittest.TestCase):
                 "id": ANY,
                 "pin": "GPIO12",
                 "brightness": 55,
+                "pwm_frequency_hz": 800,
+                "brightness_gamma": 1.0,
                 "repeats": 3,
                 "on_seconds": 0.22,
                 "off_seconds": 0.18,
@@ -720,6 +793,28 @@ class AppRoutesTest(unittest.TestCase):
         self.assertIn("Titel hochgeladen", payload["message"])
         create_album_with_tracks.assert_called_once()
 
+    def test_import_album_xhr_reports_audio_normalization_summary(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+        album = {"id": "album-new", "name": "Neu", "folder": "media/albums/neu", "playlist": "media/albums/neu/playlist.m3u", "track_count": 2, "rfid_uid": "", "cover_url": ""}
+        report = {"tool_available": True, "scheduled": 2, "checked": 0, "normalized": 0, "unchanged": 0, "failed": 0, "skipped": 0, "jobs": [{"job": "job-1.json"}]}
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "routes.library.load_library", return_value={"albums": []}
+        ), patch("routes.library.create_album_with_tracks", return_value=(album, report)):
+            response = self.client.post(
+                "/library",
+                data={"action": "import_album", "name": "Neu", "track_files": (BytesIO(b"fake"), "song.mp3")},
+                content_type="multipart/form-data",
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        payload = response.get_json()
+        self.assertIn("Audio-Normalisierung läuft im Hintergrund für 2 Titel", payload["message"])
+        self.assertEqual(payload["audio_processing"]["jobs"][0]["job"], "job-1.json")
+
     def test_import_album_xhr_allows_empty_album_creation(self):
         setup = default_setup()
         runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
@@ -764,6 +859,68 @@ class AppRoutesTest(unittest.TestCase):
         self.assertTrue(response.get_json()["ok"])
         add_tracks.assert_called_once()
         save_library.assert_called_once_with(library_payload)
+
+    def test_add_tracks_xhr_reports_missing_audio_tools(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+        album = {"id": "album-1", "name": "Test", "folder": "media/albums/test", "playlist": "", "track_count": 1, "rfid_uid": "", "cover_url": ""}
+        library_payload = {"albums": [album]}
+        report = {"tool_available": False, "checked": 0, "normalized": 0, "unchanged": 0, "failed": 0, "skipped": 1}
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "routes.library.load_library", return_value=library_payload
+        ), patch("routes.library.add_tracks_to_album", return_value=(album, report)), patch("routes.library.save_library") as save_library:
+            response = self.client.post(
+                "/library",
+                data={"action": "add_tracks", "album_id": "album-1", "track_files": (BytesIO(b"fake"), "song.mp3")},
+                content_type="multipart/form-data",
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        payload = response.get_json()
+        self.assertIn("ffmpeg/ffprobe fehlen", payload["message"])
+        save_library.assert_called_once_with(library_payload)
+
+    def test_audio_processing_status_endpoint_returns_summary(self):
+        with patch("routes.library.audio_processing_status_summary", return_value={"job_count": 1, "active": True}) as summary:
+            response = self.client.get("/api/library/audio-processing-status?job_id=job-a.json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        payload = response.get_json()
+        self.assertEqual(payload["audio_processing"]["job_count"], 1)
+        summary.assert_called_once_with(["job-a.json"])
+
+    def test_album_editor_volume_edit_starts_job(self):
+        album = {
+            "id": "album-1",
+            "name": "Test",
+            "folder": "media/albums/test",
+            "playlist": "media/albums/test/playlist.m3u",
+            "track_count": 1,
+            "rfid_uid": "",
+            "cover_url": "",
+            "track_entries": ["song.mp3"],
+            "shuffle_enabled": False,
+        }
+        library_payload = {"albums": [album]}
+        report = {"scheduled": 1, "jobs": [{"job": "job-1.json"}], "failed": 0, "issue": ""}
+
+        with patch("routes.library.load_library", return_value=library_payload), patch(
+            "routes.library.schedule_volume_adjustment", return_value=report
+        ) as schedule_adjust, patch("routes.library.save_library"):
+            response = self.client.post(
+                "/library/album/album-1",
+                data={"action": "volume_edit", "track_path": "song.mp3", "gain_db": "1.5"},
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["audio_processing"]["jobs"][0]["job"], "job-1.json")
+        schedule_adjust.assert_called_once()
 
     def test_replace_cover_xhr_returns_json_success(self):
         setup = default_setup()

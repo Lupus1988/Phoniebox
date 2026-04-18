@@ -45,6 +45,15 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertIn("--start=11", command)
         self.assertIn("--playlist=/tmp/test.m3u", command)
 
+    def test_detect_backend_prefers_configured_backend_when_available(self):
+        with patch.object(playback_module, "configured_backend", return_value="mpg123"), patch.object(
+            playback_module.shutil, "which", side_effect=lambda name: "/usr/bin/" + name if name in {"mpv", "mpg123"} else None
+        ):
+            status = playback_module.detect_backend()
+
+        self.assertEqual(status["preferred_backend"], "mpg123")
+        self.assertEqual(status["active_backend"], "mpg123")
+
     def test_terminate_known_process_reaps_registered_handle(self):
         process = Mock()
         process.pid = 4321
@@ -161,6 +170,35 @@ class PlaybackControllerTest(unittest.TestCase):
 
         mpv_request.assert_called_once_with(session, ["playlist-next", "force"])
         self.assertEqual(updated["current_index"], 1)
+
+    def test_sync_session_keeps_mpv_running_when_eof_reached_but_not_idle(self):
+        session = {
+            "backend": "mpv",
+            "state": "playing",
+            "pid": 1234,
+            "socket_path": "/tmp/phoniebox-mpv.sock",
+            "position_seconds": 176,
+            "duration_seconds": 180,
+            "current_index": 0,
+            "track_path": "/tmp/test.mp3",
+        }
+
+        values = {
+            "time-pos": 177,
+            "pause": False,
+            "idle-active": False,
+            "playlist-pos": 0,
+            "duration": 180,
+            "path": "/tmp/test.mp3",
+        }
+
+        with patch.object(self.controller, "_process_exists", return_value=True):
+            with patch.object(self.controller, "_mpv_get_property", side_effect=lambda current, name, default=None: values.get(name, default)):
+                updated = self.controller.sync_session(dict(session))
+
+        self.assertEqual(updated["state"], "playing")
+        self.assertEqual(updated["pid"], 1234)
+        self.assertEqual(updated["position_seconds"], 177)
 
     def test_open_track_creates_runtime_playlist_for_shuffled_mpv_entries(self):
         with tempfile.TemporaryDirectory() as tmpdir:

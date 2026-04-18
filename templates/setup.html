@@ -72,6 +72,15 @@
             {% endfor %}
           </select>
         </label>
+        <label>
+          <span>Playback-Backend</span>
+          <select name="playback_backend">
+            <option value="auto" {% if setup_data.audio.playback_backend == 'auto' %}selected{% endif %}>Automatisch</option>
+            <option value="mpv" {% if setup_data.audio.playback_backend == 'mpv' %}selected{% endif %}>mpv</option>
+            <option value="mpg123" {% if setup_data.audio.playback_backend == 'mpg123' %}selected{% endif %}>mpg123</option>
+            <option value="cvlc" {% if setup_data.audio.playback_backend == 'cvlc' %}selected{% endif %}>cvlc</option>
+          </select>
+        </label>
       </div>
       <ul class="plain-list setup-audio-info">
         <li>Gerät erkannt: {{ audio_environment.device_model }}</li>
@@ -245,6 +254,11 @@
         <input type="hidden" name="led_count" value="{{ setup_data.leds|length }}">
         <div class="panel-box-head">
           <h3>LED-Zuordnung</h3>
+          <button
+            type="button"
+            class="button-like routine-info-button"
+            data-led-tuning-info
+          >i</button>
         </div>
         <div class="led-table-head">
           <div>Funktion</div>
@@ -274,6 +288,20 @@
               >🔆</button>
             </div>
           {% endfor %}
+        </div>
+        <div class="led-global-tuning-row">
+          <label>
+            <span>PWM Hz</span>
+            <input type="number" name="led_tuning_pwm_frequency_hz" min="50" max="10000" step="10" value="{{ setup_data.led_tuning.pwm_frequency_hz or 800 }}" data-led-pwm-frequency>
+          </label>
+          <label>
+            <span>Gamma</span>
+            <input type="number" name="led_tuning_brightness_gamma" min="0.2" max="3.0" step="0.05" value="{{ setup_data.led_tuning.brightness_gamma or 1.0 }}" data-led-brightness-gamma>
+          </label>
+          <label>
+            <span>Update ms</span>
+            <input type="number" name="led_tuning_update_rate_ms" min="20" max="1000" step="5" value="{{ setup_data.led_tuning.update_rate_ms or 70 }}" data-led-update-rate>
+          </label>
         </div>
         <button class="primary full setup-save-button led-save-button" type="submit">LEDs speichern</button>
       </form>
@@ -459,6 +487,40 @@
     </article>
   </dialog>
 
+  <dialog data-led-tuning-dialog>
+    <article class="panel-box">
+      <div class="panel-box-head">
+        <h3>LED-Tuning</h3>
+      </div>
+      <table class="routine-info-table">
+        <thead>
+          <tr>
+            <th>Feld</th>
+            <th>Empfehlung / Bereich</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>PWM Hz</td>
+            <td>`800` als Startwert. Sinnvoll meist `400-2000`. Niedriger kann sichtbarer flackern, sehr hoch bringt oft keinen Zusatznutzen.</td>
+          </tr>
+          <tr>
+            <td>Gamma</td>
+            <td>`1.0` = linear. Sinnvoll meist `0.8-1.6`. Höher macht kleine Helligkeiten dunkler, niedriger heller.</td>
+          </tr>
+          <tr>
+            <td>Update ms</td>
+            <td>`70` als Startwert. Sinnvoll meist `40-120`. Niedriger = schnellere Aktualisierung, höher = ruhiger/leichter, aber träger.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="page-copy">Für konstante LEDs zuerst `PWM Hz` testen. `Gamma` ändert die wahrgenommene Helligkeitskurve, `Update ms` das Nachführen dynamischer Effekte.</p>
+      <form method="dialog">
+        <button class="primary" type="submit">Schließen</button>
+      </form>
+    </article>
+  </dialog>
+
   <dialog
     class="modal"
     data-reader-reboot-dialog
@@ -527,6 +589,14 @@
           dialog.showModal();
         });
       });
+
+      const ledDialog = document.querySelector("[data-led-tuning-dialog]");
+      const ledInfoButton = document.querySelector("[data-led-tuning-info]");
+      if (ledDialog && ledInfoButton) {
+        ledInfoButton.addEventListener("click", () => {
+          ledDialog.showModal();
+        });
+      }
     })();
   </script>
 {% endblock %}
