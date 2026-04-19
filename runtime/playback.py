@@ -5,8 +5,11 @@ import socket
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
+
+from system.audio import detect_audio_environment, resolve_output_device
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -22,6 +25,38 @@ def configured_backend():
     audio = payload.get("audio") or {}
     preferred = str(audio.get("playback_backend", "auto") or "auto").strip().lower()
     return preferred if preferred in {"auto", "mpv", "mpg123", "cvlc"} else "auto"
+
+
+def configured_audio():
+    setup_path = BASE_DIR / "data" / "setup.json"
+    try:
+        payload = json.loads(setup_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload.get("audio") or {}
+
+
+def configured_alsa_device():
+    audio = configured_audio()
+    try:
+        snapshot = detect_audio_environment()
+        output_device = resolve_output_device(snapshot, audio)
+    except (OSError, ValueError):
+        output_device = "default"
+    return _mpv_alsa_device(output_device)
+
+
+def _mpv_alsa_device(output_device):
+    output_device = str(output_device or "default").strip()
+    if not output_device or output_device == "default":
+        return "alsa/default"
+    if output_device.startswith("alsa/"):
+        return output_device
+    if output_device.startswith("plughw:"):
+        return f"alsa/{output_device}"
+    if output_device.startswith("hw:"):
+        return f"alsa/plug{output_device}"
+    return f"alsa/{output_device}"
 
 
 def backend_candidates():
@@ -272,12 +307,15 @@ class PlaybackController:
         position_seconds = max(0, int(position_seconds))
         volume = max(0, min(100, int(volume)))
         if backend == "mpv":
+            audio_device = configured_alsa_device()
             return [
                 "mpv",
                 "--no-video",
                 "--really-quiet",
                 "--audio-display=no",
                 "--idle=no",
+                "--ao=alsa",
+                f"--audio-device={audio_device}",
                 "--cache=yes",
                 "--audio-buffer=0.2",
                 "--demuxer-readahead-secs=2",
@@ -312,12 +350,15 @@ class PlaybackController:
     def _build_mpv_playlist_command(self, playlist_path, current_index=0, position_seconds=0, volume=50):
         position_seconds = max(0, int(position_seconds))
         volume = max(0, min(100, int(volume)))
+        audio_device = configured_alsa_device()
         return [
             "mpv",
             "--no-video",
             "--really-quiet",
             "--audio-display=no",
             "--idle=no",
+            "--ao=alsa",
+            f"--audio-device={audio_device}",
             "--cache=yes",
             "--audio-buffer=0.2",
             "--demuxer-readahead-secs=2",
@@ -374,6 +415,7 @@ class PlaybackController:
             return session
 
         self._processes[process.pid] = process
+        self._watch_process(process)
         session["pid"] = process.pid
         session["started_at"] = time.time() - int(session.get("position_seconds", 0))
         session["state"] = "playing"
@@ -407,8 +449,20 @@ class PlaybackController:
         except OSError as exc:
             return {"ok": False, "details": [str(exc)]}
         self._processes[process.pid] = process
+        self._watch_process(process)
         self.preview_pid = process.pid
         return {"ok": True, "details": ["Sound gestartet."]}
+
+    def _watch_process(self, process):
+        def reap():
+            try:
+                process.wait()
+            except OSError:
+                return
+            self._processes.pop(process.pid, None)
+
+        thread = threading.Thread(target=reap, daemon=True)
+        thread.start()
 
     def open_track(
         self,

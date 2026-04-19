@@ -27,9 +27,12 @@ class PlaybackControllerTest(unittest.TestCase):
 
 
     def test_build_command_for_mpv_uses_start_time_and_volume(self):
-        command = self.controller._build_command("mpv", "/tmp/test.mp3", position_seconds=37, volume=50)
+        with patch.object(playback_module, "configured_alsa_device", return_value="alsa/plughw:1,0"):
+            command = self.controller._build_command("mpv", "/tmp/test.mp3", position_seconds=37, volume=50)
 
         self.assertEqual(command[:4], ["mpv", "--no-video", "--really-quiet", "--audio-display=no"])
+        self.assertIn("--ao=alsa", command)
+        self.assertIn("--audio-device=alsa/plughw:1,0", command)
         self.assertIn("--cache=yes", command)
         self.assertIn("--audio-buffer=0.2", command)
         self.assertIn("--demuxer-readahead-secs=2", command)
@@ -38,11 +41,19 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertEqual(command[-1], "/tmp/test.mp3")
 
     def test_build_playlist_command_for_mpv_uses_playlist_start(self):
-        command = self.controller._build_mpv_playlist_command("/tmp/test.m3u", current_index=2, position_seconds=11, volume=50)
+        with patch.object(playback_module, "configured_alsa_device", return_value="alsa/plughw:1,0"):
+            command = self.controller._build_mpv_playlist_command("/tmp/test.m3u", current_index=2, position_seconds=11, volume=50)
 
+        self.assertIn("--ao=alsa", command)
+        self.assertIn("--audio-device=alsa/plughw:1,0", command)
         self.assertIn("--playlist-start=2", command)
         self.assertIn("--start=11", command)
         self.assertIn("--playlist=/tmp/test.m3u", command)
+
+    def test_mpv_alsa_device_uses_plughw_for_resampling(self):
+        self.assertEqual(playback_module._mpv_alsa_device("hw:0,0"), "alsa/plughw:0,0")
+        self.assertEqual(playback_module._mpv_alsa_device("plughw:1,0"), "alsa/plughw:1,0")
+        self.assertEqual(playback_module._mpv_alsa_device("default"), "alsa/default")
 
     def test_detect_backend_prefers_configured_backend_when_available(self):
         with patch.object(playback_module, "configured_backend", return_value="mpg123"), patch.object(
