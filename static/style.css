@@ -498,14 +498,9 @@ textarea {
   text-align: center;
   font-size: 0.84rem;
   font-weight: 700;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 140ms ease;
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
-}
-
-.timeline-bubble.visible {
   opacity: 1;
+  pointer-events: none;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
 }
 
 .transport-strip {

@@ -191,9 +191,9 @@ class RuntimeService:
     ENCODER_ROTATION_EVENTS = {"cw", "ccw"}
     ENCODER_TRANSITION_DEBOUNCE_SECONDS = 0.004
     ENCODER_STEPS_PER_EVENT = 4
-    ENCODER_ACTIVE_POLL_INTERVAL_SECONDS = 0.005
-    ENCODER_IDLE_POLL_INTERVAL_SECONDS = 0.012
-    ENCODER_DEEP_IDLE_POLL_INTERVAL_SECONDS = 0.02
+    ENCODER_ACTIVE_POLL_INTERVAL_SECONDS = 0.006
+    ENCODER_IDLE_POLL_INTERVAL_SECONDS = 0.025
+    ENCODER_DEEP_IDLE_POLL_INTERVAL_SECONDS = 0.05
     ENCODER_ACTIVE_HOLD_SECONDS = 0.2
     GPIO_ACTIVITY_HOLD_SECONDS = 1.0
     ENCODER_CLOCKWISE_TRANSITIONS = {
@@ -1332,8 +1332,6 @@ class RuntimeService:
         }
 
     def _desired_wifi_state(self, runtime_state):
-        if not bool(runtime_state.get("powered_on", True)):
-            return False
         return bool(runtime_state.get("wifi_enabled", True))
 
     def _set_service_active(self, service_name, active):
@@ -1506,15 +1504,15 @@ class RuntimeService:
         power_on = runtime_state.get("powered_on", True)
 
         if animation == "sleep_count_up":
-            phase = min(3, int(progress * 4))
-            sleep_functions["sleep_1"] = phase >= 1
-            sleep_functions["sleep_2"] = phase >= 2
-            sleep_functions["sleep_3"] = phase >= 3
+            active_count = 0 if progress <= 0 else min(3, int((progress * 3) + 0.999))
+            sleep_functions["sleep_1"] = active_count >= 1
+            sleep_functions["sleep_2"] = active_count >= 2
+            sleep_functions["sleep_3"] = active_count >= 3
             return {"power_on": False, "standby": False, **sleep_functions}
 
         if animation == "sleep_count_down":
-            phase = min(3, int(progress * 4))
-            active_count = max(0, 3 - phase)
+            completed_count = 0 if progress <= 0 else min(3, int((progress * 3) + 0.999))
+            active_count = max(0, 3 - completed_count)
             sleep_functions["sleep_1"] = active_count >= 1
             sleep_functions["sleep_2"] = active_count >= 2
             sleep_functions["sleep_3"] = active_count >= 3
@@ -1704,6 +1702,14 @@ class RuntimeService:
             random.shuffle(entries)
         return entries
 
+    def _session_matches_playlist(self, session, player, entries):
+        if not session:
+            return False
+        if session.get("playlist") != player.get("playlist", ""):
+            return False
+        session_entries = list(session.get("playlist_entries", []) or [])
+        return bool(session_entries) and session_entries == list(entries or [])
+
     def load_album_into_player(self, album, runtime_state=None, player=None, autoplay=False, shuffle=None):
         runtime_state = runtime_state or self.ensure_runtime()
         player = player or self.load_player()
@@ -1860,7 +1866,6 @@ class RuntimeService:
             else:
                 if runtime_state.get("playback_session"):
                     runtime_state["playback_session"] = self.playback.stop(runtime_state["playback_session"])
-                runtime_state["wifi_enabled"] = False
                 runtime_state["wifi_auto_off_started_at"] = int(time.time())
                 runtime_state["sleep_timer"]["remaining_seconds"] = 0
                 runtime_state["sleep_timer"]["level"] = 0
@@ -2125,15 +2130,31 @@ class RuntimeService:
                     return {"runtime": runtime_state, "player": player}
             if entries and current_index + 1 < len(entries):
                 current_index += 1
-                runtime_state["playback_session"] = self.playback.open_track(
-                    player.get("playlist", ""),
-                    entries[current_index],
-                    0,
-                    volume=player.get("volume", 45),
-                    previous_session=runtime_state.get("playback_session", {}),
-                    current_index=current_index,
-                    entries=entries,
-                )
+                session = runtime_state.get("playback_session", {})
+                if self._session_matches_playlist(session, player, entries):
+                    advanced_session = self.playback.next_track(session)
+                    if int(advanced_session.get("current_index", -1) or -1) == current_index:
+                        runtime_state["playback_session"] = advanced_session
+                    else:
+                        runtime_state["playback_session"] = self.playback.open_track(
+                            player.get("playlist", ""),
+                            entries[current_index],
+                            0,
+                            volume=player.get("volume", 45),
+                            previous_session=session,
+                            current_index=current_index,
+                            entries=entries,
+                        )
+                else:
+                    runtime_state["playback_session"] = self.playback.open_track(
+                        player.get("playlist", ""),
+                        entries[current_index],
+                        0,
+                        volume=player.get("volume", 45),
+                        previous_session=session,
+                        current_index=current_index,
+                        entries=entries,
+                    )
                 runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
             elif player.get("queued_tracks"):
                 queued_tracks = list(player.get("queued_tracks", []))
@@ -2182,15 +2203,31 @@ class RuntimeService:
                 runtime_state = self.add_event(runtime_state, f"Titel neu gestartet: {player.get('current_track', '')}")
             elif entries and current_index > 0:
                 current_index -= 1
-                runtime_state["playback_session"] = self.playback.open_track(
-                    player.get("playlist", ""),
-                    entries[current_index],
-                    0,
-                    volume=player.get("volume", 45),
-                    previous_session=runtime_state.get("playback_session", {}),
-                    current_index=current_index,
-                    entries=entries,
-                )
+                session = runtime_state.get("playback_session", {})
+                if self._session_matches_playlist(session, player, entries):
+                    previous_session = self.playback.previous_track(session)
+                    if int(previous_session.get("current_index", -1) or -1) == current_index:
+                        runtime_state["playback_session"] = previous_session
+                    else:
+                        runtime_state["playback_session"] = self.playback.open_track(
+                            player.get("playlist", ""),
+                            entries[current_index],
+                            0,
+                            volume=player.get("volume", 45),
+                            previous_session=session,
+                            current_index=current_index,
+                            entries=entries,
+                        )
+                else:
+                    runtime_state["playback_session"] = self.playback.open_track(
+                        player.get("playlist", ""),
+                        entries[current_index],
+                        0,
+                        volume=player.get("volume", 45),
+                        previous_session=session,
+                        current_index=current_index,
+                        entries=entries,
+                    )
                 runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
                 runtime_state = self.add_event(runtime_state, f"Vorheriger Titel: {player.get('current_track', '')}")
             else:

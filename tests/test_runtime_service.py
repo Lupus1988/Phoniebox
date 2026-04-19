@@ -215,6 +215,26 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(queued_track["player"]["current_album"], "Queuealbum")
         self.assertEqual(queued_track["player"]["queue"], [])
 
+    def test_next_track_uses_backend_playlist_advance_when_available(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        runtime_state = self.service.ensure_runtime()
+        advanced_session = {
+            **runtime_state["playback_session"],
+            "current_index": 1,
+            "entry": "02-weiter.mp3",
+            "state": "playing",
+            "position_seconds": 0,
+        }
+
+        with patch.object(self.service.playback, "next_track", return_value=advanced_session) as next_track:
+            with patch.object(self.service.playback, "open_track", wraps=self.service.playback.open_track) as open_track:
+                result = self.service.next_track(autoplay=True)
+
+        next_track.assert_called_once()
+        open_track.assert_not_called()
+        self.assertEqual(result["player"]["current_track_index"], 1)
+        self.assertEqual(result["player"]["current_track"], "02 weiter")
+
     def test_queue_album_without_active_player_primes_first_track(self):
         queued = self.service.queue_album_by_id("album-2")
 
@@ -640,7 +660,7 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(powered_off["player"]["position_seconds"], 0)
         self.assertEqual(powered_off["runtime"]["playback_session"], {})
         self.assertEqual(powered_off["player"]["current_album"], "")
-        self.assertFalse(powered_off["runtime"]["wifi_enabled"])
+        self.assertTrue(powered_off["runtime"]["wifi_enabled"])
         self.assertEqual(powered_off["runtime"]["last_event"], "Standby aktiv")
 
         self.assertTrue(powered_on["runtime"]["powered_on"])
@@ -1469,7 +1489,7 @@ class RuntimeServiceTest(unittest.TestCase):
 
         result = self.service.tick(elapsed_seconds=1)
 
-        self.assertFalse(result["runtime"]["wifi_enabled"])
+        self.assertTrue(result["runtime"]["wifi_enabled"])
 
     def test_auto_wifi_off_does_not_run_while_in_standby(self):
         write_json(
@@ -1492,7 +1512,7 @@ class RuntimeServiceTest(unittest.TestCase):
 
         result = self.service.tick(elapsed_seconds=1)
 
-        self.assertFalse(result["runtime"]["wifi_enabled"])
+        self.assertTrue(result["runtime"]["wifi_enabled"])
         self.assertNotEqual(result["runtime"]["last_event"], "WiFi automatisch aus nach 1 Min")
 
     def test_auto_wifi_off_uses_start_or_wake_timer(self):
@@ -1947,7 +1967,7 @@ class RuntimeServiceTest(unittest.TestCase):
 
         interval = self.service.current_gpio_poll_interval_seconds(now=0.0)
 
-        self.assertAlmostEqual(interval, 0.02, places=3)
+        self.assertAlmostEqual(interval, 0.05, places=3)
 
     def test_gpio_poll_interval_stays_on_profile_without_encoder_rotation(self):
         write_json(
@@ -2014,7 +2034,7 @@ class RuntimeServiceTest(unittest.TestCase):
 
         interval = self.service.current_gpio_poll_interval_seconds(setup=setup, now=1.05)
 
-        self.assertAlmostEqual(interval, 0.005, places=3)
+        self.assertAlmostEqual(interval, 0.006, places=3)
 
     def test_gpio_poll_interval_stays_in_active_idle_window_after_recent_button_activity(self):
         write_json(
@@ -2047,7 +2067,7 @@ class RuntimeServiceTest(unittest.TestCase):
 
         interval = self.service.current_gpio_poll_interval_seconds(setup=setup, now=1.5)
 
-        self.assertAlmostEqual(interval, 0.012, places=3)
+        self.assertAlmostEqual(interval, 0.025, places=3)
 
     def test_performance_profile_falls_back_to_auto_for_invalid_setting(self):
         write_json(
@@ -2145,6 +2165,45 @@ class RuntimeServiceTest(unittest.TestCase):
         led_map = {entry["name"]: entry for entry in runtime_state["led_status"]}
 
         self.assertFalse(led_map["Sleep 1/3"]["is_on"])
+        self.assertFalse(led_map["Sleep 2/3"]["is_on"])
+        self.assertFalse(led_map["Sleep 3/3"]["is_on"])
+
+    def test_power_hold_shows_first_routine_led_immediately_after_trigger_threshold(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "buttons": [],
+                "leds": [
+                    {"id": "led-1", "name": "Power", "pin": "GPIO12", "function": "power_on", "brightness": 50},
+                    {"id": "led-2", "name": "Sleep 1/3", "pin": "GPIO13", "function": "sleep_1", "brightness": 30},
+                    {"id": "led-3", "name": "Sleep 2/3", "pin": "GPIO16", "function": "sleep_2", "brightness": 30},
+                    {"id": "led-4", "name": "Sleep 3/3", "pin": "GPIO20", "function": "sleep_3", "brightness": 30},
+                ],
+                "power_routines": {"power_on": "sleep_count_up_5", "power_off": "sleep_count_down_5"},
+                "wifi": {},
+            },
+        )
+        runtime_state = self.service.ensure_runtime()
+        runtime_state["powered_on"] = False
+        runtime_state["sleep_timer"]["level"] = 0
+        runtime_state["power_hold"] = {
+            "pressed": True,
+            "seconds": 2.1,
+            "mode": "pending_on",
+            "pin": "GPIO19",
+            "started_at": 10.0,
+            "trigger_seconds": 2.0,
+            "threshold_seconds": 5.0,
+            "routine_id": "sleep_count_up_5",
+            "animation": "sleep_count_up",
+            "completed": False,
+        }
+
+        runtime_state = self.service.update_led_status(runtime_state)
+        led_map = {entry["name"]: entry for entry in runtime_state["led_status"]}
+
+        self.assertTrue(led_map["Sleep 1/3"]["is_on"])
         self.assertFalse(led_map["Sleep 2/3"]["is_on"])
         self.assertFalse(led_map["Sleep 3/3"]["is_on"])
 

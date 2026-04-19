@@ -204,6 +204,34 @@ class PlaybackController:
             handle.write("\n".join(lines) + "\n")
         return handle.name
 
+    def _entry_for_current_path(self, playlist_relative_path, current_path, entries):
+        if not current_path:
+            return ""
+        normalized_entries = [str(entry or "") for entry in entries or [] if str(entry or "")]
+        playlist_path = self._resolve_playlist_path(playlist_relative_path)
+        try:
+            resolved_current = Path(str(current_path)).resolve()
+        except OSError:
+            resolved_current = Path(str(current_path))
+
+        if playlist_path:
+            try:
+                relative_entry = resolved_current.relative_to(playlist_path.parent.resolve()).as_posix()
+            except ValueError:
+                relative_entry = ""
+            if relative_entry and (not normalized_entries or relative_entry in normalized_entries):
+                return relative_entry
+
+        for entry in normalized_entries:
+            track_path = self._resolve_track_path(playlist_relative_path, entry)
+            if track_path and track_path == resolved_current:
+                return entry
+
+        basename = Path(str(current_path)).name
+        if basename in normalized_entries:
+            return basename
+        return ""
+
     def _mpv_request(self, session, command):
         socket_path = session.get("socket_path", "")
         if not socket_path or not Path(socket_path).exists():
@@ -250,10 +278,9 @@ class PlaybackController:
                 "--really-quiet",
                 "--audio-display=no",
                 "--idle=no",
-                "--cache=no",
-                "--audio-buffer=0.03",
-                "--demuxer-readahead-secs=0",
-                "--prefetch-playlist=no",
+                "--cache=yes",
+                "--audio-buffer=0.2",
+                "--demuxer-readahead-secs=2",
                 f"--volume={volume}",
                 *( [f"--start={position_seconds}"] if position_seconds > 0 else [] ),
                 str(track_path),
@@ -291,10 +318,9 @@ class PlaybackController:
             "--really-quiet",
             "--audio-display=no",
             "--idle=no",
-            "--cache=no",
-            "--audio-buffer=0.03",
-            "--demuxer-readahead-secs=0",
-            "--prefetch-playlist=no",
+            "--cache=yes",
+            "--audio-buffer=0.2",
+            "--demuxer-readahead-secs=2",
             f"--volume={volume}",
             f"--playlist-start={max(0, int(current_index))}",
             *( [f"--start={position_seconds}"] if position_seconds > 0 else [] ),
@@ -448,9 +474,16 @@ class PlaybackController:
                 session["duration_seconds"] = max(0, int(float(duration_seconds or 0)))
                 if current_path:
                     session["track_path"] = str(current_path)
-                    current_entry = Path(str(current_path)).name
+                    current_entry = self._entry_for_current_path(
+                        session.get("playlist", ""),
+                        current_path,
+                        session.get("playlist_entries", []),
+                    ) or Path(str(current_path)).name
                     if current_entry:
                         session["entry"] = current_entry
+                        entries = list(session.get("playlist_entries", []) or [])
+                        if current_entry in entries:
+                            session["current_index"] = entries.index(current_entry)
                 session["started_at"] = None if paused else time.time() - session["position_seconds"]
                 # `eof-reached` can transiently flip to true while mpv is still
                 # alive and advancing within the current playlist. Treat only an

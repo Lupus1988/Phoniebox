@@ -8,6 +8,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const statusNode = document.getElementById("player-action-status");
   let pollTimer = null;
   let actionInFlight = false;
+  let isSeeking = false;
   let visiblePollMs = 1000;
   let hiddenPollMs = 3000;
 
@@ -181,7 +182,7 @@ document.addEventListener("DOMContentLoaded", () => {
       volumeValue.classList.toggle("muted", Boolean(payload.volume_muted));
     }
     setHtml("player-sleep-value", `Stufe ${sleepLevel} &middot; ${payload.sleep_remaining_label || "00:00"}`);
-    setText("player-position-label", payload.position_label || "00:00");
+    setText("player-position-label", "00:00");
     setText("player-duration-label", payload.duration_label || "00:00");
     setText("player-toggle-symbol", isPlaying ? "⏸" : "▶");
     const toggleButton = document.getElementById("player-toggle-button");
@@ -191,9 +192,11 @@ document.addEventListener("DOMContentLoaded", () => {
       toggleButton.setAttribute("title", label);
     }
 
-    syncSeekControls(player.position_seconds || 0, player.duration_seconds || 0);
-    updateSeekVisuals(player.position_seconds || 0, player.duration_seconds || 0);
-    updateSeekBubble(player.position_seconds || 0, player.duration_seconds || 0);
+    if (!isSeeking) {
+      syncSeekControls(player.position_seconds || 0, player.duration_seconds || 0);
+      updateSeekVisuals(player.position_seconds || 0, player.duration_seconds || 0);
+      updateSeekBubble(player.position_seconds || 0, player.duration_seconds || 0);
+    }
 
     updateQueue(player.queue || []);
   }
@@ -253,10 +256,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   if (seekSlider) {
-    const showBubble = () => seekBubble?.classList.add("visible");
-    const hideBubble = () => seekBubble?.classList.remove("visible");
-
     seekSlider.addEventListener("input", () => {
+      isSeeking = true;
       const duration = Number(seekSlider.max || 0);
       const position = Number(seekSlider.value || 0);
       syncSeekControls(position, duration);
@@ -264,39 +265,41 @@ document.addEventListener("DOMContentLoaded", () => {
       updateSeekBubble(position, duration);
       const positionLabel = document.getElementById("player-position-label");
       if (positionLabel) {
-        positionLabel.textContent = formatMmss(position);
+        positionLabel.textContent = "00:00";
       }
     });
 
-    seekSlider.addEventListener("pointerdown", showBubble);
-    seekSlider.addEventListener("pointerup", hideBubble);
-    seekSlider.addEventListener("focus", showBubble);
-    seekSlider.addEventListener("blur", hideBubble);
-    seekSlider.addEventListener("mouseenter", showBubble);
-    seekSlider.addEventListener("mouseleave", hideBubble);
+    seekSlider.addEventListener("pointerdown", () => {
+      isSeeking = true;
+    });
 
     seekSlider.addEventListener("change", async () => {
+      isSeeking = true;
       const payload = {
         action: "seek",
         seek_position: Number(seekSlider.value || 0),
       };
-      setStatus(actionLabel(payload.action), "busy");
-      const response = await fetch("/api/player/action", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(payload),
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok || result.ok === false) {
-        setStatus(extractError(result, "Position konnte nicht gesetzt werden."), "error");
-        return;
+      try {
+        setStatus(actionLabel(payload.action), "busy");
+        const response = await fetch("/api/player/action", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result.ok === false) {
+          setStatus(extractError(result, "Position konnte nicht gesetzt werden."), "error");
+          return;
+        }
+        applySnapshot(result);
+        setStatus(result.message || "Position aktualisiert.", "success");
+      } finally {
+        isSeeking = false;
       }
-      applySnapshot(result);
-      setStatus(result.message || "Position aktualisiert.", "success");
-      hideBubble();
     });
 
     updateSeekVisuals(Number(seekSlider.value || 0), Number(seekSlider.max || 0));
+    updateSeekBubble(Number(seekSlider.value || 0), Number(seekSlider.max || 0));
   }
 
   setStatus("Bereit.");

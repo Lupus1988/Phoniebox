@@ -30,10 +30,9 @@ class PlaybackControllerTest(unittest.TestCase):
         command = self.controller._build_command("mpv", "/tmp/test.mp3", position_seconds=37, volume=50)
 
         self.assertEqual(command[:4], ["mpv", "--no-video", "--really-quiet", "--audio-display=no"])
-        self.assertIn("--cache=no", command)
-        self.assertIn("--audio-buffer=0.03", command)
-        self.assertIn("--demuxer-readahead-secs=0", command)
-        self.assertIn("--prefetch-playlist=no", command)
+        self.assertIn("--cache=yes", command)
+        self.assertIn("--audio-buffer=0.2", command)
+        self.assertIn("--demuxer-readahead-secs=2", command)
         self.assertIn("--volume=50", command)
         self.assertIn("--start=37", command)
         self.assertEqual(command[-1], "/tmp/test.mp3")
@@ -199,6 +198,47 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertEqual(updated["state"], "playing")
         self.assertEqual(updated["pid"], 1234)
         self.assertEqual(updated["position_seconds"], 177)
+
+    def test_sync_session_aligns_mpv_index_to_current_file_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_dir = Path(tmpdir)
+            album_dir = base_dir / "media" / "albums" / "test"
+            album_dir.mkdir(parents=True, exist_ok=True)
+            playlist = album_dir / "playlist.m3u"
+            playlist.write_text("#EXTM3U\nRunnin_Wild.mp3\nMetal_United.mp3\n", encoding="utf-8")
+            (album_dir / "Runnin_Wild.mp3").write_bytes(b"")
+            metal_united = album_dir / "Metal_United.mp3"
+            metal_united.write_bytes(b"")
+
+            session = {
+                "backend": "mpv",
+                "state": "playing",
+                "pid": 1234,
+                "socket_path": "/tmp/phoniebox-mpv.sock",
+                "playlist": "media/albums/test/playlist.m3u",
+                "playlist_entries": ["Runnin_Wild.mp3", "Metal_United.mp3"],
+                "position_seconds": 12,
+                "duration_seconds": 234,
+                "current_index": 0,
+                "track_path": str(album_dir / "Runnin_Wild.mp3"),
+            }
+            values = {
+                "time-pos": 13,
+                "pause": False,
+                "idle-active": False,
+                "playlist-pos": 0,
+                "duration": 234,
+                "path": str(metal_united),
+            }
+
+            with patch.object(playback_module, "BASE_DIR", base_dir):
+                with patch.object(self.controller, "_process_exists", return_value=True):
+                    with patch.object(self.controller, "_mpv_get_property", side_effect=lambda current, name, default=None: values.get(name, default)):
+                        updated = self.controller.sync_session(dict(session))
+
+        self.assertEqual(updated["current_index"], 1)
+        self.assertEqual(updated["entry"], "Metal_United.mp3")
+        self.assertEqual(updated["track_path"], str(metal_united))
 
     def test_open_track_creates_runtime_playlist_for_shuffled_mpv_entries(self):
         with tempfile.TemporaryDirectory() as tmpdir:
