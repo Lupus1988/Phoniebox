@@ -876,7 +876,10 @@ def main():
                     ignored_missing_polls = 0
                     loop_sleep(reader, observed_uid=observed_uid, present_uid=present_uid, ignored_uid=ignored_uid)
                     continue
-                if now < startup_deadline or (now - observed_since) < RFID_UID_CONFIRM_SECONDS:
+                if now < startup_deadline or (
+                    not getattr(reader, "presence_reader", False)
+                    and (now - observed_since) < RFID_UID_CONFIRM_SECONDS
+                ):
                     loop_sleep(reader, observed_uid=observed_uid, present_uid=present_uid, ignored_uid=ignored_uid)
                     continue
 
