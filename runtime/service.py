@@ -517,16 +517,30 @@ class RuntimeService:
             entries=list(player.get("playlist_entries", [])),
         )
         runtime_state["playback_state"] = "playing" if autoplay else "paused"
-        if runtime_state["playback_session"]:
-            runtime_state["playback_session"] = (
-                self.playback.play(runtime_state["playback_session"])
-                if autoplay
-                else self.playback.pause(runtime_state["playback_session"])
-            )
-        player["is_playing"] = bool(autoplay)
+        runtime_state, player = self._apply_playback_target_state(runtime_state, player)
         player["position_seconds"] = 0
         self._rebuild_queue_display(player)
         return runtime_state, player, True
+
+    def _apply_playback_target_state(self, runtime_state, player):
+        session = runtime_state.get("playback_session", {})
+        target_state = runtime_state.get("playback_state", "paused")
+        if not session:
+            player["is_playing"] = False
+            return runtime_state, player
+        if target_state == "playing":
+            session = self.playback.play(session)
+        elif target_state == "paused":
+            session = self.playback.pause(session)
+        runtime_state["playback_session"] = session
+        if target_state == "playing" and session.get("state") == "error":
+            runtime_state["playback_state"] = "paused"
+            player["is_playing"] = False
+            error = str(session.get("error") or "Wiedergabe konnte nicht gestartet werden.")
+            runtime_state = self.add_event(runtime_state, f"Wiedergabe nicht gestartet: {error}", "warning")
+            return runtime_state, player
+        player["is_playing"] = target_state == "playing" and session.get("state") == "playing"
+        return runtime_state, player
 
     def _apply_boot_recovery(self, runtime_state, player):
         system_state = merge_defaults(runtime_state.get("system", {}), default_runtime_state()["system"])
@@ -1684,13 +1698,7 @@ class RuntimeService:
             entries=[entry],
         )
         runtime_state["playback_state"] = "playing" if autoplay else "paused"
-        player["is_playing"] = runtime_state["playback_state"] == "playing"
-        if runtime_state["playback_session"]:
-            runtime_state["playback_session"] = (
-                self.playback.play(runtime_state["playback_session"])
-                if autoplay
-                else self.playback.pause(runtime_state["playback_session"])
-            )
+        runtime_state, player = self._apply_playback_target_state(runtime_state, player)
         self._rebuild_queue_display(player)
         return runtime_state, player
 
@@ -1755,13 +1763,7 @@ class RuntimeService:
         self._rebuild_queue_display(player)
         runtime_state["active_album_id"] = album.get("id", "")
         runtime_state["playback_state"] = "playing" if autoplay else "paused"
-        player["is_playing"] = runtime_state["playback_state"] == "playing"
-        if runtime_state["playback_session"]:
-            runtime_state["playback_session"] = (
-                self.playback.play(runtime_state["playback_session"])
-                if autoplay
-                else self.playback.pause(runtime_state["playback_session"])
-            )
+        runtime_state, player = self._apply_playback_target_state(runtime_state, player)
         return runtime_state, player
 
     def tick(self, elapsed_seconds=1):
@@ -2004,9 +2006,16 @@ class RuntimeService:
                 autoplay=autoplay,
                 shuffle=effective_shuffle,
             )
+            playback_error = str(runtime_state.get("playback_session", {}).get("error") or "")
+            autoplay_failed = bool(autoplay and runtime_state.get("playback_state") != "playing")
             runtime_state = self.add_event(
                 runtime_state,
                 (
+                    f"Album geladen: {album.get('name', '')} - Wiedergabe nicht gestartet: {playback_error}"
+                    if autoplay_failed and playback_error
+                    else f"Album geladen: {album.get('name', '')} - Wiedergabe nicht gestartet"
+                    if autoplay_failed
+                    else
                     f"Album geladen: {album.get('name', '')}"
                     if not autoplay
                     else f"Album gestartet: {album.get('name', '')}"
@@ -2095,17 +2104,15 @@ class RuntimeService:
                 return {"runtime": runtime_state, "player": player}
             if runtime_state.get("playback_state") == "playing":
                 runtime_state["playback_state"] = "paused"
-                player["is_playing"] = False
                 event = "Wiedergabe pausiert"
-                if runtime_state.get("playback_session"):
-                    runtime_state["playback_session"] = self.playback.pause(runtime_state["playback_session"])
             else:
                 runtime_state["playback_state"] = "playing"
-                player["is_playing"] = True
                 event = "Wiedergabe gestartet"
-                if runtime_state.get("playback_session"):
-                    runtime_state["playback_session"] = self.playback.play(runtime_state["playback_session"])
-            runtime_state = self.add_event(runtime_state, event)
+            runtime_state, player = self._apply_playback_target_state(runtime_state, player)
+            if event == "Wiedergabe gestartet" and runtime_state.get("playback_state") != "playing":
+                event = ""
+            if event:
+                runtime_state = self.add_event(runtime_state, event)
             runtime_state = self.update_hardware_profile(runtime_state)
             runtime_state = self.apply_wifi_policy(runtime_state)
             runtime_state = self.update_led_status(runtime_state)
@@ -2191,13 +2198,7 @@ class RuntimeService:
                 return {"runtime": runtime_state, "player": player}
             player["position_seconds"] = 0
             runtime_state["playback_state"] = "playing" if autoplay or runtime_state.get("playback_state") == "playing" else "paused"
-            player["is_playing"] = runtime_state["playback_state"] == "playing"
-            if runtime_state.get("playback_session"):
-                runtime_state["playback_session"] = (
-                    self.playback.play(runtime_state["playback_session"])
-                    if runtime_state["playback_state"] == "playing"
-                    else self.playback.pause(runtime_state["playback_session"])
-                )
+            runtime_state, player = self._apply_playback_target_state(runtime_state, player)
             runtime_state["queue_revision"] = secrets.token_hex(4)
             runtime_state = self.add_event(runtime_state, f"Nächster Titel: {player.get('current_track', '')}")
             runtime_state = self.update_hardware_profile(runtime_state)
@@ -2252,12 +2253,7 @@ class RuntimeService:
             else:
                 runtime_state = self.add_event(runtime_state, "Titel zurückgesetzt")
             player["position_seconds"] = 0
-            if runtime_state.get("playback_session"):
-                runtime_state["playback_session"] = (
-                    self.playback.play(runtime_state["playback_session"])
-                    if runtime_state.get("playback_state") == "playing"
-                    else self.playback.pause(runtime_state["playback_session"])
-                )
+            runtime_state, player = self._apply_playback_target_state(runtime_state, player)
             self.save_runtime(runtime_state)
             self.save_player(player)
             return {"runtime": runtime_state, "player": player}

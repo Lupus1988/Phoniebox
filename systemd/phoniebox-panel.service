@@ -10,7 +10,7 @@ EnvironmentFile=-/etc/default/phoniebox-panel
 Environment=PYTHONUNBUFFERED=1
 Environment=PHONIEBOX_HOST=0.0.0.0
 Environment=PHONIEBOX_PORT=80
-ExecStart=/opt/phoniebox-panel/.venv/bin/gunicorn --workers 2 --timeout 300 --graceful-timeout 30 --bind 0.0.0.0:80 wsgi:app
+ExecStart=/opt/phoniebox-panel/.venv/bin/gunicorn --workers 1 --timeout 300 --graceful-timeout 30 --bind 0.0.0.0:80 wsgi:app
 Restart=always
 RestartSec=3
 

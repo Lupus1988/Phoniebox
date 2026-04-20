@@ -14,6 +14,8 @@ from system.audio import detect_audio_environment, resolve_output_device
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 MP3_FRAMES_PER_SECOND = 38.28125
+MPV_STALL_GRACE_SECONDS = 5.0
+MPV_STALL_POSITION_EPSILON_SECONDS = 0.25
 
 
 def configured_backend():
@@ -57,6 +59,62 @@ def _mpv_alsa_device(output_device):
     if output_device.startswith("hw:"):
         return f"alsa/plug{output_device}"
     return f"alsa/{output_device}"
+
+
+def _audio_tokens(item):
+    return " ".join(
+        [
+            str(item.get("card_id", "")),
+            str(item.get("name", "")),
+            str(item.get("description", "")),
+            str(item.get("device_name", "")),
+        ]
+    ).lower()
+
+
+def _audio_item_matches_mode(item, mode):
+    tokens = _audio_tokens(item)
+    if mode == "usb_dac":
+        return "usb" in tokens or "audio" in tokens
+    if mode == "analog_jack":
+        return "bcm2835" in tokens or "analog" in tokens or "headphones" in tokens
+    return bool(tokens.strip())
+
+
+def _audio_output_available(snapshot, audio):
+    mode = str((audio or {}).get("output_mode", "usb_dac") or "usb_dac").strip()
+    cards = list((snapshot or {}).get("cards", []) or [])
+    playback_devices = list((snapshot or {}).get("playback_devices", []) or [])
+    if not cards and not playback_devices:
+        return False, "Keine ALSA-Soundkarte erkannt."
+
+    if mode in {"usb_dac", "analog_jack"}:
+        matching_cards = [
+            card for card in cards
+            if _audio_item_matches_mode(card, mode)
+        ]
+        matching_card_indices = {str(card.get("card_index", "")) for card in matching_cards}
+        matching_playback = [
+            device for device in playback_devices
+            if _audio_item_matches_mode(device, mode)
+            or str(device.get("card_index", "")) in matching_card_indices
+        ]
+        label = "USB-Soundkarte" if mode == "usb_dac" else "Onboard-Soundkarte"
+        if not matching_cards:
+            return False, f"{label} nicht erkannt."
+        if not matching_playback:
+            return False, f"{label} ohne nutzbares ALSA-Playback-Gerät."
+
+    return True, ""
+
+
+def configured_audio_output_ready():
+    audio = configured_audio()
+    try:
+        snapshot = detect_audio_environment()
+    except OSError:
+        return False, "Audio-System konnte nicht geprüft werden."
+    return _audio_output_available(snapshot, audio)
 
 
 def backend_candidates():
@@ -307,6 +365,62 @@ class PlaybackController:
         response = self._mpv_request(session, command)
         return isinstance(response, dict) and response.get("error") == "success"
 
+    def _reset_mpv_progress_health(self, session):
+        session.pop("mpv_health_time_pos", None)
+        session.pop("mpv_health_checked_at", None)
+        session.pop("mpv_stall_started_at", None)
+
+    def _mpv_playback_stalled(self, session, position_seconds, paused, idle_active):
+        if session.get("state") != "playing" or paused or idle_active:
+            self._reset_mpv_progress_health(session)
+            return False
+
+        now = time.time()
+        try:
+            position = float(position_seconds or 0)
+        except (TypeError, ValueError):
+            self._reset_mpv_progress_health(session)
+            return False
+
+        previous_position = session.get("mpv_health_time_pos")
+        if previous_position is None:
+            session["mpv_health_time_pos"] = position
+            session["mpv_health_checked_at"] = now
+            session.pop("mpv_stall_started_at", None)
+            return False
+
+        try:
+            previous_position = float(previous_position)
+        except (TypeError, ValueError):
+            session["mpv_health_time_pos"] = position
+            session["mpv_health_checked_at"] = now
+            session.pop("mpv_stall_started_at", None)
+            return False
+
+        if position > previous_position + MPV_STALL_POSITION_EPSILON_SECONDS:
+            session["mpv_health_time_pos"] = position
+            session["mpv_health_checked_at"] = now
+            session.pop("mpv_stall_started_at", None)
+            return False
+
+        stalled_since = float(session.get("mpv_stall_started_at") or now)
+        session["mpv_stall_started_at"] = stalled_since
+        session["mpv_health_checked_at"] = now
+        return (now - stalled_since) >= MPV_STALL_GRACE_SECONDS
+
+    def _relaunch_mpv_session(self, session, reason):
+        old_pid = session.get("pid")
+        if old_pid:
+            self._terminate_process_group(old_pid)
+        self._cleanup_socket(session.get("socket_path", ""))
+        session["pid"] = None
+        session["socket_path"] = ""
+        session["state"] = "ready"
+        session["started_at"] = None
+        session["error"] = reason
+        self._reset_mpv_progress_health(session)
+        return self._launch(session)
+
     def _build_command(self, backend, track_path, position_seconds=0, volume=50):
         position_seconds = max(0, int(position_seconds))
         volume = max(0, min(100, int(volume)))
@@ -379,6 +493,16 @@ class PlaybackController:
             session["state"] = "playing"
             session["started_at"] = time.time() - int(session.get("position_seconds", 0))
             session["pid"] = None
+            return session
+
+        audio_ready, audio_error = configured_audio_output_ready()
+        if not audio_ready:
+            session["state"] = "error"
+            session["error"] = audio_error
+            session["pid"] = None
+            session["started_at"] = None
+            self._cleanup_socket(session.get("socket_path", ""))
+            session["socket_path"] = ""
             return session
 
         command = self._build_command(
@@ -532,7 +656,8 @@ class PlaybackController:
                 playlist_pos = self._mpv_get_property(session, "playlist-pos", session.get("current_index", 0))
                 duration_seconds = self._mpv_get_property(session, "duration", session.get("duration_seconds", 0))
                 current_path = self._mpv_get_property(session, "path", session.get("track_path", ""))
-                session["position_seconds"] = max(0, int(float(position or 0)))
+                position_float = float(position or 0)
+                session["position_seconds"] = max(0, int(position_float))
                 session["current_index"] = max(0, int(playlist_pos or 0))
                 session["duration_seconds"] = max(0, int(float(duration_seconds or 0)))
                 if current_path:
@@ -552,6 +677,7 @@ class PlaybackController:
                 # alive and advancing within the current playlist. Treat only an
                 # actually idle player as a finished session.
                 if idle_active:
+                    self._reset_mpv_progress_health(session)
                     session["state"] = "stopped"
                     session["pid"] = None
                     session["started_at"] = None
@@ -561,6 +687,8 @@ class PlaybackController:
                     session["generated_playlist_source"] = ""
                 else:
                     session["state"] = "paused" if paused else "playing"
+                    if self._mpv_playback_stalled(session, position_float, paused, idle_active):
+                        return self._relaunch_mpv_session(session, "mpv Zeitposition steht trotz laufender Wiedergabe.")
                 return session
 
         pid = session.get("pid")
@@ -624,10 +752,6 @@ class PlaybackController:
             session["started_at"] = time.time() - int(session.get("position_seconds", 0))
             return session
         if session.get("backend") == "mpv" and session.get("pid") and self._process_exists(session["pid"]):
-            if self._mpv_command_succeeded(session, ["set_property", "pause", False]):
-                session["started_at"] = time.time() - int(session.get("position_seconds", 0))
-                session["state"] = "playing"
-                return session
             self._terminate_process_group(session["pid"])
             self._cleanup_socket(session.get("socket_path", ""))
             session["pid"] = None
@@ -651,14 +775,15 @@ class PlaybackController:
             session["state"] = "paused"
             return session
         if session.get("backend") == "mpv":
-            session["position_seconds"] = max(0, int(time.time() - float(session.get("started_at") or time.time())))
-            if not self._mpv_command_succeeded(session, ["set_property", "pause", True]):
-                session["state"] = "error"
-                session["error"] = "mpv Pause-Kommando fehlgeschlagen."
-                session["started_at"] = None
-                return session
+            session["position_seconds"] = max(0, int(session.get("position_seconds", 0) or 0))
+            if session.get("pid"):
+                self._terminate_process_group(session["pid"])
+            self._cleanup_socket(session.get("socket_path", ""))
+            session["pid"] = None
+            session["socket_path"] = ""
             session["started_at"] = None
             session["state"] = "paused"
+            self._reset_mpv_progress_health(session)
             return session
         if session.get("pid") and self._process_exists(session["pid"]):
             session["position_seconds"] = max(0, int(time.time() - float(session.get("started_at") or time.time())))

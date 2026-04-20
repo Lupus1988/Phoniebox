@@ -141,6 +141,23 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(result["player"]["queue"], ["02 weiter"])
         self.assertEqual(result["runtime"]["playback_session"]["backend"], "mock")
 
+    def test_load_album_autoplay_keeps_state_paused_when_backend_reports_error(self):
+        failed_session = {
+            "backend": "mock",
+            "state": "error",
+            "error": "USB-Soundkarte nicht erkannt.",
+            "position_seconds": 0,
+        }
+
+        with patch.object(self.service.playback, "play", return_value=failed_session):
+            result = self.service.load_album_by_id("album-1", autoplay=True)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["runtime"]["playback_state"], "paused")
+        self.assertFalse(result["player"]["is_playing"])
+        self.assertEqual(result["runtime"]["playback_session"]["state"], "error")
+        self.assertIn("Wiedergabe nicht gestartet: USB-Soundkarte nicht erkannt.", result["runtime"]["last_event"])
+
     def test_album_start_does_not_wake_from_standby_or_enable_wifi(self):
         state = self.service.ensure_runtime()
         state["powered_on"] = False
@@ -1499,6 +1516,22 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(result["runtime"]["playback_state"], "stopped")
         self.assertFalse(result["player"]["is_playing"])
         self.assertEqual(result["runtime"]["last_event"], "Wiedergabe im Standby nicht verfügbar")
+
+    def test_play_button_keeps_state_paused_when_backend_reports_error(self):
+        self.service.load_album_by_id("album-1", autoplay=False)
+        failed_session = {
+            **self.service.ensure_runtime()["playback_session"],
+            "state": "error",
+            "error": "USB-Soundkarte nicht erkannt.",
+        }
+
+        with patch.object(self.service.playback, "play", return_value=failed_session):
+            result = self.service.toggle_playback()
+
+        self.assertEqual(result["runtime"]["playback_state"], "paused")
+        self.assertFalse(result["player"]["is_playing"])
+        self.assertEqual(result["runtime"]["playback_session"]["state"], "error")
+        self.assertEqual(result["runtime"]["last_event"], "Wiedergabe nicht gestartet: USB-Soundkarte nicht erkannt.")
 
     def test_rfid_does_not_wake_from_standby_or_enable_wifi(self):
         state = self.service.ensure_runtime()

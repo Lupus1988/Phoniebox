@@ -142,6 +142,7 @@ ensure_panel_env_file
 
 sudo cp systemd/phoniebox-panel.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-audio-init.service "$SERVICE_DIR"/
+sudo cp systemd/phoniebox-audio-watchdog.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-gpio-poll.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-leds.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-rfid.service "$SERVICE_DIR"/
@@ -202,6 +203,7 @@ if command -v rfkill >/dev/null 2>&1; then
 fi
 sudo systemctl enable phoniebox-panel.service
 sudo systemctl enable phoniebox-audio-init.service
+sudo systemctl enable phoniebox-audio-watchdog.service
 sudo systemctl enable phoniebox-gpio-poll.service
 sudo systemctl enable phoniebox-leds.service
 sudo systemctl enable phoniebox-rfid.service
@@ -212,6 +214,7 @@ sudo systemctl disable --now phoniebox-runtime-tick.timer 2>/dev/null || true
 sudo systemctl enable phoniebox-runtime-tick.service
 sudo "$VENV_DIR/bin/python" "$APP_DIR/scripts/bootstrap_network.py" --seed-only || true
 sudo systemctl restart phoniebox-panel.service
+sudo systemctl restart phoniebox-audio-watchdog.service
 sudo systemctl restart phoniebox-gpio-poll.service
 sudo systemctl restart phoniebox-leds.service
 sudo systemctl restart phoniebox-rfid.service

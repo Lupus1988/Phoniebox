@@ -55,6 +55,39 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertEqual(playback_module._mpv_alsa_device("plughw:1,0"), "alsa/plughw:1,0")
         self.assertEqual(playback_module._mpv_alsa_device("default"), "alsa/default")
 
+    def test_audio_output_available_requires_configured_usb_card(self):
+        snapshot = {
+            "cards": [{"card_index": "1", "card_id": "vc4hdmi", "name": "vc4-hdmi"}],
+            "playback_devices": [{"card_index": "1", "name": "vc4hdmi", "device_name": "vc4-hdmi"}],
+        }
+
+        ready, reason = playback_module._audio_output_available(snapshot, {"output_mode": "usb_dac"})
+
+        self.assertFalse(ready)
+        self.assertEqual(reason, "USB-Soundkarte nicht erkannt.")
+
+    def test_audio_output_available_accepts_configured_usb_card(self):
+        snapshot = {
+            "cards": [{"card_index": "0", "card_id": "Device", "name": "USB2.0 Device"}],
+            "playback_devices": [{"card_index": "0", "name": "USB2.0 Device", "device_name": "USB Audio"}],
+        }
+
+        ready, reason = playback_module._audio_output_available(snapshot, {"output_mode": "usb_dac"})
+
+        self.assertTrue(ready)
+        self.assertEqual(reason, "")
+
+    def test_audio_output_available_rejects_usb_card_without_playback_device(self):
+        snapshot = {
+            "cards": [{"card_index": "0", "card_id": "Device", "name": "USB2.0 Device"}],
+            "playback_devices": [],
+        }
+
+        ready, reason = playback_module._audio_output_available(snapshot, {"output_mode": "usb_dac"})
+
+        self.assertFalse(ready)
+        self.assertEqual(reason, "USB-Soundkarte ohne nutzbares ALSA-Playback-Gerät.")
+
     def test_detect_backend_prefers_configured_backend_when_available(self):
         with patch.object(playback_module, "configured_backend", return_value="mpg123"), patch.object(
             playback_module.shutil, "which", side_effect=lambda name: "/usr/bin/" + name if name in {"mpv", "mpg123"} else None
@@ -124,6 +157,24 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertEqual(updated["pid"], 5678)
         self.assertEqual(updated["state"], "playing")
         self.assertEqual(updated["position_seconds"], 41)
+
+    def test_launch_reports_error_when_configured_audio_output_is_missing(self):
+        session = {
+            "backend": "mpv",
+            "state": "ready",
+            "track_path": "/tmp/test.mp3",
+            "position_seconds": 0,
+            "volume": 45,
+        }
+
+        with patch.object(playback_module, "configured_audio_output_ready", return_value=(False, "USB-Soundkarte nicht erkannt.")):
+            with patch.object(playback_module.subprocess, "Popen") as popen:
+                updated = self.controller._launch(dict(session))
+
+        popen.assert_not_called()
+        self.assertEqual(updated["state"], "error")
+        self.assertEqual(updated["error"], "USB-Soundkarte nicht erkannt.")
+        self.assertIsNone(updated["pid"])
 
     def test_build_command_for_mpg123_uses_frame_skip_for_resume(self):
         command = self.controller._build_command("mpg123", "/tmp/test.mp3", position_seconds=37, volume=50)
@@ -230,7 +281,43 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertEqual(updated["pid"], 1234)
         self.assertIsNone(updated["started_at"])
 
-    def test_play_relaunches_mpv_when_unpause_command_fails(self):
+    def test_sync_session_relaunches_mpv_when_time_position_stalls(self):
+        session = {
+            "backend": "mpv",
+            "state": "playing",
+            "pid": 1234,
+            "socket_path": "/tmp/phoniebox-mpv.sock",
+            "position_seconds": 33,
+            "duration_seconds": 90,
+            "current_index": 0,
+            "track_path": "/tmp/test.mp3",
+            "mpv_health_time_pos": 33.987521,
+            "mpv_stall_started_at": 100.0,
+        }
+
+        values = {
+            "time-pos": 33.987521,
+            "pause": False,
+            "idle-active": False,
+            "playlist-pos": 0,
+            "duration": 90,
+            "path": "/tmp/test.mp3",
+        }
+        relaunched = {**session, "state": "playing", "pid": 5678, "error": ""}
+
+        with patch.object(self.controller, "_process_exists", return_value=True):
+            with patch.object(self.controller, "_mpv_command_succeeded", return_value=True):
+                with patch.object(self.controller, "_mpv_get_property", side_effect=lambda current, name, default=None: values.get(name, default)):
+                    with patch.object(playback_module.time, "time", return_value=106.0):
+                        with patch.object(self.controller, "_relaunch_mpv_session", return_value=relaunched) as relaunch:
+                            updated = self.controller.sync_session(dict(session))
+
+        relaunch.assert_called_once()
+        self.assertEqual(relaunch.call_args.args[1], "mpv Zeitposition steht trotz laufender Wiedergabe.")
+        self.assertEqual(updated["pid"], 5678)
+        self.assertEqual(updated["state"], "playing")
+
+    def test_play_restarts_paused_mpv_instead_of_reusing_audio_handle(self):
         session = {
             "backend": "mpv",
             "state": "paused",
@@ -242,17 +329,44 @@ class PlaybackControllerTest(unittest.TestCase):
 
         with patch.object(self.controller, "sync_session", return_value=dict(session)):
             with patch.object(self.controller, "_process_exists", return_value=True):
-                with patch.object(self.controller, "_mpv_command_succeeded", return_value=False):
+                with patch.object(self.controller, "_mpv_command_succeeded") as mpv_command:
                     with patch.object(self.controller, "_terminate_process_group") as terminate_group:
                         with patch.object(self.controller, "_cleanup_socket") as cleanup_socket:
                             with patch.object(self.controller, "_launch", side_effect=lambda current: {**current, "state": "playing", "pid": 5678}) as launch:
                                 updated = self.controller.play(dict(session))
 
+        mpv_command.assert_not_called()
         terminate_group.assert_called_once_with(1234)
         cleanup_socket.assert_called_once_with("/tmp/phoniebox-mpv.sock")
         launch.assert_called_once()
         self.assertEqual(updated["state"], "playing")
         self.assertEqual(updated["pid"], 5678)
+
+    def test_pause_stops_mpv_and_preserves_resume_position(self):
+        session = {
+            "backend": "mpv",
+            "state": "playing",
+            "pid": 1234,
+            "socket_path": "/tmp/phoniebox-mpv.sock",
+            "generated_playlist_source": "/tmp/phoniebox-runtime-test.m3u",
+            "position_seconds": 42,
+            "started_at": 100.0,
+        }
+
+        with patch.object(self.controller, "sync_session", return_value=dict(session)):
+            with patch.object(self.controller, "_terminate_process_group") as terminate_group:
+                with patch.object(self.controller, "_cleanup_socket") as cleanup_socket:
+                    with patch.object(self.controller, "_mpv_command_succeeded") as mpv_command:
+                        updated = self.controller.pause(dict(session))
+
+        mpv_command.assert_not_called()
+        terminate_group.assert_called_once_with(1234)
+        cleanup_socket.assert_called_once_with("/tmp/phoniebox-mpv.sock")
+        self.assertEqual(updated["state"], "paused")
+        self.assertEqual(updated["position_seconds"], 42)
+        self.assertIsNone(updated["pid"])
+        self.assertEqual(updated["socket_path"], "")
+        self.assertEqual(updated["generated_playlist_source"], "/tmp/phoniebox-runtime-test.m3u")
 
     def test_sync_session_aligns_mpv_index_to_current_file_path(self):
         with tempfile.TemporaryDirectory() as tmpdir:

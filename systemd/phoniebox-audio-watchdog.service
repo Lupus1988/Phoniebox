@@ -1,0 +1,14 @@
+[Unit]
+Description=Phoniebox USB Audio Watchdog
+After=sound.target phoniebox-panel.service
+Wants=sound.target phoniebox-panel.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/phoniebox-panel
+ExecStart=/opt/phoniebox-panel/.venv/bin/python /opt/phoniebox-panel/scripts/audio_watchdog.py --daemon --interval 5
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
