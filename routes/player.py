@@ -96,7 +96,9 @@ def api_runtime_rfid():
 
 @player_bp.route("/api/runtime/rfid/remove", methods=["POST"])
 def api_runtime_rfid_remove():
-    return _json_result(runtime_trigger_rfid_remove())
+    payload = request.get_json(silent=True) or {}
+    payload["uid"] = payload.get("uid", request.form.get("uid", ""))
+    return _json_result(runtime_trigger_rfid_remove(payload))
 
 
 @player_bp.route("/api/runtime/audio-test", methods=["POST"])

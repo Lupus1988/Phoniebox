@@ -2334,13 +2334,21 @@ class RuntimeService:
         self.save_player(player)
         return {"runtime": runtime_state, "player": player}
 
-    def remove_rfid_tag(self):
+    def remove_rfid_tag(self, uid=""):
         with self.state_transaction():
             runtime_state = self.ensure_runtime()
             player = self.load_player()
             runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
             action = self.get_reader_behavior()["remove"]
             active_uid = runtime_state.get("active_rfid_uid", "").strip()
+            remove_uid = str(uid or "").strip()
+            if remove_uid and active_uid and remove_uid != active_uid:
+                runtime_state = self.update_hardware_profile(runtime_state)
+                runtime_state = self.apply_wifi_policy(runtime_state)
+                runtime_state = self.update_led_status(runtime_state)
+                self.save_runtime(runtime_state)
+                self.save_player(player)
+                return {"runtime": runtime_state, "player": player, "ignored": True}
             runtime_state["active_rfid_uid"] = ""
             if not active_uid:
                 runtime_state = self.update_hardware_profile(runtime_state)

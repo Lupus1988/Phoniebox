@@ -439,6 +439,45 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(removed["runtime"]["playback_session"]["state"], "paused")
         self.assertFalse(removed["player"]["is_playing"])
 
+    def test_remove_rfid_ignores_stale_uid(self):
+        write_json(
+            self.data_dir / "settings.json",
+            {
+                "max_volume": 85,
+                "volume_step": 5,
+                "sleep_timer_step": 5,
+                "rfid_read_action": "play",
+                "rfid_remove_action": "pause",
+            },
+        )
+        self.service.assign_album_by_rfid("1234567890")
+
+        removed = self.service.remove_rfid_tag("STALE")
+
+        self.assertTrue(removed["ignored"])
+        self.assertEqual(removed["runtime"]["playback_state"], "playing")
+        self.assertEqual(removed["runtime"]["active_rfid_uid"], "1234567890")
+        self.assertTrue(removed["player"]["is_playing"])
+
+    def test_remove_rfid_accepts_matching_uid(self):
+        write_json(
+            self.data_dir / "settings.json",
+            {
+                "max_volume": 85,
+                "volume_step": 5,
+                "sleep_timer_step": 5,
+                "rfid_read_action": "play",
+                "rfid_remove_action": "pause",
+            },
+        )
+        self.service.assign_album_by_rfid("1234567890")
+
+        removed = self.service.remove_rfid_tag("1234567890")
+
+        self.assertEqual(removed["runtime"]["playback_state"], "paused")
+        self.assertEqual(removed["runtime"]["active_rfid_uid"], "")
+        self.assertFalse(removed["player"]["is_playing"])
+
     def test_repeated_presence_rfid_scan_does_not_reload_same_album(self):
         write_json(
             self.data_dir / "setup.json",

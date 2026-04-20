@@ -128,8 +128,9 @@ def runtime_trigger_rfid(payload=None, link_session_loader=None, link_session_sa
     return result, 404
 
 
-def runtime_trigger_rfid_remove():
-    return runtime_service.remove_rfid_tag()
+def runtime_trigger_rfid_remove(payload=None):
+    payload = payload or {}
+    return runtime_service.remove_rfid_tag(str(payload.get("uid", "") or "").strip())
 
 
 def runtime_trigger_audio_test():

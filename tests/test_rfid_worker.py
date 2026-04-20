@@ -148,6 +148,46 @@ class ProbeRC522BackendTest(unittest.TestCase):
         post_uid.assert_called_once_with("ABC123")
         self.assertTrue(reader.cleaned)
 
+    def test_presence_reader_does_not_post_remove_during_short_read_gap(self):
+        reader = FakeReader(["ABC123", "ABC123", "", "", "ABC123", KeyboardInterrupt()])
+        reader.presence_reader = True
+
+        with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
+            rfid_worker, "build_reader", return_value=reader
+        ), patch.object(rfid_worker, "save_reader_status"), patch.object(
+            rfid_worker, "post_uid", return_value=200
+        ) as post_uid, patch.object(
+            rfid_worker, "post_remove", return_value=200
+        ) as post_remove, patch.object(
+            rfid_worker.time, "monotonic", side_effect=[0.0, 0.1, 6.2, 6.6, 7.4, 8.0, 8.3]
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                rfid_worker.main()
+
+        post_uid.assert_called_once_with("ABC123")
+        post_remove.assert_not_called()
+        self.assertTrue(reader.cleaned)
+
+    def test_presence_reader_posts_remove_after_stable_absence(self):
+        reader = FakeReader(["ABC123", "ABC123", "", "", "", "", "", "", KeyboardInterrupt()])
+        reader.presence_reader = True
+
+        with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
+            rfid_worker, "build_reader", return_value=reader
+        ), patch.object(rfid_worker, "save_reader_status"), patch.object(
+            rfid_worker, "post_uid", return_value=200
+        ) as post_uid, patch.object(
+            rfid_worker, "post_remove", return_value=200
+        ) as post_remove, patch.object(
+            rfid_worker.time, "monotonic", side_effect=[0.0, 0.1, 6.2, 6.6, 6.75, 6.9, 7.05, 7.2, 7.35, 7.5, 7.65]
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                rfid_worker.main()
+
+        post_uid.assert_called_once_with("ABC123")
+        post_remove.assert_called_once_with("ABC123")
+        self.assertTrue(reader.cleaned)
+
     def test_post_json_treats_http_404_as_handled(self):
         error = HTTPError("http://127.0.0.1/api/runtime/rfid", 404, "Not Found", hdrs=None, fp=None)
 
