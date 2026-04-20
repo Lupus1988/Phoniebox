@@ -537,7 +537,7 @@ class RuntimeService:
             return runtime_state, player, False
         runtime_state["system"]["boot_id"] = current_id
         runtime_state["system"]["last_boot_recovery_at"] = int(time.time())
-        runtime_state["powered_on"] = False
+        runtime_state["powered_on"] = True
         runtime_state, player = self._clear_playback_context(runtime_state, player, keep_loaded_media=False)
         runtime_state["wifi_enabled"] = True
         runtime_state["wifi_auto_off_started_at"] = int(time.time())
@@ -1332,7 +1332,7 @@ class RuntimeService:
         }
 
     def _desired_wifi_state(self, runtime_state):
-        return bool(runtime_state.get("wifi_enabled", True))
+        return bool(runtime_state.get("powered_on", True)) and bool(runtime_state.get("wifi_enabled", True))
 
     def _set_service_active(self, service_name, active):
         try:
@@ -1371,6 +1371,14 @@ class RuntimeService:
     def toggle_wifi(self):
         with self.state_transaction():
             runtime_state = self.ensure_runtime()
+            if not runtime_state.get("powered_on", True):
+                runtime_state["wifi_enabled"] = False
+                runtime_state = self.add_event(runtime_state, "Wifi im Standby nicht verfügbar", "warning")
+                runtime_state = self.update_hardware_profile(runtime_state)
+                runtime_state = self.apply_wifi_policy(runtime_state)
+                runtime_state = self.update_led_status(runtime_state)
+                self.save_runtime(runtime_state)
+                return {"runtime": runtime_state, "player": self.load_player()}
             current_enabled = bool(runtime_state.get("wifi_enabled", True))
             runtime_state["wifi_enabled"] = not current_enabled
             runtime_state = self.add_event(runtime_state, "Wifi an" if runtime_state["wifi_enabled"] else "Wifi aus")
@@ -1595,6 +1603,8 @@ class RuntimeService:
         )
         if runtime_state.get("playback_state") == "playing" and session.get("state") == "paused":
             runtime_state["playback_state"] = "paused"
+        if runtime_state.get("playback_state") == "playing" and session.get("state") == "error":
+            runtime_state["playback_state"] = "paused"
         if session.get("state") == "stopped" and runtime_state.get("playback_state") != "stopped":
             runtime_state["playback_state"] = "stopped"
         if session_finished:
@@ -1646,8 +1656,8 @@ class RuntimeService:
         entry = track_item.get("entry", "")
         if not playlist or not entry:
             return runtime_state, player
-        runtime_state["powered_on"] = True
-        runtime_state["wifi_enabled"] = True
+        powered_on = bool(runtime_state.get("powered_on", True))
+        autoplay = bool(autoplay and powered_on)
         player["playlist"] = playlist
         player["playlist_entries"] = [entry]
         player["playlist_tracks"] = [
@@ -1713,8 +1723,8 @@ class RuntimeService:
     def load_album_into_player(self, album, runtime_state=None, player=None, autoplay=False, shuffle=None):
         runtime_state = runtime_state or self.ensure_runtime()
         player = player or self.load_player()
-        runtime_state["powered_on"] = True
-        runtime_state["wifi_enabled"] = True
+        powered_on = bool(runtime_state.get("powered_on", True))
+        autoplay = bool(autoplay and powered_on)
         if shuffle is None:
             shuffle = bool(album.get("shuffle_enabled", False))
         entries = self._playlist_entries_for_album(album, shuffle=shuffle)
@@ -1866,6 +1876,7 @@ class RuntimeService:
             else:
                 if runtime_state.get("playback_session"):
                     runtime_state["playback_session"] = self.playback.stop(runtime_state["playback_session"])
+                runtime_state["wifi_enabled"] = False
                 runtime_state["wifi_auto_off_started_at"] = int(time.time())
                 runtime_state["sleep_timer"]["remaining_seconds"] = 0
                 runtime_state["sleep_timer"]["level"] = 0
@@ -2073,7 +2084,15 @@ class RuntimeService:
             elif not runtime_state.get("playback_session"):
                 runtime_state, player, _ = self._reopen_current_track_session(runtime_state, player, autoplay=False)
             if not runtime_state.get("powered_on", True):
-                runtime_state["powered_on"] = True
+                runtime_state["playback_state"] = "stopped"
+                player["is_playing"] = False
+                runtime_state = self.add_event(runtime_state, "Wiedergabe im Standby nicht verfügbar", "warning")
+                runtime_state = self.update_hardware_profile(runtime_state)
+                runtime_state = self.apply_wifi_policy(runtime_state)
+                runtime_state = self.update_led_status(runtime_state)
+                self.save_runtime(runtime_state)
+                self.save_player(player)
+                return {"runtime": runtime_state, "player": player}
             if runtime_state.get("playback_state") == "playing":
                 runtime_state["playback_state"] = "paused"
                 player["is_playing"] = False
@@ -2374,6 +2393,15 @@ class RuntimeService:
                 return {"ok": False, "ignored": True, "runtime": runtime_state, "player": player}
 
             runtime_state["hardware"]["last_scanned_uid"] = normalized_uid
+            if not runtime_state.get("powered_on", True):
+                runtime_state = self.add_event(runtime_state, "RFID im Standby ignoriert", "warning")
+                runtime_state = self.update_hardware_profile(runtime_state)
+                runtime_state = self.apply_wifi_policy(runtime_state)
+                runtime_state = self.update_led_status(runtime_state)
+                self.save_runtime(runtime_state)
+                self.save_player(player)
+                return {"ok": False, "ignored": True, "runtime": runtime_state, "player": player}
+
             same_album_active = runtime_state.get("active_album_id", "").strip() == target_album.get("id", "").strip()
             same_uid_active = runtime_state.get("active_rfid_uid", "").strip() == normalized_uid
             session = runtime_state.get("playback_session", {})

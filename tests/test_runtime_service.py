@@ -133,11 +133,29 @@ class RuntimeServiceTest(unittest.TestCase):
         result = self.service.load_album_by_id("album-1", autoplay=True)
 
         self.assertTrue(result["ok"])
+        self.assertTrue(result["runtime"]["powered_on"])
+        self.assertTrue(result["runtime"]["wifi_enabled"])
         self.assertEqual(result["runtime"]["playback_state"], "playing")
         self.assertEqual(result["player"]["current_album"], "Testalbum")
         self.assertEqual(result["player"]["current_track"], "01 start")
         self.assertEqual(result["player"]["queue"], ["02 weiter"])
         self.assertEqual(result["runtime"]["playback_session"]["backend"], "mock")
+
+    def test_album_start_does_not_wake_from_standby_or_enable_wifi(self):
+        state = self.service.ensure_runtime()
+        state["powered_on"] = False
+        state["wifi_enabled"] = False
+        state["playback_state"] = "stopped"
+        self.service.save_runtime(state)
+
+        result = self.service.load_album_by_id("album-1", autoplay=True)
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["runtime"]["powered_on"])
+        self.assertFalse(result["runtime"]["wifi_enabled"])
+        self.assertEqual(result["runtime"]["playback_state"], "paused")
+        self.assertFalse(result["player"]["is_playing"])
+        self.assertEqual(result["player"]["current_album"], "Testalbum")
 
     def test_queue_seek_and_clear_queue_work_without_hardware(self):
         self.service.load_album_by_id("album-1", autoplay=False)
@@ -660,7 +678,7 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(powered_off["player"]["position_seconds"], 0)
         self.assertEqual(powered_off["runtime"]["playback_session"], {})
         self.assertEqual(powered_off["player"]["current_album"], "")
-        self.assertTrue(powered_off["runtime"]["wifi_enabled"])
+        self.assertFalse(powered_off["runtime"]["wifi_enabled"])
         self.assertEqual(powered_off["runtime"]["last_event"], "Standby aktiv")
 
         self.assertTrue(powered_on["runtime"]["powered_on"])
@@ -671,7 +689,7 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(play_sound.call_args_list[0].args[0], "power_off")
         self.assertEqual(play_sound.call_args_list[1].args[0], "power_on")
 
-    def test_boot_recovery_forces_safe_standby_and_clears_player_context(self):
+    def test_boot_recovery_starts_on_and_clears_player_context(self):
         runtime = self.service.ensure_runtime()
         runtime["powered_on"] = True
         runtime["playback_state"] = "playing"
@@ -692,7 +710,7 @@ class RuntimeServiceTest(unittest.TestCase):
             recovered = recovered_service.ensure_runtime()
             recovered_player = recovered_service.load_player()
 
-        self.assertFalse(recovered["powered_on"])
+        self.assertTrue(recovered["powered_on"])
         self.assertEqual(recovered["playback_state"], "stopped")
         self.assertEqual(recovered["playback_session"], {})
         self.assertEqual(recovered["active_album_id"], "")
@@ -1466,6 +1484,39 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertTrue(result["runtime"]["wifi_enabled"])
         self.assertEqual(result["runtime"]["last_event"], "Wifi an")
 
+    def test_play_button_does_not_wake_from_standby_or_enable_wifi(self):
+        self.service.load_album_by_id("album-1", autoplay=False)
+        state = self.service.ensure_runtime()
+        state["powered_on"] = False
+        state["wifi_enabled"] = False
+        state["playback_state"] = "stopped"
+        self.service.save_runtime(state)
+
+        result = self.service.toggle_playback()
+
+        self.assertFalse(result["runtime"]["powered_on"])
+        self.assertFalse(result["runtime"]["wifi_enabled"])
+        self.assertEqual(result["runtime"]["playback_state"], "stopped")
+        self.assertFalse(result["player"]["is_playing"])
+        self.assertEqual(result["runtime"]["last_event"], "Wiedergabe im Standby nicht verfügbar")
+
+    def test_rfid_does_not_wake_from_standby_or_enable_wifi(self):
+        state = self.service.ensure_runtime()
+        state["powered_on"] = False
+        state["wifi_enabled"] = False
+        state["playback_state"] = "stopped"
+        self.service.save_runtime(state)
+
+        result = self.service.assign_album_by_rfid("1234567890")
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["ignored"])
+        self.assertFalse(result["runtime"]["powered_on"])
+        self.assertFalse(result["runtime"]["wifi_enabled"])
+        self.assertEqual(result["runtime"]["playback_state"], "stopped")
+        self.assertFalse(result["player"]["is_playing"])
+        self.assertEqual(result["runtime"]["last_event"], "RFID im Standby ignoriert")
+
     def test_apply_wifi_policy_skips_redundant_wifi_toggle(self):
         state = self.service.ensure_runtime()
         state["powered_on"] = True
@@ -1480,7 +1531,7 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertTrue(result["hardware"]["wifi_enabled"])
         run_wifi_state_command.assert_not_called()
 
-    def test_wifi_stays_enabled_in_standby(self):
+    def test_wifi_is_forced_off_in_standby(self):
         state = self.service.ensure_runtime()
         state["powered_on"] = False
         state["playback_state"] = "stopped"
@@ -1489,9 +1540,9 @@ class RuntimeServiceTest(unittest.TestCase):
 
         result = self.service.tick(elapsed_seconds=1)
 
-        self.assertTrue(result["runtime"]["wifi_enabled"])
+        self.assertFalse(result["runtime"]["wifi_enabled"])
 
-    def test_auto_wifi_off_does_not_run_while_in_standby(self):
+    def test_standby_forces_wifi_off_even_when_auto_wifi_off_is_configured(self):
         write_json(
             self.data_dir / "setup.json",
             {
@@ -1512,7 +1563,7 @@ class RuntimeServiceTest(unittest.TestCase):
 
         result = self.service.tick(elapsed_seconds=1)
 
-        self.assertTrue(result["runtime"]["wifi_enabled"])
+        self.assertFalse(result["runtime"]["wifi_enabled"])
         self.assertNotEqual(result["runtime"]["last_event"], "WiFi automatisch aus nach 1 Min")
 
     def test_auto_wifi_off_uses_start_or_wake_timer(self):

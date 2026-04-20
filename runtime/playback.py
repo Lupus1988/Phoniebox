@@ -303,6 +303,10 @@ class PlaybackController:
             return default
         return response.get("data", default)
 
+    def _mpv_command_succeeded(self, session, command):
+        response = self._mpv_request(session, command)
+        return isinstance(response, dict) and response.get("error") == "success"
+
     def _build_command(self, backend, track_path, position_seconds=0, volume=50):
         position_seconds = max(0, int(position_seconds))
         volume = max(0, min(100, int(volume)))
@@ -517,6 +521,11 @@ class PlaybackController:
         if session["backend"] == "mpv":
             pid = session.get("pid")
             if pid and self._process_exists(pid):
+                if not self._mpv_command_succeeded(session, ["get_property", "pid"]):
+                    session["state"] = "error"
+                    session["error"] = "mpv IPC nicht erreichbar."
+                    session["started_at"] = None
+                    return session
                 position = self._mpv_get_property(session, "time-pos", session.get("position_seconds", 0))
                 paused = bool(self._mpv_get_property(session, "pause", session.get("state") == "paused"))
                 idle_active = bool(self._mpv_get_property(session, "idle-active", False))
@@ -572,8 +581,7 @@ class PlaybackController:
         session = self.sync_session(session)
         if session.get("backend") == "mpv" and session.get("pid") and self._process_exists(session["pid"]):
             current_index = int(session.get("current_index", 0))
-            response = self._mpv_request(session, ["playlist-next", "force"])
-            if not isinstance(response, dict) or response.get("error") != "success":
+            if not self._mpv_command_succeeded(session, ["playlist-next", "force"]):
                 return session
             deadline = time.time() + 0.5
             while time.time() < deadline:
@@ -592,8 +600,7 @@ class PlaybackController:
         session = self.sync_session(session)
         if session.get("backend") == "mpv" and session.get("pid") and self._process_exists(session["pid"]):
             current_index = int(session.get("current_index", 0))
-            response = self._mpv_request(session, ["playlist-prev", "force"])
-            if not isinstance(response, dict) or response.get("error") != "success":
+            if not self._mpv_command_succeeded(session, ["playlist-prev", "force"]):
                 return session
             deadline = time.time() + 0.5
             while time.time() < deadline:
@@ -617,10 +624,15 @@ class PlaybackController:
             session["started_at"] = time.time() - int(session.get("position_seconds", 0))
             return session
         if session.get("backend") == "mpv" and session.get("pid") and self._process_exists(session["pid"]):
-            if self._mpv_request(session, ["set_property", "pause", False]):
+            if self._mpv_command_succeeded(session, ["set_property", "pause", False]):
                 session["started_at"] = time.time() - int(session.get("position_seconds", 0))
                 session["state"] = "playing"
                 return session
+            self._terminate_process_group(session["pid"])
+            self._cleanup_socket(session.get("socket_path", ""))
+            session["pid"] = None
+            session["socket_path"] = ""
+            session["state"] = "ready"
         if session.get("pid") and self._process_exists(session["pid"]):
             self._signal_process_group(session["pid"], signal.SIGCONT)
             session["started_at"] = time.time() - int(session.get("position_seconds", 0))
@@ -640,7 +652,11 @@ class PlaybackController:
             return session
         if session.get("backend") == "mpv":
             session["position_seconds"] = max(0, int(time.time() - float(session.get("started_at") or time.time())))
-            self._mpv_request(session, ["set_property", "pause", True])
+            if not self._mpv_command_succeeded(session, ["set_property", "pause", True]):
+                session["state"] = "error"
+                session["error"] = "mpv Pause-Kommando fehlgeschlagen."
+                session["started_at"] = None
+                return session
             session["started_at"] = None
             session["state"] = "paused"
             return session

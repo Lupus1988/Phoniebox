@@ -203,12 +203,56 @@ class PlaybackControllerTest(unittest.TestCase):
         }
 
         with patch.object(self.controller, "_process_exists", return_value=True):
-            with patch.object(self.controller, "_mpv_get_property", side_effect=lambda current, name, default=None: values.get(name, default)):
-                updated = self.controller.sync_session(dict(session))
+            with patch.object(self.controller, "_mpv_command_succeeded", return_value=True):
+                with patch.object(self.controller, "_mpv_get_property", side_effect=lambda current, name, default=None: values.get(name, default)):
+                    updated = self.controller.sync_session(dict(session))
 
         self.assertEqual(updated["state"], "playing")
         self.assertEqual(updated["pid"], 1234)
         self.assertEqual(updated["position_seconds"], 177)
+
+    def test_sync_session_marks_mpv_error_when_ipc_is_unreachable(self):
+        session = {
+            "backend": "mpv",
+            "state": "playing",
+            "pid": 1234,
+            "socket_path": "/tmp/phoniebox-mpv.sock",
+            "position_seconds": 23,
+            "started_at": 100.0,
+        }
+
+        with patch.object(self.controller, "_process_exists", return_value=True):
+            with patch.object(self.controller, "_mpv_command_succeeded", return_value=False):
+                updated = self.controller.sync_session(dict(session))
+
+        self.assertEqual(updated["state"], "error")
+        self.assertEqual(updated["error"], "mpv IPC nicht erreichbar.")
+        self.assertEqual(updated["pid"], 1234)
+        self.assertIsNone(updated["started_at"])
+
+    def test_play_relaunches_mpv_when_unpause_command_fails(self):
+        session = {
+            "backend": "mpv",
+            "state": "paused",
+            "pid": 1234,
+            "socket_path": "/tmp/phoniebox-mpv.sock",
+            "position_seconds": 23,
+            "started_at": None,
+        }
+
+        with patch.object(self.controller, "sync_session", return_value=dict(session)):
+            with patch.object(self.controller, "_process_exists", return_value=True):
+                with patch.object(self.controller, "_mpv_command_succeeded", return_value=False):
+                    with patch.object(self.controller, "_terminate_process_group") as terminate_group:
+                        with patch.object(self.controller, "_cleanup_socket") as cleanup_socket:
+                            with patch.object(self.controller, "_launch", side_effect=lambda current: {**current, "state": "playing", "pid": 5678}) as launch:
+                                updated = self.controller.play(dict(session))
+
+        terminate_group.assert_called_once_with(1234)
+        cleanup_socket.assert_called_once_with("/tmp/phoniebox-mpv.sock")
+        launch.assert_called_once()
+        self.assertEqual(updated["state"], "playing")
+        self.assertEqual(updated["pid"], 5678)
 
     def test_sync_session_aligns_mpv_index_to_current_file_path(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -244,8 +288,9 @@ class PlaybackControllerTest(unittest.TestCase):
 
             with patch.object(playback_module, "BASE_DIR", base_dir):
                 with patch.object(self.controller, "_process_exists", return_value=True):
-                    with patch.object(self.controller, "_mpv_get_property", side_effect=lambda current, name, default=None: values.get(name, default)):
-                        updated = self.controller.sync_session(dict(session))
+                    with patch.object(self.controller, "_mpv_command_succeeded", return_value=True):
+                        with patch.object(self.controller, "_mpv_get_property", side_effect=lambda current, name, default=None: values.get(name, default)):
+                            updated = self.controller.sync_session(dict(session))
 
         self.assertEqual(updated["current_index"], 1)
         self.assertEqual(updated["entry"], "Metal_United.mp3")
