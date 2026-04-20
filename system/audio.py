@@ -58,12 +58,12 @@ def parse_asound_cards():
 
 
 def list_playback_devices():
+    devices = []
     if not command_exists("aplay"):
-        return []
+        return parse_proc_asound_pcm()
     result = run_command(["aplay", "-l"])
     if not result["ok"]:
-        return []
-    devices = []
+        return parse_proc_asound_pcm()
     for line in result["output"].splitlines():
         stripped = line.strip()
         if not stripped.startswith("card "):
@@ -82,6 +82,35 @@ def list_playback_devices():
                     "name": card_name,
                     "device_name": device_name,
                     "alsa_hw": f"hw:{card_index},{device_index}",
+                }
+            )
+        except ValueError:
+            continue
+    return devices or parse_proc_asound_pcm()
+
+
+def parse_proc_asound_pcm(pcm_path=None):
+    pcm_path = Path(pcm_path or "/proc/asound/pcm")
+    devices = []
+    if not pcm_path.exists():
+        return devices
+    for line in pcm_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        stripped = line.strip()
+        if ": playback " not in stripped:
+            continue
+        try:
+            raw_index, rest = stripped.split(":", 1)
+            card_index, device_index = raw_index.split("-", 1)
+            name_part, device_part = rest.split(":", 1)
+            name = name_part.strip()
+            device_name = device_part.split(":", 1)[0].strip()
+            devices.append(
+                {
+                    "card_index": card_index.strip(),
+                    "device_index": device_index.strip(),
+                    "name": name,
+                    "device_name": device_name,
+                    "alsa_hw": f"hw:{card_index.strip()},{device_index.strip()}",
                 }
             )
         except ValueError:
@@ -107,8 +136,8 @@ def detect_audio_environment():
     lower_model = model.lower()
     is_pi_zero_2w = "raspberry pi zero 2" in lower_model
     has_analog = any(("bcm2835" in item or "headphones" in item or "analog" in item) for item in card_texts)
-    has_hdmi = any("vc4hdmi" in item or "hdmi" in item for item in card_ids)
-    has_usb = any("usb" in item or "audio" in item for item in card_ids)
+    has_hdmi = any("vc4hdmi" in item or "hdmi" in item for item in card_texts)
+    has_usb = any("usb" in item or "audio" in item for item in card_texts)
     has_i2s_hat = False
     notes = []
     if not cards:
