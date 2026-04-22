@@ -72,6 +72,12 @@
       </div>
       <div class="setup-action-row">
         <button
+          class="button-like setup-save-button"
+          type="submit"
+          name="reader_save"
+          value="1"
+        >Reader-Einstellungen speichern</button>
+        <button
           class="setup-save-button {% if reader_management.installed_type != 'NONE' %}danger{% else %}primary{% endif %}"
           type="submit"
           data-reader-action-button

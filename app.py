@@ -1739,6 +1739,8 @@ def setup():
 
         if section == "reader":
             action = request.form.get("reader_action", "").strip()
+            if request.form.get("reader_save") == "1":
+                action = "save"
             selected_type = normalize_reader_type(request.form.get("reader_type", data.get("reader", {}).get("target_type")))
             data["reader"]["target_type"] = selected_type
             data["reader"]["presence_interval_seconds"] = round(
@@ -1756,6 +1758,10 @@ def setup():
                 1,
                 20,
             )
+            if action == "save":
+                save_setup(data)
+                flash("Reader-Einstellungen gespeichert.", "success")
+                return redirect(url_for("setup"))
             if action in {"install", "uninstall"}:
                 result = apply_reader_install_action(data, action, selected_type)
                 redirect_kwargs = {}

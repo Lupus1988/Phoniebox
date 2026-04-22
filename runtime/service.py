@@ -559,6 +559,9 @@ class RuntimeService:
         runtime_state["sleep_timer"]["level"] = 0
         runtime_state["power_hold"] = merge_defaults({}, default_runtime_state()["power_hold"])
         runtime_state = self.add_event(runtime_state, "Sicherer Neustartzustand hergestellt", mark_activity=False)
+        self._set_service_active("phoniebox-rfid.service", True)
+        if self._should_play_power_sound(True, "boot"):
+            self.play_system_sound("power_on")
         return runtime_state, player, True
 
     def load_library(self):
@@ -1533,7 +1536,7 @@ class RuntimeService:
             return {"power_on": False, "standby": False, **sleep_functions}
 
         if animation == "sleep_count_down":
-            completed_count = 0 if progress <= 0 else min(3, int((progress * 3) + 0.999))
+            completed_count = 0 if progress <= 0 else min(3, int(progress * 3))
             active_count = max(0, 3 - completed_count)
             sleep_functions["sleep_1"] = active_count >= 1
             sleep_functions["sleep_2"] = active_count >= 2

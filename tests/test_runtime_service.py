@@ -761,7 +761,11 @@ class RuntimeServiceTest(unittest.TestCase):
         player["playlist_entries"] = ["01-start.mp3"]
         self.service.save_player(player)
 
-        with patch.object(service_module, "current_boot_id", return_value="new-boot"):
+        with patch.object(service_module, "current_boot_id", return_value="new-boot"), patch.object(
+            service_module.RuntimeService, "_set_service_active", return_value=True
+        ) as set_service_active, patch.object(
+            service_module.RuntimeService, "play_system_sound", return_value={"ok": True, "details": ["ok"]}
+        ) as play_sound:
             recovered_service = service_module.RuntimeService()
             recovered = recovered_service.ensure_runtime()
             recovered_player = recovered_service.load_player()
@@ -775,6 +779,8 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(recovered["system"]["boot_id"], "new-boot")
         self.assertEqual(recovered_player["current_album"], "")
         self.assertEqual(recovered_player["playlist_entries"], [])
+        set_service_active.assert_called_once_with("phoniebox-rfid.service", True)
+        play_sound.assert_called_once_with("power_on")
 
     def test_duplicate_power_off_does_not_replay_power_off_sound(self):
         self.service.power_off()
@@ -2329,6 +2335,45 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertTrue(led_map["Sleep 1/3"]["is_on"])
         self.assertFalse(led_map["Sleep 2/3"]["is_on"])
         self.assertFalse(led_map["Sleep 3/3"]["is_on"])
+
+    def test_power_hold_countdown_starts_with_all_sleep_leds_after_trigger_threshold(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {"type": "USB", "connection_hint": ""},
+                "buttons": [],
+                "leds": [
+                    {"id": "led-1", "name": "Power", "pin": "GPIO12", "function": "power_on", "brightness": 50},
+                    {"id": "led-2", "name": "Sleep 1/3", "pin": "GPIO13", "function": "sleep_1", "brightness": 30},
+                    {"id": "led-3", "name": "Sleep 2/3", "pin": "GPIO16", "function": "sleep_2", "brightness": 30},
+                    {"id": "led-4", "name": "Sleep 3/3", "pin": "GPIO20", "function": "sleep_3", "brightness": 30},
+                ],
+                "power_routines": {"power_on": "sleep_count_up_5", "power_off": "sleep_count_down_5"},
+                "wifi": {},
+            },
+        )
+        runtime_state = self.service.ensure_runtime()
+        runtime_state["powered_on"] = True
+        runtime_state["sleep_timer"]["level"] = 0
+        runtime_state["power_hold"] = {
+            "pressed": True,
+            "seconds": 2.1,
+            "mode": "pending_off",
+            "pin": "GPIO19",
+            "started_at": 10.0,
+            "trigger_seconds": 2.0,
+            "threshold_seconds": 5.0,
+            "routine_id": "sleep_count_down_5",
+            "animation": "sleep_count_down",
+            "completed": False,
+        }
+
+        runtime_state = self.service.update_led_status(runtime_state)
+        led_map = {entry["name"]: entry for entry in runtime_state["led_status"]}
+
+        self.assertTrue(led_map["Sleep 1/3"]["is_on"])
+        self.assertTrue(led_map["Sleep 2/3"]["is_on"])
+        self.assertTrue(led_map["Sleep 3/3"]["is_on"])
 
     def test_wifi_led_overrides_other_leds_on_same_pin(self):
         write_json(

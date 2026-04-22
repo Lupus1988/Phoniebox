@@ -730,6 +730,33 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         save_setup.assert_not_called()
 
+    def test_reader_save_action_stores_presence_settings_without_install(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "app.save_setup"
+        ) as save_setup, patch("app.apply_reader_install_action") as apply_action:
+            response = self.client.post(
+                "/setup",
+                data={
+                    "section": "reader",
+                    "reader_action": "install",
+                    "reader_save": "1",
+                    "reader_type": "RC522",
+                    "presence_interval_seconds": "0.75",
+                    "presence_miss_count": "3",
+                },
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(setup["reader"]["target_type"], "RC522")
+        self.assertEqual(setup["reader"]["presence_interval_seconds"], 0.75)
+        self.assertEqual(setup["reader"]["presence_miss_count"], 3)
+        save_setup.assert_called_once_with(setup)
+        apply_action.assert_not_called()
+
     def test_reader_install_action_uses_transition_helper(self):
         setup = default_setup()
         runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
