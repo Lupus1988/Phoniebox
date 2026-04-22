@@ -102,6 +102,7 @@ def default_runtime_state():
         "playback_state": "paused",
         "active_album_id": "",
         "active_rfid_uid": "",
+        "manual_pause_rfid_uid": "",
         "last_event": "Systemstart",
         "last_event_at": int(time.time()),
         "sleep_timer": {
@@ -437,6 +438,7 @@ class RuntimeService:
         runtime_state["playback_session"] = {}
         runtime_state["playback_state"] = "stopped"
         runtime_state["active_rfid_uid"] = ""
+        runtime_state["manual_pause_rfid_uid"] = ""
         runtime_state["hardware"]["last_scanned_uid"] = ""
         player["is_playing"] = False
         player["position_seconds"] = 0
@@ -2107,9 +2109,11 @@ class RuntimeService:
                 return {"runtime": runtime_state, "player": player}
             if runtime_state.get("playback_state") == "playing":
                 runtime_state["playback_state"] = "paused"
+                runtime_state["manual_pause_rfid_uid"] = runtime_state.get("active_rfid_uid", "").strip()
                 event = "Wiedergabe pausiert"
             else:
                 runtime_state["playback_state"] = "playing"
+                runtime_state["manual_pause_rfid_uid"] = ""
                 event = "Wiedergabe gestartet"
             runtime_state, player = self._apply_playback_target_state(runtime_state, player)
             if event == "Wiedergabe gestartet" and runtime_state.get("playback_state") != "playing":
@@ -2219,40 +2223,34 @@ class RuntimeService:
             entries = list(player.get("playlist_entries", []))
             current_index = int(player.get("current_track_index", 0))
             position_seconds = float(player.get("position_seconds", 0) or 0)
-            should_restart_current = bool(entries) and position_seconds >= self.PREVIOUS_TRACK_RESTART_THRESHOLD_SECONDS
-            if should_restart_current:
-                if runtime_state.get("playback_session"):
-                    runtime_state["playback_session"] = self.playback.seek(runtime_state["playback_session"], 0)
-                runtime_state = self.add_event(runtime_state, f"Titel neu gestartet: {player.get('current_track', '')}")
-            elif entries and current_index > 0:
-                current_index -= 1
-                session = runtime_state.get("playback_session", {})
-                if self._session_matches_playlist(session, player, entries):
-                    previous_session = self.playback.previous_track(session)
-                    if int(previous_session.get("current_index", -1) or -1) == current_index:
-                        runtime_state["playback_session"] = previous_session
-                    else:
-                        runtime_state["playback_session"] = self.playback.open_track(
-                            player.get("playlist", ""),
-                            entries[current_index],
-                            0,
-                            volume=player.get("volume", 45),
-                            previous_session=session,
-                            current_index=current_index,
-                            entries=entries,
-                        )
+            if entries:
+                previous_session = runtime_state.get("playback_session", {})
+                if position_seconds < self.PREVIOUS_TRACK_RESTART_THRESHOLD_SECONDS and current_index > 0:
+                    current_index -= 1
+                    event = "previous"
                 else:
-                    runtime_state["playback_session"] = self.playback.open_track(
-                        player.get("playlist", ""),
-                        entries[current_index],
-                        0,
-                        volume=player.get("volume", 45),
-                        previous_session=session,
-                        current_index=current_index,
-                        entries=entries,
-                    )
-                runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
-                runtime_state = self.add_event(runtime_state, f"Vorheriger Titel: {player.get('current_track', '')}")
+                    event = "restart" if position_seconds >= self.PREVIOUS_TRACK_RESTART_THRESHOLD_SECONDS else "reset"
+                current_index = max(0, min(len(entries) - 1, current_index))
+                entry = entries[current_index]
+                runtime_state["playback_session"] = self.playback.open_track(
+                    player.get("playlist", ""),
+                    entry,
+                    0,
+                    volume=player.get("volume", 45),
+                    previous_session=previous_session,
+                    current_index=current_index,
+                    entries=entries,
+                )
+                player["current_track_index"] = current_index
+                player["current_track"] = self._track_title_for_entry(player, entry)
+                player["duration_seconds"] = self._track_duration_for_entry(player, player.get("playlist", ""), entry)
+                self._rebuild_queue_display(player)
+                if event == "previous":
+                    runtime_state = self.add_event(runtime_state, f"Vorheriger Titel: {player.get('current_track', '')}")
+                elif event == "restart":
+                    runtime_state = self.add_event(runtime_state, f"Titel neu gestartet: {player.get('current_track', '')}")
+                else:
+                    runtime_state = self.add_event(runtime_state, "Titel zurückgesetzt")
             else:
                 runtime_state = self.add_event(runtime_state, "Titel zurückgesetzt")
             player["position_seconds"] = 0
@@ -2353,6 +2351,7 @@ class RuntimeService:
                 self.save_player(player)
                 return {"runtime": runtime_state, "player": player, "ignored": True}
             runtime_state["active_rfid_uid"] = ""
+            runtime_state["manual_pause_rfid_uid"] = ""
             if not active_uid:
                 runtime_state = self.update_hardware_profile(runtime_state)
                 runtime_state = self.apply_wifi_policy(runtime_state)
@@ -2418,6 +2417,7 @@ class RuntimeService:
             session_has_track = bool(session.get("track_path") or session.get("entry"))
 
             if same_uid_active and same_album_active and runtime_state.get("playback_state") == "playing" and session_has_track:
+                runtime_state["manual_pause_rfid_uid"] = ""
                 runtime_state = self.update_hardware_profile(runtime_state)
                 runtime_state = self.apply_wifi_policy(runtime_state)
                 runtime_state = self.update_led_status(runtime_state)
@@ -2427,6 +2427,7 @@ class RuntimeService:
 
             if same_album_active and runtime_state.get("playback_state") == "playing" and session_has_track:
                 runtime_state["active_rfid_uid"] = normalized_uid
+                runtime_state["manual_pause_rfid_uid"] = ""
                 runtime_state = self.update_hardware_profile(runtime_state)
                 runtime_state = self.apply_wifi_policy(runtime_state)
                 runtime_state = self.update_led_status(runtime_state)
@@ -2436,6 +2437,15 @@ class RuntimeService:
 
             if same_album_active and runtime_state.get("playback_state") == "paused" and session_has_track:
                 runtime_state["active_rfid_uid"] = normalized_uid
+                if runtime_state.get("manual_pause_rfid_uid", "").strip() == normalized_uid:
+                    player["is_playing"] = False
+                    runtime_state = self.update_hardware_profile(runtime_state)
+                    runtime_state = self.apply_wifi_policy(runtime_state)
+                    runtime_state = self.update_led_status(runtime_state)
+                    self.save_runtime(runtime_state)
+                    self.save_player(player)
+                    return {"ok": True, "runtime": runtime_state, "player": player}
+                runtime_state["manual_pause_rfid_uid"] = ""
                 runtime_state["playback_state"] = "playing"
                 runtime_state["playback_session"] = self.playback.play(session)
                 player["is_playing"] = runtime_state["playback_session"].get("state") == "playing"
@@ -2451,6 +2461,7 @@ class RuntimeService:
 
             runtime_state, player = self.load_album_into_player(target_album, runtime_state, player, autoplay=True)
             runtime_state["active_rfid_uid"] = normalized_uid
+            runtime_state["manual_pause_rfid_uid"] = ""
             runtime_state = self.add_event(runtime_state, f"RFID gestartet: {target_album.get('name', '')}")
             runtime_state = self.update_hardware_profile(runtime_state)
             runtime_state = self.apply_wifi_policy(runtime_state)

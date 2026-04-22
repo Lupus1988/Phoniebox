@@ -2,7 +2,7 @@ import signal
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 from runtime import playback as playback_module
 from services.audio_backends import CurrentAudioBackend, MPDAudioBackend, create_audio_backend
@@ -298,7 +298,7 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertEqual(updated["pid"], 5678)
         self.assertEqual(updated["state"], "playing")
 
-    def test_play_restarts_paused_mpv_instead_of_reusing_audio_handle(self):
+    def test_play_resumes_paused_mpv_without_relaunch(self):
         session = {
             "backend": "mpv",
             "state": "paused",
@@ -310,20 +310,20 @@ class PlaybackControllerTest(unittest.TestCase):
 
         with patch.object(self.controller, "sync_session", return_value=dict(session)):
             with patch.object(self.controller, "_process_exists", return_value=True):
-                with patch.object(self.controller, "_mpv_command_succeeded") as mpv_command:
+                with patch.object(self.controller, "_mpv_command_succeeded", return_value=True) as mpv_command:
                     with patch.object(self.controller, "_terminate_process_group") as terminate_group:
                         with patch.object(self.controller, "_cleanup_socket") as cleanup_socket:
                             with patch.object(self.controller, "_launch", side_effect=lambda current: {**current, "state": "playing", "pid": 5678}) as launch:
                                 updated = self.controller.play(dict(session))
 
-        mpv_command.assert_not_called()
-        terminate_group.assert_called_once_with(1234)
-        cleanup_socket.assert_called_once_with("/tmp/phoniebox-mpv.sock")
-        launch.assert_called_once()
+        mpv_command.assert_called_once_with(ANY, ["set_property", "pause", False])
+        terminate_group.assert_not_called()
+        cleanup_socket.assert_not_called()
+        launch.assert_not_called()
         self.assertEqual(updated["state"], "playing")
-        self.assertEqual(updated["pid"], 5678)
+        self.assertEqual(updated["pid"], 1234)
 
-    def test_pause_stops_mpv_and_preserves_resume_position(self):
+    def test_pause_pauses_mpv_without_relaunch_cost(self):
         session = {
             "backend": "mpv",
             "state": "playing",
@@ -334,18 +334,19 @@ class PlaybackControllerTest(unittest.TestCase):
         }
 
         with patch.object(self.controller, "sync_session", return_value=dict(session)):
-            with patch.object(self.controller, "_terminate_process_group") as terminate_group:
-                with patch.object(self.controller, "_cleanup_socket") as cleanup_socket:
-                    with patch.object(self.controller, "_mpv_command_succeeded") as mpv_command:
-                        updated = self.controller.pause(dict(session))
+            with patch.object(self.controller, "_process_exists", return_value=True):
+                with patch.object(self.controller, "_terminate_process_group") as terminate_group:
+                    with patch.object(self.controller, "_cleanup_socket") as cleanup_socket:
+                        with patch.object(self.controller, "_mpv_command_succeeded", return_value=True) as mpv_command:
+                            updated = self.controller.pause(dict(session))
 
-        mpv_command.assert_not_called()
-        terminate_group.assert_called_once_with(1234)
-        cleanup_socket.assert_called_once_with("/tmp/phoniebox-mpv.sock")
+        mpv_command.assert_called_once_with(ANY, ["set_property", "pause", True])
+        terminate_group.assert_not_called()
+        cleanup_socket.assert_not_called()
         self.assertEqual(updated["state"], "paused")
         self.assertEqual(updated["position_seconds"], 42)
-        self.assertIsNone(updated["pid"])
-        self.assertEqual(updated["socket_path"], "")
+        self.assertEqual(updated["pid"], 1234)
+        self.assertEqual(updated["socket_path"], "/tmp/phoniebox-mpv.sock")
 
     def test_sync_session_aligns_mpv_index_to_current_file_path(self):
         with tempfile.TemporaryDirectory() as tmpdir:

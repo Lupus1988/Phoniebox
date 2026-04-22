@@ -540,6 +540,47 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(resumed["player"]["position_seconds"], 37)
         self.assertEqual(resumed["runtime"]["playback_session"]["position_seconds"], 37)
 
+    def test_presence_rfid_respects_manual_pause_while_tag_stays_present(self):
+        write_json(
+            self.data_dir / "settings.json",
+            {
+                "max_volume": 85,
+                "volume_step": 5,
+                "sleep_timer_step": 5,
+                "rfid_read_action": "play",
+                "rfid_remove_action": "pause",
+            },
+        )
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {
+                    "type": "RC522",
+                    "connection_hint": "",
+                },
+                "buttons": [],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        self.service.assign_album_by_rfid("1234567890")
+        self.service.seek(37)
+        paused = self.service.trigger_button("Play/Pause", press_type="kurz")
+
+        with patch.object(self.service, "load_album_into_player", wraps=self.service.load_album_into_player) as load_album:
+            repeated = self.service.assign_album_by_rfid("1234567890")
+
+        self.assertEqual(paused["runtime"]["manual_pause_rfid_uid"], "1234567890")
+        self.assertTrue(repeated["ok"])
+        self.assertEqual(load_album.call_count, 0)
+        self.assertEqual(repeated["runtime"]["playback_state"], "paused")
+        self.assertEqual(repeated["runtime"]["active_album_id"], "album-1")
+        self.assertEqual(repeated["runtime"]["active_rfid_uid"], "1234567890")
+        self.assertEqual(repeated["runtime"]["manual_pause_rfid_uid"], "1234567890")
+        self.assertEqual(repeated["player"]["position_seconds"], 37)
+        self.assertFalse(repeated["player"]["is_playing"])
+
     def test_presence_rfid_does_not_reload_same_tag_same_album_after_manual_resume(self):
         write_json(
             self.data_dir / "settings.json",

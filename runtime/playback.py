@@ -677,6 +677,11 @@ class PlaybackController:
             session["started_at"] = time.time() - int(session.get("position_seconds", 0))
             return session
         if session.get("backend") == "mpv" and session.get("pid") and self._process_exists(session["pid"]):
+            if self._mpv_command_succeeded(session, ["set_property", "pause", False]):
+                session["started_at"] = time.time() - int(session.get("position_seconds", 0))
+                session["state"] = "playing"
+                self._reset_mpv_progress_health(session)
+                return session
             self._terminate_process_group(session["pid"])
             self._cleanup_socket(session.get("socket_path", ""))
             session["pid"] = None
@@ -701,6 +706,12 @@ class PlaybackController:
             return session
         if session.get("backend") == "mpv":
             session["position_seconds"] = max(0, int(session.get("position_seconds", 0) or 0))
+            if session.get("pid") and self._process_exists(session["pid"]):
+                if self._mpv_command_succeeded(session, ["set_property", "pause", True]):
+                    session["started_at"] = None
+                    session["state"] = "paused"
+                    self._reset_mpv_progress_health(session)
+                    return session
             if session.get("pid"):
                 self._terminate_process_group(session["pid"])
             self._cleanup_socket(session.get("socket_path", ""))
