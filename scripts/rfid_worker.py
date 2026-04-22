@@ -847,6 +847,12 @@ def main():
                 and current_link_session_marker != last_link_session_marker
             )
             link_session_ended = bool(last_link_session_marker and last_link_session_marker[0] and not current_link_session_active)
+            link_session_completed_with_current_uid = bool(
+                link_session_ended
+                and uid
+                and str(link_session.get("last_uid", "")).strip() == uid
+                and str(link_session.get("status", "")) in {"linked", "uid_detected"}
+            )
             if should_reset_for_link_session or link_session_ended:
                 present_uid = ""
                 present_missing_polls = 0
@@ -874,6 +880,24 @@ def main():
                 last_status = polled_status
 
             if uid:
+                if link_session_completed_with_current_uid:
+                    status_code = post_uid(uid)
+                    if post_failed(status_code):
+                        loop_sleep(reader, idle_interval=idle_interval, presence_interval=presence_interval, error=True)
+                        continue
+                    if post_succeeded(status_code):
+                        present_uid = uid
+                        present_missing_polls = 0
+                        ignored_uid = ""
+                        ignored_missing_polls = 0
+                        pending_uid = ""
+                        pending_count = 0
+                        load_link_session_cached(force=True)
+                    elif post_was_client_rejection(status_code):
+                        ignored_uid = uid
+                        ignored_missing_polls = 0
+                    continue
+
                 if link_session_waiting_for_uid:
                     if uid == last_link_uid:
                         loop_sleep(reader, idle_interval=idle_interval, presence_interval=presence_interval, active=False)

@@ -391,6 +391,29 @@ class ProbeRC522BackendTest(unittest.TestCase):
         self.assertGreaterEqual(post_uid.call_count, 2)
         post_uid.assert_called_with("ABC123")
 
+    def test_presence_reader_posts_playback_uid_immediately_when_link_session_finishes_with_present_tag(self):
+        reader = FakeReader(["ABC123", "ABC123", "ABC123", KeyboardInterrupt()])
+        reader.presence_reader = True
+
+        with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
+            rfid_worker, "build_reader", return_value=reader
+        ), patch.object(rfid_worker, "save_reader_status"), patch.object(
+            rfid_worker, "post_uid", return_value=200
+        ) as post_uid, patch.object(
+            rfid_worker, "load_link_session_state", side_effect=[
+                {"active": True, "status": "waiting_for_uid", "started_at": 2.0, "album_id": "a", "last_uid": ""},
+                {"active": True, "status": "uid_detected", "started_at": 2.0, "album_id": "a", "last_uid": "ABC123"},
+                {"active": False, "status": "linked", "started_at": 2.0, "album_id": "a", "last_uid": "ABC123"},
+                {"active": False, "status": "linked", "started_at": 2.0, "album_id": "a", "last_uid": "ABC123"},
+            ]
+        ), patch.object(
+            rfid_worker.time, "monotonic", side_effect=[0.0, 0.1, 6.2, 6.6, 7.0, 7.4]
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                rfid_worker.main()
+
+        self.assertEqual([call.args[0] for call in post_uid.call_args_list], ["ABC123", "ABC123"])
+
 
 if __name__ == "__main__":
     unittest.main()
