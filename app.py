@@ -276,6 +276,7 @@ def default_setup():
             "install_state": "not_installed",
             "needs_reboot": False,
             "idle_scan_interval_seconds": 0.05,
+            "tag_confirm_count": 2,
             "presence_interval_seconds": 0.55,
             "presence_miss_count": 2,
             "last_action_message": "Noch kein Reader installiert.",
@@ -630,6 +631,7 @@ def normalize_setup_data(data):
         to_float(reader.get("idle_scan_interval_seconds"), 0.05, 0.02, 2.00),
         2,
     )
+    reader["tag_confirm_count"] = to_int(reader.get("tag_confirm_count"), 2, 1, 10)
     reader["presence_interval_seconds"] = round(
         to_float(reader.get("presence_interval_seconds"), 0.55, 0.10, 5.00),
         2,
@@ -1756,6 +1758,12 @@ def setup():
                     2.00,
                 ),
                 2,
+            )
+            data["reader"]["tag_confirm_count"] = to_int(
+                request.form.get("tag_confirm_count"),
+                data["reader"].get("tag_confirm_count", 2),
+                1,
+                10,
             )
             data["reader"]["presence_interval_seconds"] = round(
                 to_float(

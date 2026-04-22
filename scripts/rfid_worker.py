@@ -58,6 +58,7 @@ RC522_DEFAULT_IRQ_PIN = None
 RFID_DEFAULT_PRESENCE_INTERVAL_SECONDS = 0.55
 RFID_DEFAULT_PRESENCE_MISS_COUNT = 2
 RFID_DEFAULT_IDLE_SCAN_SECONDS = 0.05
+RFID_DEFAULT_TAG_CONFIRM_COUNT = 2
 SETUP_CACHE_TTL_SECONDS = 1.0
 LINK_SESSION_CACHE_TTL_SECONDS = 0.15
 RFID_ACTIVE_SLEEP_SECONDS = 0.015
@@ -119,10 +120,19 @@ def reader_presence_config(setup):
     except (TypeError, ValueError):
         interval = RFID_DEFAULT_PRESENCE_INTERVAL_SECONDS
     try:
+        confirm_count = int(reader.get("tag_confirm_count", RFID_DEFAULT_TAG_CONFIRM_COUNT) or RFID_DEFAULT_TAG_CONFIRM_COUNT)
+    except (TypeError, ValueError):
+        confirm_count = RFID_DEFAULT_TAG_CONFIRM_COUNT
+    try:
         miss_count = int(reader.get("presence_miss_count", RFID_DEFAULT_PRESENCE_MISS_COUNT) or RFID_DEFAULT_PRESENCE_MISS_COUNT)
     except (TypeError, ValueError):
         miss_count = RFID_DEFAULT_PRESENCE_MISS_COUNT
-    return max(0.02, min(2.00, idle_interval)), max(0.10, min(5.00, interval)), max(1, min(20, miss_count))
+    return (
+        max(0.02, min(2.00, idle_interval)),
+        max(0.10, min(5.00, interval)),
+        max(1, min(10, confirm_count)),
+        max(1, min(20, miss_count)),
+    )
 
 
 def loop_sleep(reader, idle_interval=RFID_DEFAULT_IDLE_SCAN_SECONDS, presence_interval=RFID_DEFAULT_PRESENCE_INTERVAL_SECONDS, active=False, error=False):
@@ -767,6 +777,8 @@ def main():
     present_missing_polls = 0
     ignored_uid = ""
     ignored_missing_polls = 0
+    pending_uid = ""
+    pending_count = 0
     last_link_uid = ""
     last_link_uid_at = 0.0
     last_link_session_marker = None
@@ -787,6 +799,8 @@ def main():
                 present_missing_polls = 0
                 ignored_uid = ""
                 ignored_missing_polls = 0
+                pending_uid = ""
+                pending_count = 0
                 last_link_uid = ""
                 last_link_uid_at = 0.0
                 setup = load_setup_cached(force=True)
@@ -795,7 +809,7 @@ def main():
                 time.sleep(RFID_READER_MISSING_SLEEP_SECONDS)
                 continue
 
-            idle_interval, presence_interval, presence_miss_count = reader_presence_config(setup)
+            idle_interval, presence_interval, tag_confirm_count, presence_miss_count = reader_presence_config(setup)
 
             current_status = (
                 reader_type,
@@ -838,6 +852,8 @@ def main():
                 present_missing_polls = 0
                 ignored_uid = ""
                 ignored_missing_polls = 0
+                pending_uid = ""
+                pending_count = 0
                 last_link_uid = ""
                 last_link_uid_at = 0.0
             last_link_session_marker = current_link_session_marker
@@ -873,12 +889,32 @@ def main():
 
                 if uid == present_uid:
                     present_missing_polls = 0
+                    pending_uid = ""
+                    pending_count = 0
                     loop_sleep(reader, idle_interval=idle_interval, presence_interval=presence_interval, active=True)
                     continue
                 if uid == ignored_uid:
                     ignored_missing_polls = 0
+                    pending_uid = ""
+                    pending_count = 0
                     loop_sleep(reader, idle_interval=idle_interval, presence_interval=presence_interval, active=True)
                     continue
+
+                effective_confirm_count = tag_confirm_count if getattr(reader, "presence_reader", False) else 1
+                if effective_confirm_count > 1:
+                    if uid == pending_uid:
+                        pending_count += 1
+                    else:
+                        pending_uid = uid
+                        pending_count = 1
+                    if pending_count < effective_confirm_count:
+                        loop_sleep(
+                            reader,
+                            idle_interval=idle_interval,
+                            presence_interval=presence_interval,
+                            active=bool(present_uid or ignored_uid),
+                        )
+                        continue
 
                 status_code = post_uid(uid)
                 if post_failed(status_code):
@@ -889,11 +925,18 @@ def main():
                     present_missing_polls = 0
                     ignored_uid = ""
                     ignored_missing_polls = 0
+                    pending_uid = ""
+                    pending_count = 0
                     load_link_session_cached(force=True)
                 elif post_was_client_rejection(status_code):
                     ignored_uid = uid
                     ignored_missing_polls = 0
+                    pending_uid = ""
+                    pending_count = 0
                 continue
+
+            pending_uid = ""
+            pending_count = 0
 
             if getattr(reader, "presence_reader", False) and present_uid:
                 present_missing_polls += 1
