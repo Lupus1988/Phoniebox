@@ -501,7 +501,7 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(load_album.call_count, 1)
         self.assertEqual(second["runtime"]["active_rfid_uid"], "1234567890")
 
-    def test_presence_rfid_resumes_paused_same_album_instead_of_reloading(self):
+    def test_presence_rfid_reloads_paused_same_album_from_start(self):
         write_json(
             self.data_dir / "settings.json",
             {
@@ -533,14 +533,15 @@ class RuntimeServiceTest(unittest.TestCase):
             resumed = self.service.assign_album_by_rfid("1234567890")
 
         self.assertTrue(resumed["ok"])
-        self.assertEqual(load_album.call_count, 0)
+        self.assertEqual(load_album.call_count, 1)
         self.assertEqual(resumed["runtime"]["playback_state"], "playing")
         self.assertEqual(resumed["runtime"]["active_album_id"], "album-1")
         self.assertEqual(resumed["runtime"]["active_rfid_uid"], "1234567890")
-        self.assertEqual(resumed["player"]["position_seconds"], 37)
-        self.assertEqual(resumed["runtime"]["playback_session"]["position_seconds"], 37)
+        self.assertEqual(resumed["player"]["current_track_index"], 0)
+        self.assertEqual(resumed["player"]["position_seconds"], 0)
+        self.assertEqual(resumed["runtime"]["playback_session"]["position_seconds"], 0)
 
-    def test_presence_rfid_does_not_reload_same_album_after_manual_resume(self):
+    def test_presence_rfid_reloads_same_album_after_manual_resume_from_start(self):
         write_json(
             self.data_dir / "settings.json",
             {
@@ -573,12 +574,13 @@ class RuntimeServiceTest(unittest.TestCase):
             repeated = self.service.assign_album_by_rfid("1234567890")
 
         self.assertTrue(repeated["ok"])
-        self.assertEqual(load_album.call_count, 0)
+        self.assertEqual(load_album.call_count, 1)
         self.assertEqual(repeated["runtime"]["playback_state"], "playing")
         self.assertEqual(repeated["runtime"]["active_album_id"], "album-1")
         self.assertEqual(repeated["runtime"]["active_rfid_uid"], "1234567890")
-        self.assertEqual(repeated["player"]["position_seconds"], 37)
-        self.assertEqual(repeated["runtime"]["playback_session"]["position_seconds"], 37)
+        self.assertEqual(repeated["player"]["current_track_index"], 0)
+        self.assertEqual(repeated["player"]["position_seconds"], 0)
+        self.assertEqual(repeated["runtime"]["playback_session"]["position_seconds"], 0)
 
     def test_unknown_rfid_tag_does_nothing(self):
         started = self.service.load_album_by_id("album-1", autoplay=True)

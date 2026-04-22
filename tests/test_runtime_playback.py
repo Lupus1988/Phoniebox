@@ -40,16 +40,6 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertIn("--start=37", command)
         self.assertEqual(command[-1], "/tmp/test.mp3")
 
-    def test_build_playlist_command_for_mpv_uses_playlist_start(self):
-        with patch.object(playback_module, "configured_alsa_device", return_value="alsa/plughw:1,0"):
-            command = self.controller._build_mpv_playlist_command("/tmp/test.m3u", current_index=2, position_seconds=11, volume=50)
-
-        self.assertIn("--ao=alsa", command)
-        self.assertIn("--audio-device=alsa/plughw:1,0", command)
-        self.assertIn("--playlist-start=2", command)
-        self.assertIn("--start=11", command)
-        self.assertIn("--playlist=/tmp/test.m3u", command)
-
     def test_mpv_alsa_device_uses_plughw_for_resampling(self):
         self.assertEqual(playback_module._mpv_alsa_device("hw:0,0"), "alsa/plughw:0,0")
         self.assertEqual(playback_module._mpv_alsa_device("plughw:1,0"), "alsa/plughw:1,0")
@@ -182,7 +172,7 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertEqual(updated["pid"], 1234)
         self.assertEqual(updated["state"], "playing")
 
-    def test_next_track_uses_mpv_playlist_command_without_relaunch(self):
+    def test_next_track_does_not_drive_mpv_playlist_directly(self):
         session = {
             "backend": "mpv",
             "state": "playing",
@@ -195,14 +185,13 @@ class PlaybackControllerTest(unittest.TestCase):
         with patch.object(
             self.controller,
             "sync_session",
-            side_effect=[dict(session), {**session, "current_index": 1}, {**session, "current_index": 1}],
+            return_value=dict(session),
         ):
-            with patch.object(self.controller, "_process_exists", return_value=True):
-                with patch.object(self.controller, "_mpv_request", return_value={"error": "success"}) as mpv_request:
-                    updated = self.controller.next_track(dict(session))
+            with patch.object(self.controller, "_mpv_request", return_value={"error": "success"}) as mpv_request:
+                updated = self.controller.next_track(dict(session))
 
-        mpv_request.assert_called_once_with(session, ["playlist-next", "force"])
-        self.assertEqual(updated["current_index"], 1)
+        mpv_request.assert_not_called()
+        self.assertEqual(updated["current_index"], 0)
 
     def test_sync_session_keeps_mpv_running_when_eof_reached_but_not_idle(self):
         session = {
@@ -340,7 +329,6 @@ class PlaybackControllerTest(unittest.TestCase):
             "state": "playing",
             "pid": 1234,
             "socket_path": "/tmp/phoniebox-mpv.sock",
-            "generated_playlist_source": "/tmp/phoniebox-runtime-test.m3u",
             "position_seconds": 42,
             "started_at": 100.0,
         }
@@ -358,7 +346,6 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertEqual(updated["position_seconds"], 42)
         self.assertIsNone(updated["pid"])
         self.assertEqual(updated["socket_path"], "")
-        self.assertEqual(updated["generated_playlist_source"], "/tmp/phoniebox-runtime-test.m3u")
 
     def test_sync_session_aligns_mpv_index_to_current_file_path(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -402,7 +389,7 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertEqual(updated["entry"], "Metal_United.mp3")
         self.assertEqual(updated["track_path"], str(metal_united))
 
-    def test_open_track_creates_runtime_playlist_for_shuffled_mpv_entries(self):
+    def test_open_track_uses_single_track_even_with_playlist_entries(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             base_dir = Path(tmpdir)
             album_dir = base_dir / "media" / "albums" / "test"
@@ -422,30 +409,11 @@ class PlaybackControllerTest(unittest.TestCase):
                     entries=["02.mp3", "01.mp3"],
                 )
 
-            runtime_playlist = Path(session["generated_playlist_source"])
-            self.assertTrue(runtime_playlist.exists())
-            self.assertTrue(session["playlist_mode"])
-            lines = runtime_playlist.read_text(encoding="utf-8").splitlines()
-            self.assertEqual(lines[1:], [str((album_dir / "02.mp3").resolve()), str((album_dir / "01.mp3").resolve())])
-            runtime_playlist.unlink()
-
-    def test_stop_cleans_up_generated_runtime_playlist(self):
-        with tempfile.NamedTemporaryFile("w", suffix=".m3u", delete=False) as handle:
-            playlist_path = handle.name
-
-        session = {
-            "backend": "mpv",
-            "state": "paused",
-            "pid": None,
-            "socket_path": "",
-            "generated_playlist_source": playlist_path,
-            "position_seconds": 0,
-        }
-
-        stopped = self.controller.stop(session)
-
-        self.assertEqual(stopped["state"], "stopped")
-        self.assertFalse(Path(playlist_path).exists())
+            self.assertNotIn("generated_playlist_source", session)
+            self.assertNotIn("playlist_mode", session)
+            self.assertEqual(session["entry"], "02.mp3")
+            self.assertEqual(session["track_path"], str((album_dir / "02.mp3").resolve()))
+            self.assertEqual(session["playlist_entries"], ["02.mp3", "01.mp3"])
 
 
 if __name__ == "__main__":

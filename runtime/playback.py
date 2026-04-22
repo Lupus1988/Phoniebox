@@ -449,27 +449,6 @@ class PlaybackController:
             ]
         return []
 
-    def _build_mpv_playlist_command(self, playlist_path, current_index=0, position_seconds=0, volume=50):
-        position_seconds = max(0, int(position_seconds))
-        volume = max(0, min(100, int(volume)))
-        audio_device = configured_alsa_device()
-        return [
-            "mpv",
-            "--no-video",
-            "--really-quiet",
-            "--audio-display=no",
-            "--idle=no",
-            "--ao=alsa",
-            f"--audio-device={audio_device}",
-            "--cache=yes",
-            "--audio-buffer=0.2",
-            "--demuxer-readahead-secs=2",
-            f"--volume={volume}",
-            f"--playlist-start={max(0, int(current_index))}",
-            *( [f"--start={position_seconds}"] if position_seconds > 0 else [] ),
-            f"--playlist={playlist_path}",
-        ]
-
     def _launch(self, session):
         backend = session.get("backend") or self.status()["active_backend"]
         track_path = session.get("track_path", "")
@@ -495,13 +474,6 @@ class PlaybackController:
             session.get("position_seconds", 0),
             session.get("volume", 50),
         )
-        if backend == "mpv" and session.get("playlist_mode") and session.get("playlist_source"):
-            command = self._build_mpv_playlist_command(
-                session.get("playlist_source", ""),
-                current_index=session.get("current_index", 0),
-                position_seconds=session.get("position_seconds", 0),
-                volume=session.get("volume", 50),
-            )
         if not command:
             session["state"] = "error"
             session["error"] = f"Kein Kommando für Backend {backend} verfügbar."
@@ -596,20 +568,12 @@ class PlaybackController:
         backend = self.status()["active_backend"]
         playlist_path = self._resolve_playlist_path(playlist_relative_path)
         track_path = self._resolve_track_path(playlist_relative_path, entry)
-        runtime_playlist_path = ""
-        playlist_mode = False
         playlist_source = str(playlist_path) if playlist_path else ""
-        if backend == "mpv" and playlist_path and entries:
-            runtime_playlist_path = self._build_runtime_playlist(playlist_relative_path, entries)
-            playlist_source = runtime_playlist_path or playlist_source
-            playlist_mode = bool(playlist_source)
         return {
             "backend": backend,
             "playlist": playlist_relative_path,
             "playlist_source": playlist_source,
-            "generated_playlist_source": runtime_playlist_path,
             "playlist_entries": list(entries or []),
-            "playlist_mode": playlist_mode,
             "entry": entry,
             "current_index": max(0, int(current_index)),
             "track_path": str(track_path) if track_path else "",
@@ -676,8 +640,6 @@ class PlaybackController:
                     session["started_at"] = None
                     self._cleanup_socket(session.get("socket_path", ""))
                     session["socket_path"] = ""
-                    self._cleanup_generated_playlist(session.get("generated_playlist_source", ""))
-                    session["generated_playlist_source"] = ""
                 else:
                     session["state"] = "paused" if paused else "playing"
                     if self._mpv_playback_stalled(session, position_float, paused, idle_active):
@@ -700,40 +662,10 @@ class PlaybackController:
 
     def next_track(self, session):
         session = self.sync_session(session)
-        if session.get("backend") == "mpv" and session.get("pid") and self._process_exists(session["pid"]):
-            current_index = int(session.get("current_index", 0))
-            if not self._mpv_command_succeeded(session, ["playlist-next", "force"]):
-                return session
-            deadline = time.time() + 0.5
-            while time.time() < deadline:
-                session = self.sync_session(session)
-                if session.get("state") == "stopped" or int(session.get("current_index", 0)) != current_index:
-                    break
-                time.sleep(0.02)
-            time.sleep(0.05)
-            session = self.sync_session(session)
-            session["position_seconds"] = 0
-            session["started_at"] = time.time() if session.get("state") == "playing" else None
-            return session
         return session
 
     def previous_track(self, session):
         session = self.sync_session(session)
-        if session.get("backend") == "mpv" and session.get("pid") and self._process_exists(session["pid"]):
-            current_index = int(session.get("current_index", 0))
-            if not self._mpv_command_succeeded(session, ["playlist-prev", "force"]):
-                return session
-            deadline = time.time() + 0.5
-            while time.time() < deadline:
-                session = self.sync_session(session)
-                if int(session.get("current_index", 0)) != current_index:
-                    break
-                time.sleep(0.02)
-            time.sleep(0.05)
-            session = self.sync_session(session)
-            session["position_seconds"] = 0
-            session["started_at"] = time.time() if session.get("state") == "playing" else None
-            return session
         return session
 
     def play(self, session):
@@ -790,8 +722,6 @@ class PlaybackController:
         if session.get("backend") != "mock" and session.get("pid"):
             self._terminate_process_group(session["pid"])
         self._cleanup_socket(session.get("socket_path", ""))
-        self._cleanup_generated_playlist(session.get("generated_playlist_source", ""))
-        session["generated_playlist_source"] = ""
         session["state"] = "stopped"
         session["position_seconds"] = 0
         session["started_at"] = None

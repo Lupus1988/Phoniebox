@@ -2425,29 +2425,6 @@ class RuntimeService:
                 self.save_player(player)
                 return {"ok": True, "runtime": runtime_state, "player": player}
 
-            if same_album_active and runtime_state.get("playback_state") == "playing" and session_has_track:
-                runtime_state["active_rfid_uid"] = normalized_uid
-                runtime_state = self.update_hardware_profile(runtime_state)
-                runtime_state = self.apply_wifi_policy(runtime_state)
-                runtime_state = self.update_led_status(runtime_state)
-                self.save_runtime(runtime_state)
-                self.save_player(player)
-                return {"ok": True, "runtime": runtime_state, "player": player}
-
-            runtime_state["active_rfid_uid"] = normalized_uid
-
-            if same_album_active and runtime_state.get("playback_state") == "paused" and session_has_track:
-                runtime_state["playback_state"] = "playing"
-                runtime_state["playback_session"] = self.playback.play(session)
-                player["is_playing"] = runtime_state["playback_session"].get("state") == "playing"
-                runtime_state = self.add_event(runtime_state, f"RFID fortgesetzt: {target_album.get('name', '')}")
-                runtime_state = self.update_hardware_profile(runtime_state)
-                runtime_state = self.apply_wifi_policy(runtime_state)
-                runtime_state = self.update_led_status(runtime_state)
-                self.save_runtime(runtime_state)
-                self.save_player(player)
-                return {"ok": True, "runtime": runtime_state, "player": player}
-
             runtime_state, player = self.load_album_into_player(target_album, runtime_state, player, autoplay=True)
             runtime_state["active_rfid_uid"] = normalized_uid
             runtime_state = self.add_event(runtime_state, f"RFID gestartet: {target_album.get('name', '')}")
