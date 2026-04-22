@@ -275,6 +275,7 @@ def default_setup():
             "target_type": READER_NONE_ID,
             "install_state": "not_installed",
             "needs_reboot": False,
+            "idle_scan_interval_seconds": 0.05,
             "presence_interval_seconds": 0.55,
             "presence_miss_count": 2,
             "last_action_message": "Noch kein Reader installiert.",
@@ -625,6 +626,10 @@ def normalize_setup_data(data):
     target_type = normalize_reader_type(reader.get("target_type", installed_type))
     reader["type"] = installed_type
     reader["target_type"] = target_type
+    reader["idle_scan_interval_seconds"] = round(
+        to_float(reader.get("idle_scan_interval_seconds"), 0.05, 0.02, 2.00),
+        2,
+    )
     reader["presence_interval_seconds"] = round(
         to_float(reader.get("presence_interval_seconds"), 0.55, 0.10, 5.00),
         2,
@@ -1743,6 +1748,15 @@ def setup():
                 action = "save"
             selected_type = normalize_reader_type(request.form.get("reader_type", data.get("reader", {}).get("target_type")))
             data["reader"]["target_type"] = selected_type
+            data["reader"]["idle_scan_interval_seconds"] = round(
+                to_float(
+                    request.form.get("idle_scan_interval_seconds"),
+                    data["reader"].get("idle_scan_interval_seconds", 0.05),
+                    0.02,
+                    2.00,
+                ),
+                2,
+            )
             data["reader"]["presence_interval_seconds"] = round(
                 to_float(
                     request.form.get("presence_interval_seconds"),

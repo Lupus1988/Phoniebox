@@ -454,6 +454,7 @@ class AppRoutesTest(unittest.TestCase):
         self.assertFalse(setup["wifi"]["auto_wifi_off_enabled"])
         self.assertEqual(setup["wifi"]["auto_wifi_off_minutes"], 30)
         self.assertNotIn("playback_backend", setup["audio"])
+        self.assertEqual(setup["reader"]["idle_scan_interval_seconds"], 0.05)
         self.assertEqual(setup["reader"]["presence_interval_seconds"], 0.55)
         self.assertEqual(setup["reader"]["presence_miss_count"], 2)
 
@@ -744,6 +745,7 @@ class AppRoutesTest(unittest.TestCase):
                     "reader_action": "install",
                     "reader_save": "1",
                     "reader_type": "RC522",
+                    "idle_scan_interval_seconds": "0.08",
                     "presence_interval_seconds": "0.75",
                     "presence_miss_count": "3",
                 },
@@ -752,6 +754,7 @@ class AppRoutesTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(setup["reader"]["target_type"], "RC522")
+        self.assertEqual(setup["reader"]["idle_scan_interval_seconds"], 0.08)
         self.assertEqual(setup["reader"]["presence_interval_seconds"], 0.75)
         self.assertEqual(setup["reader"]["presence_miss_count"], 3)
         save_setup.assert_called_once_with(setup)

@@ -205,18 +205,33 @@ class ProbeRC522BackendTest(unittest.TestCase):
         reader.presence_reader = True
 
         with patch.object(rfid_worker.time, "sleep") as sleep:
-            rfid_worker.loop_sleep(reader, presence_interval=0.75, active=False)
+            rfid_worker.loop_sleep(reader, idle_interval=0.08, presence_interval=0.75, active=False)
 
-        sleep.assert_called_once_with(rfid_worker.RFID_IDLE_SCAN_SECONDS)
+        sleep.assert_called_once_with(0.08)
 
     def test_presence_reader_uses_configured_interval_after_tag_is_active(self):
         reader = FakeReader([])
         reader.presence_reader = True
 
         with patch.object(rfid_worker.time, "sleep") as sleep:
-            rfid_worker.loop_sleep(reader, presence_interval=0.75, active=True)
+            rfid_worker.loop_sleep(reader, idle_interval=0.08, presence_interval=0.75, active=True)
 
         sleep.assert_called_once_with(0.75)
+
+    def test_reader_presence_config_clamps_idle_interval(self):
+        idle_interval, presence_interval, miss_count = rfid_worker.reader_presence_config(
+            {
+                "reader": {
+                    "idle_scan_interval_seconds": "0.001",
+                    "presence_interval_seconds": "9",
+                    "presence_miss_count": "99",
+                }
+            }
+        )
+
+        self.assertEqual(idle_interval, 0.02)
+        self.assertEqual(presence_interval, 5.0)
+        self.assertEqual(miss_count, 20)
 
     def test_presence_reader_reposts_same_uid_when_link_session_becomes_active(self):
         reader = FakeReader(["ABC123", "ABC123", "ABC123", "ABC123", KeyboardInterrupt()])
