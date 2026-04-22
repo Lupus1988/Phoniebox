@@ -246,12 +246,32 @@ class PlaybackControllerTest(unittest.TestCase):
 
         with patch.object(self.controller, "_process_exists", return_value=True):
             with patch.object(self.controller, "_mpv_command_succeeded", return_value=False):
-                updated = self.controller.sync_session(dict(session))
+                with patch.object(self.controller, "_terminate_process_group") as terminate_group:
+                    with patch.object(self.controller, "_cleanup_socket") as cleanup_socket:
+                        updated = self.controller.sync_session(dict(session))
 
         self.assertEqual(updated["state"], "error")
         self.assertEqual(updated["error"], "mpv IPC nicht erreichbar.")
-        self.assertEqual(updated["pid"], 1234)
+        terminate_group.assert_called_once_with(1234)
+        cleanup_socket.assert_called_once_with("/tmp/phoniebox-mpv.sock")
+        self.assertIsNone(updated["pid"])
         self.assertIsNone(updated["started_at"])
+        self.assertEqual(updated["socket_path"], "")
+
+    def test_cleanup_stale_mpv_processes_terminates_phoniebox_mpv_processes(self):
+        completed = playback_module.subprocess.CompletedProcess(
+            args=["pgrep"],
+            returncode=0,
+            stdout="1234\n5678\n",
+            stderr="",
+        )
+
+        with patch.object(playback_module.subprocess, "run", return_value=completed) as run:
+            with patch.object(self.controller, "_terminate_process_group") as terminate_group:
+                self.controller._cleanup_stale_mpv_processes(exclude_pid=5678)
+
+        run.assert_called_once()
+        terminate_group.assert_called_once_with(1234)
 
     def test_sync_session_relaunches_mpv_when_time_position_stalls(self):
         session = {

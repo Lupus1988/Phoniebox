@@ -214,6 +214,26 @@ class PlaybackController:
             return
         _terminate_process_group(pid)
 
+    def _cleanup_stale_mpv_processes(self, exclude_pid=None):
+        try:
+            completed = subprocess.run(
+                ["pgrep", "-f", r"mpv .*--input-ipc-server=/tmp/phoniebox-mpv-"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return
+        exclude = str(exclude_pid or "")
+        for line in completed.stdout.splitlines():
+            pid = line.strip()
+            if not pid or pid == exclude:
+                continue
+            try:
+                self._terminate_process_group(int(pid))
+            except (OSError, ValueError):
+                continue
+
     def _resolve_track_path(self, playlist_relative_path, entry):
         if not playlist_relative_path or not entry:
             return None
@@ -488,6 +508,7 @@ class PlaybackController:
             return session
 
         if backend == "mpv":
+            self._cleanup_stale_mpv_processes()
             socket_path = self._make_socket_path()
             self._cleanup_socket(socket_path)
             command.insert(-1, f"--input-ipc-server={socket_path}")
@@ -518,9 +539,13 @@ class PlaybackController:
                 if Path(session["socket_path"]).exists():
                     break
                 if process.poll() is not None:
+                    self._terminate_process_group(process.pid)
+                    self._processes.pop(process.pid, None)
+                    self._cleanup_socket(session.get("socket_path", ""))
                     session["state"] = "error"
                     session["error"] = "mpv wurde beendet, bevor der IPC-Socket bereit war."
-                    session["pid"] = process.pid
+                    session["pid"] = None
+                    session["socket_path"] = ""
                     return session
                 time.sleep(0.02)
         return session
@@ -610,9 +635,13 @@ class PlaybackController:
             pid = session.get("pid")
             if pid and self._process_exists(pid):
                 if not self._mpv_command_succeeded(session, ["get_property", "pid"]):
+                    self._terminate_process_group(pid)
                     session["state"] = "error"
                     session["error"] = "mpv IPC nicht erreichbar."
+                    session["pid"] = None
                     session["started_at"] = None
+                    self._cleanup_socket(session.get("socket_path", ""))
+                    session["socket_path"] = ""
                     return session
                 position = self._mpv_get_property(session, "time-pos", session.get("position_seconds", 0))
                 paused = bool(self._mpv_get_property(session, "pause", session.get("state") == "paused"))
