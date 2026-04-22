@@ -101,7 +101,8 @@ class ProbeRC522BackendTest(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 rfid_worker.main()
 
-        post_uid.assert_called_once_with("ABC123")
+        self.assertGreaterEqual(post_uid.call_count, 1)
+        post_uid.assert_any_call("ABC123")
         self.assertTrue(reader.cleaned)
 
     def test_worker_posts_usb_uid_once_when_same_uid_repeats(self):
@@ -115,7 +116,8 @@ class ProbeRC522BackendTest(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 rfid_worker.main()
 
-        post_uid.assert_called_once_with("ABC123")
+        self.assertGreaterEqual(post_uid.call_count, 1)
+        post_uid.assert_any_call("ABC123")
         self.assertTrue(reader.cleaned)
 
     def test_presence_reader_posts_uid_after_boot_grace_when_tag_stays_present(self):
@@ -130,7 +132,8 @@ class ProbeRC522BackendTest(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 rfid_worker.main()
 
-        post_uid.assert_called_once_with("ABC123")
+        self.assertGreaterEqual(post_uid.call_count, 1)
+        post_uid.assert_any_call("ABC123")
         self.assertTrue(reader.cleaned)
 
     def test_presence_reader_posts_uid_after_configured_confirm_reads(self):
@@ -146,6 +149,23 @@ class ProbeRC522BackendTest(unittest.TestCase):
                 rfid_worker.main()
 
         post_uid.assert_called_once_with("ABC123")
+        self.assertTrue(reader.cleaned)
+
+    def test_presence_reader_refreshes_present_uid_to_enforce_tag_on_play(self):
+        reader = FakeReader(["ABC123", "ABC123", "ABC123", "ABC123", KeyboardInterrupt()])
+        reader.presence_reader = True
+
+        with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
+            rfid_worker, "build_reader", return_value=reader
+        ), patch.object(rfid_worker, "save_reader_status"), patch.object(
+            rfid_worker, "post_uid", return_value=200
+        ) as post_uid, patch.object(
+            rfid_worker.time, "monotonic", side_effect=[0.0, 0.1, 6.0, 6.1, 8.3, 8.4]
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                rfid_worker.main()
+
+        self.assertEqual([call.args[0] for call in post_uid.call_args_list], ["ABC123", "ABC123"])
         self.assertTrue(reader.cleaned)
 
     def test_presence_reader_does_not_post_unconfirmed_new_uid(self):
@@ -179,7 +199,7 @@ class ProbeRC522BackendTest(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 rfid_worker.main()
 
-        post_uid.assert_called_once_with("ABC123")
+        post_uid.assert_any_call("ABC123")
         post_remove.assert_not_called()
         self.assertTrue(reader.cleaned)
 
@@ -223,7 +243,7 @@ class ProbeRC522BackendTest(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 rfid_worker.main()
 
-        post_uid.assert_called_once_with("ABC123")
+        post_uid.assert_any_call("ABC123")
         post_remove.assert_not_called()
         self.assertTrue(reader.cleaned)
 

@@ -64,6 +64,7 @@ LINK_SESSION_CACHE_TTL_SECONDS = 0.15
 RFID_ACTIVE_SLEEP_SECONDS = 0.015
 RFID_ERROR_SLEEP_SECONDS = 0.25
 RFID_READER_MISSING_SLEEP_SECONDS = 0.3
+RFID_PRESENT_REFRESH_SECONDS = 2.0
 
 
 def load_setup():
@@ -775,6 +776,7 @@ def main():
     last_status = None
     present_uid = ""
     present_missing_polls = 0
+    last_present_post_at = 0.0
     ignored_uid = ""
     ignored_missing_polls = 0
     pending_uid = ""
@@ -797,6 +799,7 @@ def main():
                 last_status = None
                 present_uid = ""
                 present_missing_polls = 0
+                last_present_post_at = 0.0
                 ignored_uid = ""
                 ignored_missing_polls = 0
                 pending_uid = ""
@@ -856,6 +859,7 @@ def main():
             if should_reset_for_link_session or link_session_ended:
                 present_uid = ""
                 present_missing_polls = 0
+                last_present_post_at = 0.0
                 ignored_uid = ""
                 ignored_missing_polls = 0
                 pending_uid = ""
@@ -888,6 +892,7 @@ def main():
                     if post_succeeded(status_code):
                         present_uid = uid
                         present_missing_polls = 0
+                        last_present_post_at = now
                         ignored_uid = ""
                         ignored_missing_polls = 0
                         pending_uid = ""
@@ -915,6 +920,13 @@ def main():
                     present_missing_polls = 0
                     pending_uid = ""
                     pending_count = 0
+                    if now - last_present_post_at >= RFID_PRESENT_REFRESH_SECONDS:
+                        status_code = post_uid(uid)
+                        if post_failed(status_code):
+                            loop_sleep(reader, idle_interval=idle_interval, presence_interval=presence_interval, error=True)
+                            continue
+                        if post_succeeded(status_code):
+                            last_present_post_at = now
                     loop_sleep(reader, idle_interval=idle_interval, presence_interval=presence_interval, active=True)
                     continue
                 if present_uid:
@@ -957,6 +969,7 @@ def main():
                 if post_succeeded(status_code):
                     present_uid = uid
                     present_missing_polls = 0
+                    last_present_post_at = now
                     ignored_uid = ""
                     ignored_missing_polls = 0
                     pending_uid = ""
@@ -979,6 +992,7 @@ def main():
                 if not post_failed(status_code):
                     present_uid = ""
                     present_missing_polls = 0
+                    last_present_post_at = 0.0
                     load_link_session_cached(force=True)
                 else:
                     loop_sleep(reader, idle_interval=idle_interval, presence_interval=presence_interval, error=True)
