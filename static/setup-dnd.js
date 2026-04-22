@@ -125,7 +125,14 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       });
     }
-    readerForm.addEventListener("submit", () => {
+    readerForm.addEventListener("submit", (event) => {
+      const submitter = event.submitter;
+      if (submitter instanceof HTMLButtonElement && submitter.name === "reader_save") {
+        if (actionInput instanceof HTMLInputElement) {
+          actionInput.value = "save";
+        }
+        return;
+      }
       const action = actionInput instanceof HTMLInputElement ? (actionInput.value || "").trim() : "";
       if (!action) {
         return;

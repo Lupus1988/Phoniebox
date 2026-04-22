@@ -60,6 +60,7 @@ RFID_DEFAULT_PRESENCE_MISS_COUNT = 2
 SETUP_CACHE_TTL_SECONDS = 1.0
 LINK_SESSION_CACHE_TTL_SECONDS = 0.15
 RFID_ACTIVE_SLEEP_SECONDS = 0.015
+RFID_IDLE_SCAN_SECONDS = 0.05
 RFID_ERROR_SLEEP_SECONDS = 0.25
 RFID_READER_MISSING_SLEEP_SECONDS = 0.3
 
@@ -125,7 +126,7 @@ def loop_sleep(reader, presence_interval=RFID_DEFAULT_PRESENCE_INTERVAL_SECONDS,
         time.sleep(RFID_ERROR_SLEEP_SECONDS)
         return
     if getattr(reader, "presence_reader", False):
-        time.sleep(presence_interval)
+        time.sleep(presence_interval if active else RFID_IDLE_SCAN_SECONDS)
         return
     time.sleep(RFID_ACTIVE_SLEEP_SECONDS)
 
@@ -855,7 +856,7 @@ def main():
             if uid:
                 if link_session_waiting_for_uid:
                     if uid == last_link_uid:
-                        loop_sleep(reader, presence_interval=presence_interval)
+                        loop_sleep(reader, presence_interval=presence_interval, active=False)
                         continue
                     status_code = post_uid(uid)
                     if not post_failed(status_code):
@@ -868,11 +869,11 @@ def main():
 
                 if uid == present_uid:
                     present_missing_polls = 0
-                    loop_sleep(reader, presence_interval=presence_interval)
+                    loop_sleep(reader, presence_interval=presence_interval, active=True)
                     continue
                 if uid == ignored_uid:
                     ignored_missing_polls = 0
-                    loop_sleep(reader, presence_interval=presence_interval)
+                    loop_sleep(reader, presence_interval=presence_interval, active=True)
                     continue
 
                 status_code = post_uid(uid)
@@ -906,9 +907,9 @@ def main():
             if getattr(reader, "presence_reader", False) and ignored_uid and ignored_missing_polls >= presence_miss_count:
                 ignored_uid = ""
                 ignored_missing_polls = 0
-                loop_sleep(reader, presence_interval=presence_interval)
+                loop_sleep(reader, presence_interval=presence_interval, active=False)
                 continue
-            loop_sleep(reader, presence_interval=presence_interval)
+            loop_sleep(reader, presence_interval=presence_interval, active=bool(present_uid or ignored_uid))
     finally:
         if reader is not None:
             reader.cleanup()
