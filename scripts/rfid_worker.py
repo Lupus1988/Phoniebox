@@ -982,9 +982,6 @@ def main():
                     pending_count = 0
                 continue
 
-            pending_uid = ""
-            pending_count = 0
-
             if getattr(reader, "presence_reader", False) and present_uid:
                 present_missing_polls += 1
             if getattr(reader, "presence_reader", False) and present_uid and present_missing_polls >= presence_miss_count:

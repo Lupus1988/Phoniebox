@@ -169,7 +169,7 @@ class ProbeRC522BackendTest(unittest.TestCase):
         self.assertTrue(reader.cleaned)
 
     def test_presence_reader_does_not_post_unconfirmed_new_uid(self):
-        reader = FakeReader(["ABC123", "", "ABC123", KeyboardInterrupt()])
+        reader = FakeReader(["ABC123", "", KeyboardInterrupt()])
         reader.presence_reader = True
 
         with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
