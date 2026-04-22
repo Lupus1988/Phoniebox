@@ -163,6 +163,46 @@ class ProbeRC522BackendTest(unittest.TestCase):
         post_uid.assert_not_called()
         self.assertTrue(reader.cleaned)
 
+    def test_presence_reader_ignores_different_uid_until_current_tag_removed(self):
+        reader = FakeReader(["ABC123", "ABC123", "XYZ999", "XYZ999", "ABC123", KeyboardInterrupt()])
+        reader.presence_reader = True
+
+        with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
+            rfid_worker, "build_reader", return_value=reader
+        ), patch.object(rfid_worker, "save_reader_status"), patch.object(
+            rfid_worker, "post_uid", return_value=200
+        ) as post_uid, patch.object(
+            rfid_worker, "post_remove", return_value=200
+        ) as post_remove, patch.object(
+            rfid_worker.time, "monotonic", side_effect=[0.0, 0.1, 6.0, 6.1, 6.2, 6.3, 6.4, 6.5]
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                rfid_worker.main()
+
+        post_uid.assert_called_once_with("ABC123")
+        post_remove.assert_not_called()
+        self.assertTrue(reader.cleaned)
+
+    def test_presence_reader_accepts_different_uid_after_current_tag_removed(self):
+        reader = FakeReader(["ABC123", "ABC123", "", "", "XYZ999", "XYZ999", KeyboardInterrupt()])
+        reader.presence_reader = True
+
+        with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
+            rfid_worker, "build_reader", return_value=reader
+        ), patch.object(rfid_worker, "save_reader_status"), patch.object(
+            rfid_worker, "post_uid", return_value=200
+        ) as post_uid, patch.object(
+            rfid_worker, "post_remove", return_value=200
+        ) as post_remove, patch.object(
+            rfid_worker.time, "monotonic", side_effect=[0.0, 0.1, 6.0, 6.1, 6.2, 6.3, 6.4, 6.5, 6.6]
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                rfid_worker.main()
+
+        self.assertEqual([call.args[0] for call in post_uid.call_args_list], ["ABC123", "XYZ999"])
+        post_remove.assert_called_once_with("ABC123")
+        self.assertTrue(reader.cleaned)
+
     def test_presence_reader_does_not_post_remove_before_configured_miss_count(self):
         reader = FakeReader(["ABC123", "ABC123", "", "", "ABC123", KeyboardInterrupt()])
         reader.presence_reader = True

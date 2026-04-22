@@ -893,8 +893,18 @@ def main():
                     pending_count = 0
                     loop_sleep(reader, idle_interval=idle_interval, presence_interval=presence_interval, active=True)
                     continue
+                if present_uid:
+                    pending_uid = ""
+                    pending_count = 0
+                    loop_sleep(reader, idle_interval=idle_interval, presence_interval=presence_interval, active=True)
+                    continue
                 if uid == ignored_uid:
                     ignored_missing_polls = 0
+                    pending_uid = ""
+                    pending_count = 0
+                    loop_sleep(reader, idle_interval=idle_interval, presence_interval=presence_interval, active=True)
+                    continue
+                if ignored_uid:
                     pending_uid = ""
                     pending_count = 0
                     loop_sleep(reader, idle_interval=idle_interval, presence_interval=presence_interval, active=True)
