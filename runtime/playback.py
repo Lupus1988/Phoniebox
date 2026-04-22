@@ -13,20 +13,12 @@ from system.audio import detect_audio_environment, resolve_output_device
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-MP3_FRAMES_PER_SECOND = 38.28125
 MPV_STALL_GRACE_SECONDS = 5.0
 MPV_STALL_POSITION_EPSILON_SECONDS = 0.25
 
 
 def configured_backend():
-    setup_path = BASE_DIR / "data" / "setup.json"
-    try:
-        payload = json.loads(setup_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return "auto"
-    audio = payload.get("audio") or {}
-    preferred = str(audio.get("playback_backend", "auto") or "auto").strip().lower()
-    return preferred if preferred in {"auto", "mpv", "mpg123", "cvlc"} else "auto"
+    return "mpv"
 
 
 def configured_audio():
@@ -121,20 +113,14 @@ def backend_candidates():
     candidates = []
     if shutil.which("mpv"):
         candidates.append("mpv")
-    if shutil.which("mpg123"):
-        candidates.append("mpg123")
-    if shutil.which("cvlc"):
-        candidates.append("cvlc")
     candidates.append("mock")
     return candidates
 
 
 def detect_backend(preferred_backend=None):
     candidates = backend_candidates()
-    preferred = str(preferred_backend or configured_backend() or "auto").strip().lower()
-    if preferred not in {"auto", "mpv", "mpg123", "cvlc"}:
-        preferred = "auto"
-    backend = preferred if preferred != "auto" and preferred in candidates else (candidates[0] if candidates else "mock")
+    preferred = "mpv"
+    backend = "mpv" if "mpv" in candidates else "mock"
     return {
         "active_backend": backend,
         "available_backends": candidates,
@@ -441,28 +427,6 @@ class PlaybackController:
                 *( [f"--start={position_seconds}"] if position_seconds > 0 else [] ),
                 str(track_path),
             ]
-        if backend == "mpg123":
-            scale = max(0, min(32768, int(round((volume / 100) * 32768))))
-            command = ["mpg123", "-q", "-f", str(scale)]
-            if position_seconds > 0:
-                skip_frames = max(0, int(round(position_seconds * MP3_FRAMES_PER_SECOND)))
-                if skip_frames > 0:
-                    command.extend(["-k", str(skip_frames)])
-            command.append(str(track_path))
-            return command
-        if backend == "cvlc":
-            command = [
-                "cvlc",
-                "--intf",
-                "dummy",
-                "--play-and-exit",
-                "--no-video",
-                f"--volume={max(0, min(256, int(round(volume * 2.56))))}",
-            ]
-            if position_seconds > 0:
-                command.append(f"--start-time={position_seconds}")
-            command.append(str(track_path))
-            return command
         return []
 
     def _build_mpv_playlist_command(self, playlist_path, current_index=0, position_seconds=0, volume=50):

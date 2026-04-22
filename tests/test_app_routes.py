@@ -453,9 +453,11 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(setup["wifi"]["saved_networks"], [])
         self.assertFalse(setup["wifi"]["auto_wifi_off_enabled"])
         self.assertEqual(setup["wifi"]["auto_wifi_off_minutes"], 30)
-        self.assertEqual(setup["audio"]["playback_backend"], "auto")
+        self.assertNotIn("playback_backend", setup["audio"])
+        self.assertEqual(setup["reader"]["presence_interval_seconds"], 0.55)
+        self.assertEqual(setup["reader"]["presence_miss_count"], 2)
 
-    def test_setup_audio_save_accepts_playback_backend(self):
+    def test_setup_audio_save_ignores_playback_backend(self):
         setup = default_setup()
         runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
 
@@ -467,7 +469,7 @@ class AppRoutesTest(unittest.TestCase):
             response = self.client.post("/setup", data={"section": "audio", "output_mode": "usb_dac", "playback_backend": "mpg123"})
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(setup["audio"]["playback_backend"], "mpg123")
+        self.assertNotIn("playback_backend", setup["audio"])
         save_setup.assert_called_once_with(setup)
 
     def test_default_setup_includes_global_led_tuning_fields(self):
@@ -476,6 +478,14 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(setup["led_tuning"]["pwm_frequency_hz"], 800)
         self.assertEqual(setup["led_tuning"]["brightness_gamma"], 1.0)
         self.assertEqual(setup["led_tuning"]["update_rate_ms"], 70)
+
+    def test_normalize_setup_removes_legacy_playback_backend(self):
+        setup = default_setup()
+        setup["audio"]["playback_backend"] = "mpg123"
+
+        normalized = normalize_setup_data(setup)
+
+        self.assertNotIn("playback_backend", normalized["audio"])
 
     def test_setup_led_save_accepts_global_led_tuning_fields(self):
         setup = default_setup()

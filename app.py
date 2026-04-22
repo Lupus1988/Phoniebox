@@ -275,6 +275,8 @@ def default_setup():
             "target_type": READER_NONE_ID,
             "install_state": "not_installed",
             "needs_reboot": False,
+            "presence_interval_seconds": 0.55,
+            "presence_miss_count": 2,
             "last_action_message": "Noch kein Reader installiert.",
             "connection_hint": "USB-Reader anstecken oder Reader per SPI verdrahten",
         },
@@ -322,7 +324,6 @@ def default_setup():
         "audio": {
             "output_mode": "usb_dac",
             "i2s_profile": "auto",
-            "playback_backend": "auto",
             "connection_hint": "Onboard- oder USB-Soundkarte auswählen",
         },
         "wifi": {
@@ -624,6 +625,11 @@ def normalize_setup_data(data):
     target_type = normalize_reader_type(reader.get("target_type", installed_type))
     reader["type"] = installed_type
     reader["target_type"] = target_type
+    reader["presence_interval_seconds"] = round(
+        to_float(reader.get("presence_interval_seconds"), 0.55, 0.10, 5.00),
+        2,
+    )
+    reader["presence_miss_count"] = to_int(reader.get("presence_miss_count"), 2, 1, 20)
     state = (reader.get("install_state") or "").strip() or ("installed" if installed_type != READER_NONE_ID else "not_installed")
     needs_reboot = bool(reader.get("needs_reboot", False))
     reboot_requested_at = to_int(reader.get("reboot_requested_at"), 0, 0, 9999999999)
@@ -712,6 +718,11 @@ def normalize_setup_data(data):
     wifi["auto_wifi_off_minutes"] = to_int(wifi.get("auto_wifi_off_minutes"), 30, 1, 720)
     # Altbestand: allow_button_toggle bleibt nur als Legacy-Feld erhalten und ist ab jetzt immer aktiv.
     wifi["allow_button_toggle"] = legacy_allow not in {"off", False, "false", "0", 0}
+    audio = data.setdefault("audio", {})
+    if audio.get("output_mode") not in {"analog_jack", "usb_dac"}:
+        audio["output_mode"] = "usb_dac"
+    audio["i2s_profile"] = "auto"
+    audio.pop("playback_backend", None)
     return data
 
 
@@ -829,10 +840,7 @@ def apply_reader_install_action(data, action, selected_type):
 
 def build_audio_runtime_config(audio_setup, settings):
     config = dict(audio_setup or {})
-    selected_backend = str(config.get("playback_backend", "auto") or "auto").strip().lower()
-    if selected_backend not in {"auto", "mpv", "mpg123", "cvlc"}:
-        selected_backend = "auto"
-    config["playback_backend"] = selected_backend
+    config["playback_backend"] = "mpv"
     config["mixer_control"] = "auto"
     config["preferred_output"] = "auto"
     config["mono_downmix"] = False
@@ -1571,7 +1579,7 @@ def apply_settings_form(data, source):
     data["sleep_timer_button_rotation"] = source.get("sleep_timer_button_rotation") in {"on", True, "true", "1", 1}
     data["use_startup_volume"] = source.get("use_startup_volume") == "on"
     data["startup_volume"] = to_int(source.get("startup_volume"), data.get("startup_volume", 45), 0, 100)
-    data["rfid_read_action"] = source.get("rfid_read_action", data["rfid_read_action"])
+    data["rfid_read_action"] = "play"
     data["rfid_remove_action"] = source.get("rfid_remove_action", data["rfid_remove_action"])
     selected_profile = str(source.get("performance_profile", data.get("performance_profile", "auto")) or "auto").strip().lower()
     valid_profiles = {"auto", "pi_zero2w", "standard", "pi4_plus", "dev"}
@@ -1733,6 +1741,21 @@ def setup():
             action = request.form.get("reader_action", "").strip()
             selected_type = normalize_reader_type(request.form.get("reader_type", data.get("reader", {}).get("target_type")))
             data["reader"]["target_type"] = selected_type
+            data["reader"]["presence_interval_seconds"] = round(
+                to_float(
+                    request.form.get("presence_interval_seconds"),
+                    data["reader"].get("presence_interval_seconds", 0.55),
+                    0.10,
+                    5.00,
+                ),
+                2,
+            )
+            data["reader"]["presence_miss_count"] = to_int(
+                request.form.get("presence_miss_count"),
+                data["reader"].get("presence_miss_count", 2),
+                1,
+                20,
+            )
             if action in {"install", "uninstall"}:
                 result = apply_reader_install_action(data, action, selected_type)
                 redirect_kwargs = {}
@@ -1894,9 +1917,6 @@ def setup():
             audio["output_mode"] = request.form.get("output_mode", audio.get("output_mode", "usb_dac")).strip() or "usb_dac"
             if audio["output_mode"] not in {"analog_jack", "usb_dac"}:
                 audio["output_mode"] = "usb_dac"
-            audio["playback_backend"] = request.form.get("playback_backend", audio.get("playback_backend", "auto")).strip() or "auto"
-            if audio["playback_backend"] not in {"auto", "mpv", "mpg123", "cvlc"}:
-                audio["playback_backend"] = "auto"
             audio["i2s_profile"] = "auto"
             save_setup(data)
             audio_config = build_audio_runtime_config(audio, load_settings())

@@ -55,15 +55,11 @@ RUNTIME_RFID_REMOVE_URL = f"http://127.0.0.1:{PANEL_PORT}/api/runtime/rfid/remov
 VALID_RC522_VERSION_REG_VALUES = {0x91, 0x92}
 RC522_PROBE_ORDER = ((0, 25), (1, 25))
 RC522_DEFAULT_IRQ_PIN = None
-RFID_BOOT_SUPPRESS_SECONDS = 6.0
-RFID_UID_CONFIRM_SECONDS = 0.10
-RFID_REMOVE_CONFIRM_SECONDS = 0.35
-RFID_REMOVE_MISSING_POLLS = 6
-RFID_IGNORED_CLEAR_SECONDS = 1.0
+RFID_DEFAULT_PRESENCE_INTERVAL_SECONDS = 0.55
+RFID_DEFAULT_PRESENCE_MISS_COUNT = 2
 SETUP_CACHE_TTL_SECONDS = 1.0
 LINK_SESSION_CACHE_TTL_SECONDS = 0.15
 RFID_ACTIVE_SLEEP_SECONDS = 0.015
-RFID_IDLE_SLEEP_SECONDS = 0.03
 RFID_ERROR_SLEEP_SECONDS = 0.25
 RFID_READER_MISSING_SLEEP_SECONDS = 0.3
 
@@ -111,15 +107,25 @@ def cached_loader(loader, ttl_seconds):
     return load
 
 
-def loop_sleep(reader, observed_uid="", present_uid="", ignored_uid="", link_session_waiting=False, error=False):
+def reader_presence_config(setup):
+    reader = (setup or {}).get("reader") or {}
+    try:
+        interval = float(reader.get("presence_interval_seconds", RFID_DEFAULT_PRESENCE_INTERVAL_SECONDS) or RFID_DEFAULT_PRESENCE_INTERVAL_SECONDS)
+    except (TypeError, ValueError):
+        interval = RFID_DEFAULT_PRESENCE_INTERVAL_SECONDS
+    try:
+        miss_count = int(reader.get("presence_miss_count", RFID_DEFAULT_PRESENCE_MISS_COUNT) or RFID_DEFAULT_PRESENCE_MISS_COUNT)
+    except (TypeError, ValueError):
+        miss_count = RFID_DEFAULT_PRESENCE_MISS_COUNT
+    return max(0.10, min(5.00, interval)), max(1, min(20, miss_count))
+
+
+def loop_sleep(reader, presence_interval=RFID_DEFAULT_PRESENCE_INTERVAL_SECONDS, active=False, error=False):
     if error:
         time.sleep(RFID_ERROR_SLEEP_SECONDS)
         return
-    if link_session_waiting or observed_uid or present_uid or ignored_uid:
-        time.sleep(RFID_ACTIVE_SLEEP_SECONDS)
-        return
     if getattr(reader, "presence_reader", False):
-        time.sleep(RFID_IDLE_SLEEP_SECONDS)
+        time.sleep(presence_interval)
         return
     time.sleep(RFID_ACTIVE_SLEEP_SECONDS)
 
@@ -148,6 +154,20 @@ def post_uid(uid):
 def post_remove(uid=""):
     payload = {"uid": uid} if uid else {}
     return post_json(RUNTIME_RFID_REMOVE_URL, payload)
+
+
+def post_failed(status_code):
+    return status_code is None or (isinstance(status_code, int) and int(status_code) >= 500)
+
+
+def post_succeeded(status_code):
+    if isinstance(status_code, int):
+        return int(status_code) < 300
+    return status_code is not None
+
+
+def post_was_client_rejection(status_code):
+    return isinstance(status_code, int) and 400 <= int(status_code) < 500
 
 
 def save_reader_status(configured_type, ready, message, details=None):
@@ -739,17 +759,11 @@ def main():
     reader_type = None
     last_status = None
     present_uid = ""
-    present_seen_at = 0.0
     present_missing_polls = 0
     ignored_uid = ""
-    ignored_seen_at = 0.0
     ignored_missing_polls = 0
-    observed_uid = ""
-    observed_since = 0.0
-    observed_seen_at = 0.0
     last_link_uid = ""
     last_link_uid_at = 0.0
-    startup_deadline = time.monotonic() + RFID_BOOT_SUPPRESS_SECONDS
     last_link_session_marker = None
     load_setup_cached = cached_loader(load_setup, SETUP_CACHE_TTL_SECONDS)
     load_link_session_cached = cached_loader(load_link_session_state, LINK_SESSION_CACHE_TTL_SECONDS)
@@ -765,22 +779,18 @@ def main():
                 reader_type = configured_type
                 last_status = None
                 present_uid = ""
-                present_seen_at = 0.0
                 present_missing_polls = 0
                 ignored_uid = ""
-                ignored_seen_at = 0.0
                 ignored_missing_polls = 0
-                observed_uid = ""
-                observed_since = 0.0
-                observed_seen_at = 0.0
                 last_link_uid = ""
                 last_link_uid_at = 0.0
-                startup_deadline = time.monotonic() + RFID_BOOT_SUPPRESS_SECONDS
                 setup = load_setup_cached(force=True)
 
             if reader is None:
                 time.sleep(RFID_READER_MISSING_SLEEP_SECONDS)
                 continue
+
+            presence_interval, presence_miss_count = reader_presence_config(setup)
 
             current_status = (
                 reader_type,
@@ -799,7 +809,7 @@ def main():
 
             uid = reader.poll()
             now = time.monotonic()
-            force_link_session_refresh = bool(observed_uid or present_uid or ignored_uid)
+            force_link_session_refresh = bool(present_uid or ignored_uid)
             link_session = load_link_session_cached(force=force_link_session_refresh)
             current_link_session_active = bool(link_session.get("active"))
             current_link_session_marker = (
@@ -820,14 +830,9 @@ def main():
             link_session_ended = bool(last_link_session_marker and last_link_session_marker[0] and not current_link_session_active)
             if should_reset_for_link_session or link_session_ended:
                 present_uid = ""
-                present_seen_at = 0.0
                 present_missing_polls = 0
                 ignored_uid = ""
-                ignored_seen_at = 0.0
                 ignored_missing_polls = 0
-                observed_uid = ""
-                observed_since = 0.0
-                observed_seen_at = 0.0
                 last_link_uid = ""
                 last_link_uid_at = 0.0
             last_link_session_marker = current_link_session_marker
@@ -849,102 +854,61 @@ def main():
 
             if uid:
                 if link_session_waiting_for_uid:
-                    if uid == last_link_uid and (now - last_link_uid_at) < 1.0:
-                        loop_sleep(reader, observed_uid=observed_uid, present_uid=present_uid, ignored_uid=ignored_uid, link_session_waiting=True)
+                    if uid == last_link_uid:
+                        loop_sleep(reader, presence_interval=presence_interval)
                         continue
                     status_code = post_uid(uid)
-                    if status_code is not None and status_code < 500:
+                    if not post_failed(status_code):
                         last_link_uid = uid
                         last_link_uid_at = now
                         load_link_session_cached(force=True)
                     else:
-                        loop_sleep(reader, observed_uid=observed_uid, present_uid=present_uid, ignored_uid=ignored_uid, link_session_waiting=True, error=True)
+                        loop_sleep(reader, presence_interval=presence_interval, error=True)
                     continue
-
-                if uid != observed_uid:
-                    observed_uid = uid
-                    observed_since = now
-                observed_seen_at = now
 
                 if uid == present_uid:
-                    present_seen_at = now
                     present_missing_polls = 0
-                    loop_sleep(reader, observed_uid=observed_uid, present_uid=present_uid, ignored_uid=ignored_uid)
+                    loop_sleep(reader, presence_interval=presence_interval)
                     continue
                 if uid == ignored_uid:
-                    ignored_seen_at = now
                     ignored_missing_polls = 0
-                    loop_sleep(reader, observed_uid=observed_uid, present_uid=present_uid, ignored_uid=ignored_uid)
-                    continue
-                if now < startup_deadline or (
-                    not getattr(reader, "presence_reader", False)
-                    and (now - observed_since) < RFID_UID_CONFIRM_SECONDS
-                ):
-                    loop_sleep(reader, observed_uid=observed_uid, present_uid=present_uid, ignored_uid=ignored_uid)
+                    loop_sleep(reader, presence_interval=presence_interval)
                     continue
 
                 status_code = post_uid(uid)
-                if status_code is None or status_code >= 500:
-                    loop_sleep(reader, observed_uid=observed_uid, present_uid=present_uid, ignored_uid=ignored_uid, error=True)
+                if post_failed(status_code):
+                    loop_sleep(reader, presence_interval=presence_interval, error=True)
                     continue
-                observed_uid = ""
-                observed_since = 0.0
-                observed_seen_at = 0.0
-                if status_code < 300:
+                if post_succeeded(status_code):
                     present_uid = uid
-                    present_seen_at = now
                     present_missing_polls = 0
                     ignored_uid = ""
-                    ignored_seen_at = 0.0
                     ignored_missing_polls = 0
                     load_link_session_cached(force=True)
-                elif 400 <= status_code < 500:
+                elif post_was_client_rejection(status_code):
                     ignored_uid = uid
-                    ignored_seen_at = now
                     ignored_missing_polls = 0
                 continue
 
-            if (
-                getattr(reader, "presence_reader", False)
-                and observed_uid
-                and (now - observed_seen_at) < RFID_UID_CONFIRM_SECONDS
-            ):
-                loop_sleep(reader, observed_uid=observed_uid, present_uid=present_uid, ignored_uid=ignored_uid)
-                continue
-            observed_uid = ""
-            observed_since = 0.0
-            observed_seen_at = 0.0
             if getattr(reader, "presence_reader", False) and present_uid:
                 present_missing_polls += 1
-            if (
-                getattr(reader, "presence_reader", False)
-                and present_uid
-                and present_missing_polls >= RFID_REMOVE_MISSING_POLLS
-                and (now - present_seen_at) >= RFID_REMOVE_CONFIRM_SECONDS
-            ):
+            if getattr(reader, "presence_reader", False) and present_uid and present_missing_polls >= presence_miss_count:
                 status_code = post_remove(present_uid)
-                if status_code is not None and status_code < 500:
+                if not post_failed(status_code):
                     present_uid = ""
-                    present_seen_at = 0.0
                     present_missing_polls = 0
                     load_link_session_cached(force=True)
                 else:
-                    loop_sleep(reader, observed_uid=observed_uid, present_uid=present_uid, ignored_uid=ignored_uid, error=True)
+                    loop_sleep(reader, presence_interval=presence_interval, error=True)
                 continue
             if getattr(reader, "presence_reader", False) and ignored_uid:
                 ignored_missing_polls += 1
-            if (
-                getattr(reader, "presence_reader", False)
-                and ignored_uid
-                and ignored_missing_polls >= RFID_REMOVE_MISSING_POLLS
-                and (now - ignored_seen_at) >= RFID_IGNORED_CLEAR_SECONDS
-            ):
+            if getattr(reader, "presence_reader", False) and ignored_uid and ignored_missing_polls >= presence_miss_count:
                 ignored_uid = ""
-                ignored_seen_at = 0.0
                 ignored_missing_polls = 0
-                loop_sleep(reader, observed_uid=observed_uid, present_uid=present_uid, ignored_uid=ignored_uid)
+                loop_sleep(reader, presence_interval=presence_interval)
                 continue
-            loop_sleep(reader, observed_uid=observed_uid, present_uid=present_uid, ignored_uid=ignored_uid)
+            loop_sleep(reader, presence_interval=presence_interval)
     finally:
         if reader is not None:
             reader.cleanup()

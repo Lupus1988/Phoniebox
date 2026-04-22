@@ -47,6 +47,28 @@
           <a href="{{ url_for('download_reader_guide', reader_type=reader_option.id) }}">Anschlussplan für {{ reader_option.label }} herunterladen</a>
         </label>
         {% endif %}
+        <label>
+          <span>Prüfintervall</span>
+          <input
+            type="number"
+            name="presence_interval_seconds"
+            min="0.10"
+            max="5.00"
+            step="0.01"
+            value="{{ '%.2f'|format(setup_data.reader.presence_interval_seconds) }}"
+          >
+        </label>
+        <label>
+          <span>Fehllesungen bis entfernt</span>
+          <input
+            type="number"
+            name="presence_miss_count"
+            min="1"
+            max="20"
+            step="1"
+            value="{{ setup_data.reader.presence_miss_count }}"
+          >
+        </label>
       </div>
       <div class="setup-action-row">
         <button
@@ -70,15 +92,6 @@
             {% for option in audio_output_options %}
               <option value="{{ option.id }}" {% if setup_data.audio.output_mode == option.id %}selected{% endif %}>{{ option.label }}</option>
             {% endfor %}
-          </select>
-        </label>
-        <label>
-          <span>Playback-Backend</span>
-          <select name="playback_backend">
-            <option value="auto" {% if setup_data.audio.playback_backend == 'auto' %}selected{% endif %}>Automatisch</option>
-            <option value="mpv" {% if setup_data.audio.playback_backend == 'mpv' %}selected{% endif %}>mpv</option>
-            <option value="mpg123" {% if setup_data.audio.playback_backend == 'mpg123' %}selected{% endif %}>mpg123</option>
-            <option value="cvlc" {% if setup_data.audio.playback_backend == 'cvlc' %}selected{% endif %}>cvlc</option>
           </select>
         </label>
       </div>

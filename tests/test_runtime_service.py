@@ -661,7 +661,7 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(player["duration_seconds"], 222)
         self.assertEqual(player["position_seconds"], 12)
 
-    def test_reader_behavior_comes_from_settings_only(self):
+    def test_reader_behavior_always_plays_and_uses_remove_setting(self):
         write_json(
             self.data_dir / "settings.json",
             {
@@ -689,7 +689,7 @@ class RuntimeServiceTest(unittest.TestCase):
 
         behavior = self.service.get_reader_behavior()
 
-        self.assertEqual(behavior["read"], "queue_append")
+        self.assertEqual(behavior["read"], "play")
         self.assertEqual(behavior["remove"], "pause")
 
     def test_reset_state_returns_clean_runtime(self):

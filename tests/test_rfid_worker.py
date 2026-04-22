@@ -90,7 +90,7 @@ class ProbeRC522BackendTest(unittest.TestCase):
 
         self.assertTrue(result["ok"])
 
-    def test_worker_suppresses_uid_posts_during_boot_grace_period(self):
+    def test_worker_posts_uid_immediately_without_boot_grace_period(self):
         reader = FakeReader(["ABC123", KeyboardInterrupt()])
 
         with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
@@ -101,10 +101,10 @@ class ProbeRC522BackendTest(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 rfid_worker.main()
 
-        post_uid.assert_not_called()
+        post_uid.assert_called_once_with("ABC123")
         self.assertTrue(reader.cleaned)
 
-    def test_worker_requires_short_uid_confirmation_before_post(self):
+    def test_worker_posts_usb_uid_once_when_same_uid_repeats(self):
         reader = FakeReader(["ABC123", "ABC123", KeyboardInterrupt()])
 
         with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "USB"}}), patch.object(
@@ -148,11 +148,15 @@ class ProbeRC522BackendTest(unittest.TestCase):
         post_uid.assert_called_once_with("ABC123")
         self.assertTrue(reader.cleaned)
 
-    def test_presence_reader_does_not_post_remove_during_short_read_gap(self):
+    def test_presence_reader_does_not_post_remove_before_configured_miss_count(self):
         reader = FakeReader(["ABC123", "ABC123", "", "", "ABC123", KeyboardInterrupt()])
         reader.presence_reader = True
 
-        with patch.object(rfid_worker, "load_setup", return_value={"reader": {"type": "RC522"}}), patch.object(
+        with patch.object(
+            rfid_worker,
+            "load_setup",
+            return_value={"reader": {"type": "RC522", "presence_miss_count": 3, "presence_interval_seconds": 0.55}},
+        ), patch.object(
             rfid_worker, "build_reader", return_value=reader
         ), patch.object(rfid_worker, "save_reader_status"), patch.object(
             rfid_worker, "post_uid", return_value=200

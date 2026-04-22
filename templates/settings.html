@@ -65,13 +65,6 @@
       </div>
       <div class="settings-list wide-copy">
         <label>
-          <span>Beim Lesen eines verlinkten Tags</span>
-          <select name="rfid_read_action">
-            <option value="play" {% if settings.rfid_read_action == "play" %}selected{% endif %}>Album laden und Abspielen</option>
-            <option value="album_load" {% if settings.rfid_read_action == "album_load" %}selected{% endif %}>Album nur Laden</option>
-          </select>
-        </label>
-        <label>
           <span>Beim Entfernen eines verlinkten Tags</span>
           <select name="rfid_remove_action">
             <option value="stop" {% if settings.rfid_remove_action == "stop" %}selected{% endif %}>Wiedergabe stoppen</option>

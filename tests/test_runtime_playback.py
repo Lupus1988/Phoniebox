@@ -88,14 +88,23 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertFalse(ready)
         self.assertEqual(reason, "USB-Soundkarte ohne nutzbares ALSA-Playback-Gerät.")
 
-    def test_detect_backend_prefers_configured_backend_when_available(self):
-        with patch.object(playback_module, "configured_backend", return_value="mpg123"), patch.object(
-            playback_module.shutil, "which", side_effect=lambda name: "/usr/bin/" + name if name in {"mpv", "mpg123"} else None
+    def test_detect_backend_uses_mpv_when_available(self):
+        with patch.object(
+            playback_module.shutil, "which", side_effect=lambda name: "/usr/bin/" + name if name == "mpv" else None
         ):
             status = playback_module.detect_backend()
 
-        self.assertEqual(status["preferred_backend"], "mpg123")
-        self.assertEqual(status["active_backend"], "mpg123")
+        self.assertEqual(status["preferred_backend"], "mpv")
+        self.assertEqual(status["active_backend"], "mpv")
+        self.assertEqual(status["available_backends"], ["mpv", "mock"])
+
+    def test_detect_backend_uses_mock_when_mpv_is_missing(self):
+        with patch.object(playback_module.shutil, "which", return_value=None):
+            status = playback_module.detect_backend()
+
+        self.assertEqual(status["preferred_backend"], "mpv")
+        self.assertEqual(status["active_backend"], "mock")
+        self.assertFalse(status["system_ready"])
 
     def test_terminate_known_process_reaps_registered_handle(self):
         process = Mock()
@@ -116,7 +125,7 @@ class PlaybackControllerTest(unittest.TestCase):
         process.pid = 9876
         process.poll.side_effect = [None, None]
         process.wait.side_effect = [
-            playback_module.subprocess.TimeoutExpired(cmd="mpg123", timeout=0.75),
+            playback_module.subprocess.TimeoutExpired(cmd="mpv", timeout=0.75),
             None,
         ]
         self.controller._processes[process.pid] = process
@@ -128,35 +137,6 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertEqual(process.wait.call_args_list[1].kwargs["timeout"], 0.5)
         self.assertEqual(signal_group.call_args_list[2].args, (process.pid, signal.SIGKILL))
         self.assertNotIn(process.pid, self.controller._processes)
-
-    def test_set_volume_restarts_mpg123_from_current_position(self):
-        session = {
-            "backend": "mpg123",
-            "state": "playing",
-            "pid": 1234,
-            "position_seconds": 41,
-            "started_at": 100.0,
-            "volume": 45,
-        }
-
-        def fake_launch(current):
-            current["state"] = "playing"
-            current["pid"] = 5678
-            current["started_at"] = 200.0
-            return current
-
-        with patch.object(self.controller, "sync_session", return_value=dict(session)) as sync_session:
-            with patch.object(self.controller, "_terminate_process_group") as terminate_group:
-                with patch.object(self.controller, "_launch", side_effect=fake_launch) as launch:
-                    updated = self.controller.set_volume(dict(session), 52)
-
-        sync_session.assert_called_once()
-        terminate_group.assert_called_once_with(1234)
-        launch.assert_called_once()
-        self.assertEqual(updated["volume"], 52)
-        self.assertEqual(updated["pid"], 5678)
-        self.assertEqual(updated["state"], "playing")
-        self.assertEqual(updated["position_seconds"], 41)
 
     def test_launch_reports_error_when_configured_audio_output_is_missing(self):
         session = {
@@ -175,14 +155,6 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertEqual(updated["state"], "error")
         self.assertEqual(updated["error"], "USB-Soundkarte nicht erkannt.")
         self.assertIsNone(updated["pid"])
-
-    def test_build_command_for_mpg123_uses_frame_skip_for_resume(self):
-        command = self.controller._build_command("mpg123", "/tmp/test.mp3", position_seconds=37, volume=50)
-
-        self.assertEqual(command[:4], ["mpg123", "-q", "-f", "16384"])
-        self.assertIn("-k", command)
-        self.assertIn("1416", command)
-        self.assertEqual(command[-1], "/tmp/test.mp3")
 
     def test_set_volume_uses_mpv_ipc_without_relaunch(self):
         session = {
