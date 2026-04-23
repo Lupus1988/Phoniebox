@@ -27,11 +27,14 @@ class AudioWatchdogTest(unittest.TestCase):
             (device / "power" / "control").write_text("auto", encoding="utf-8")
             (device / "power" / "autosuspend_delay_ms").write_text("2000", encoding="utf-8")
             (interface / "bInterfaceClass").write_text("01", encoding="utf-8")
+            usbcore_autosuspend = sysfs / "usbcore_autosuspend"
+            usbcore_autosuspend.write_text("2", encoding="utf-8")
 
-            with patch.object(audio_watchdog, "USB_SYSFS", sysfs):
+            with patch.object(audio_watchdog, "USB_SYSFS", sysfs), patch.object(audio_watchdog, "USBCORE_AUTOSUSPEND", usbcore_autosuspend):
                 touched = audio_watchdog.disable_usb_audio_autosuspend()
 
-            self.assertEqual(len(touched), 1)
+            self.assertEqual(len(touched), 2)
+            self.assertEqual(usbcore_autosuspend.read_text(encoding="utf-8"), "-1")
             self.assertEqual((device / "power" / "control").read_text(encoding="utf-8"), "on")
             self.assertEqual((device / "power" / "autosuspend_delay_ms").read_text(encoding="utf-8"), "-1")
 

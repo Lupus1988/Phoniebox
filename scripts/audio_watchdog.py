@@ -16,6 +16,7 @@ from runtime.service import RuntimeService, default_runtime_state
 
 USB_SYSFS = Path("/sys/bus/usb/devices")
 USB_AUDIO_CLASS = "01"
+USBCORE_AUTOSUSPEND = Path("/sys/module/usbcore/parameters/autosuspend")
 
 
 def _read_text(path):
@@ -60,6 +61,16 @@ def usb_audio_devices():
 
 def disable_usb_audio_autosuspend():
     touched = []
+    if USBCORE_AUTOSUSPEND.exists() and _read_text(USBCORE_AUTOSUSPEND) != "-1":
+        if _write_text(USBCORE_AUTOSUSPEND, "-1"):
+            touched.append(
+                {
+                    "path": str(USBCORE_AUTOSUSPEND),
+                    "vendor": "usbcore",
+                    "product": "autosuspend",
+                    "name": "Global USB autosuspend disabled",
+                }
+            )
     for device in usb_audio_devices():
         power_dir = device / "power"
         control = power_dir / "control"

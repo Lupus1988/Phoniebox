@@ -3,6 +3,7 @@ set -euo pipefail
 
 APP_DIR=/opt/phoniebox-panel
 SERVICE_DIR=/etc/systemd/system
+UDEV_RULES_DIR=/etc/udev/rules.d
 BIN_DIR=/usr/local/bin
 VENV_DIR="$APP_DIR/.venv"
 SOURCE_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -152,6 +153,7 @@ sudo cp systemd/phoniebox-network-bootstrap.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-runtime-tick.service "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-runtime-tick.timer "$SERVICE_DIR"/
 sudo cp systemd/phoniebox-hdmi-off.service "$SERVICE_DIR"/
+sudo cp udev/99-phoniebox-usb-audio-power.rules "$UDEV_RULES_DIR"/
 
 sudo python3 -m venv "$VENV_DIR"
 sudo "$VENV_DIR/bin/pip" install --upgrade pip
@@ -192,6 +194,8 @@ EOF
 fi
 
 sudo systemctl daemon-reload
+sudo udevadm control --reload-rules || true
+sudo udevadm trigger --subsystem-match=usb || true
 sudo systemctl enable NetworkManager.service
 sudo systemctl disable --now bluetooth.service 2>/dev/null || true
 sudo systemctl disable --now hciuart.service 2>/dev/null || true
