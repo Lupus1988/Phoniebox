@@ -777,6 +777,7 @@ def import_album_folder(files, album_name, rfid_uid=""):
         "playlist": playlist_path.relative_to(BASE_DIR).as_posix(),
         "track_count": len(audio_files),
         "rfid_uid": rfid_uid.strip(),
+        "rfid_comment": "",
         "cover_url": cover_url,
     }
     album_entry = refresh_album_metadata(album_entry)
@@ -879,6 +880,7 @@ def create_empty_album(album_name, rfid_uid=""):
         "playlist": playlist_path.relative_to(BASE_DIR).as_posix(),
         "track_count": 0,
         "rfid_uid": rfid_uid.strip(),
+        "rfid_comment": "",
         "cover_url": "",
         "shuffle_enabled": False,
         "tracks": [],
@@ -1076,6 +1078,7 @@ def track_rows(album):
 def enrich_library_data(library_data):
     for album in library_data.get("albums", []):
         album["shuffle_enabled"] = bool(album.get("shuffle_enabled", False))
+        album["rfid_comment"] = str(album.get("rfid_comment", "") or "").strip()
         refresh_album_metadata(album)
     return library_data
 
@@ -1134,6 +1137,7 @@ def album_editor_payload(album, message=""):
             "name": album.get("name", ""),
             "track_count": int(album.get("track_count", 0) or 0),
             "rfid_uid": album.get("rfid_uid", ""),
+            "rfid_comment": album.get("rfid_comment", ""),
             "playlist": album.get("playlist", ""),
             "shuffle_enabled": bool(album.get("shuffle_enabled", False)),
         },
@@ -1178,6 +1182,7 @@ def apply_link_uid(album_id, uid):
         updated = finish_link_session(session, "conflict", "Tag bereits anderweitig verlinkt", uid)
         return {"ok": False, "message": updated["message"], "link_session": updated}, 409
     target["rfid_uid"] = uid
+    target["rfid_comment"] = str(target.get("rfid_comment", "") or "").strip()
     save_library(library_data)
     updated = finish_link_session(session, "linked", f"Tag mit {target['name']} verknüpft", uid)
     return {"ok": True, "linked_album": target, "link_session": updated}, 200

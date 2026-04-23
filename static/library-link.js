@@ -910,6 +910,46 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  async function saveRfidComment(input) {
+    if (!(input instanceof HTMLInputElement)) {
+      return;
+    }
+    const albumId = input.dataset.albumId || "";
+    const nextValue = input.value || "";
+    const previousValue = input.dataset.lastSavedValue ?? "";
+    if (!albumId || nextValue === previousValue) {
+      return;
+    }
+
+    input.disabled = true;
+    const data = new FormData();
+    data.append("action", "update_rfid_comment");
+    data.append("album_id", albumId);
+    data.append("rfid_comment", nextValue);
+
+    try {
+      const response = await fetch("/library", {
+        method: "POST",
+        headers: {"X-Requested-With": "XMLHttpRequest"},
+        body: data,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.ok === false) {
+        input.value = previousValue;
+        return;
+      }
+      input.dataset.lastSavedValue = nextValue;
+      const album = findAlbum(albumId);
+      if (album) {
+        album.rfid_comment = nextValue;
+      }
+    } catch (_error) {
+      input.value = previousValue;
+    } finally {
+      input.disabled = false;
+    }
+  }
+
   function openDeleteModal(albumId, albumName) {
     pendingDeleteAlbum = {id: albumId, name: albumName};
     if (deleteAlbumName) {
@@ -1011,6 +1051,23 @@ document.addEventListener("DOMContentLoaded", () => {
     button.addEventListener("click", async (event) => {
       event.preventDefault();
       await submitRuntimeAction(button);
+    });
+  }
+
+  for (const input of document.querySelectorAll("[data-rfid-comment-input]")) {
+    if (!(input instanceof HTMLInputElement)) {
+      continue;
+    }
+    input.dataset.lastSavedValue = input.value || "";
+    input.addEventListener("blur", () => {
+      saveRfidComment(input);
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") {
+        return;
+      }
+      event.preventDefault();
+      input.blur();
     });
   }
 

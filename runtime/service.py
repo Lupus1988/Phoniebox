@@ -2175,30 +2175,18 @@ class RuntimeService:
             if entries and current_index + 1 < len(entries):
                 current_index += 1
                 session = runtime_state.get("playback_session", {})
-                if self._session_matches_playlist(session, player, entries):
-                    advanced_session = self.playback.next_track(session)
-                    if int(advanced_session.get("current_index", -1) or -1) == current_index:
-                        runtime_state["playback_session"] = advanced_session
-                    else:
-                        runtime_state["playback_session"] = self.playback.open_track(
-                            player.get("playlist", ""),
-                            entries[current_index],
-                            0,
-                            volume=player.get("volume", 45),
-                            previous_session=session,
-                            current_index=current_index,
-                            entries=entries,
-                        )
-                else:
-                    runtime_state["playback_session"] = self.playback.open_track(
-                        player.get("playlist", ""),
-                        entries[current_index],
-                        0,
-                        volume=player.get("volume", 45),
-                        previous_session=session,
-                        current_index=current_index,
-                        entries=entries,
-                    )
+                # The player runs mpv in single-track mode. Re-open the concrete
+                # next entry explicitly so we never carry a stale seek position
+                # or mismatched current_index into the next title.
+                runtime_state["playback_session"] = self.playback.open_track(
+                    player.get("playlist", ""),
+                    entries[current_index],
+                    0,
+                    volume=player.get("volume", 45),
+                    previous_session=session,
+                    current_index=current_index,
+                    entries=entries,
+                )
                 runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
             elif player.get("queued_tracks"):
                 queued_tracks = list(player.get("queued_tracks", []))

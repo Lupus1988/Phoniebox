@@ -58,6 +58,7 @@ class AppRoutesTest(unittest.TestCase):
                     "playlist": "media/albums/test/playlist.m3u",
                     "track_count": 2,
                     "rfid_uid": "",
+                    "rfid_comment": "Blaue Figur",
                     "cover_url": "",
                     "track_entries": ["eins.mp3", "zwei.mp3"],
                 }
@@ -69,9 +70,40 @@ class AppRoutesTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Albumname", response.get_data(as_text=True))
+        self.assertIn("Tag-Kommentar", response.get_data(as_text=True))
+        self.assertIn("Blaue Figur", response.get_data(as_text=True))
         self.assertIn("Auswahl löschen", response.get_data(as_text=True))
         self.assertIn("Auswahl 0/2", response.get_data(as_text=True))
         refresh_album.assert_called_once()
+
+    def test_library_album_rename_album_updates_tag_comment(self):
+        album = {
+            "id": "album-1",
+            "name": "Testalbum",
+            "folder": "media/albums/test",
+            "playlist": "media/albums/test/playlist.m3u",
+            "track_count": 2,
+            "rfid_uid": "ABC123",
+            "rfid_comment": "",
+            "cover_url": "",
+            "track_entries": ["eins.mp3", "zwei.mp3"],
+        }
+        library_payload = {"albums": [album]}
+
+        with patch("routes.library.load_library", return_value=library_payload), patch(
+            "routes.library.save_library"
+        ) as save_library:
+            response = self.client.post(
+                "/library/album/album-1",
+                data={"action": "rename_album", "name": "Testalbum", "rfid_comment": "rote Karte"},
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        self.assertEqual(response.get_json()["message"], "Albumdaten aktualisiert.")
+        self.assertEqual(album["rfid_comment"], "rote Karte")
+        save_library.assert_called_once_with(library_payload)
 
     def test_setup_page_hides_reader_details_when_reader_is_ready(self):
         runtime_snapshot = {"runtime": {"hardware": {"profile": {"reader": {"notes": ["Interne Notiz"]}}}}}

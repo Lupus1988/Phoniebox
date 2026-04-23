@@ -110,6 +110,7 @@ def register_library_routes(app):
                     "playlist": request.form.get("playlist", "").strip(),
                     "track_count": to_int(request.form.get("track_count"), 0, 0, 5000),
                     "rfid_uid": rfid_uid,
+                    "rfid_comment": request.form.get("rfid_comment", "").strip(),
                     "cover_url": cover_url,
                 }
                 existing = next((album for album in albums if album["id"] == album_id), None)
@@ -141,6 +142,15 @@ def register_library_routes(app):
                 target_album["rfid_uid"] = ""
                 save_library(library_data)
                 return library_action_response(True, "RFID-Zuordnung entfernt.", "success", album=target_album)
+
+            if action == "update_rfid_comment":
+                album_id = request.form.get("album_id", "").strip()
+                target_album = next((album for album in albums if album["id"] == album_id), None)
+                if not target_album:
+                    return library_action_response(False, "Album nicht gefunden.", "error", 404)
+                target_album["rfid_comment"] = request.form.get("rfid_comment", "").strip()
+                save_library(library_data)
+                return library_action_response(True, "Tag-Kommentar gespeichert.", "success", album=target_album)
 
             if action == "play_album":
                 album_id = request.form.get("album_id", "").strip()
@@ -234,6 +244,7 @@ def register_library_routes(app):
             try:
                 if action == "rename_album":
                     name = request.form.get("name", "").strip()
+                    rfid_comment = request.form.get("rfid_comment", "").strip()
                     if not name:
                         return album_editor_response(album_id, False, "Albumname ist erforderlich.", "error", 400)
                     conflict = next(
@@ -247,8 +258,9 @@ def register_library_routes(app):
                     if conflict:
                         return album_editor_response(album_id, False, f"Albumname bereits vorhanden: {conflict['name']}.", "error", 400)
                     album["name"] = name
+                    album["rfid_comment"] = rfid_comment
                     save_library(library_data)
-                    return _album_editor_json(album, "Albumname aktualisiert.") if is_json_request() else album_editor_response(album_id, True, "Albumname aktualisiert.", "success")
+                    return _album_editor_json(album, "Albumdaten aktualisiert.") if is_json_request() else album_editor_response(album_id, True, "Albumdaten aktualisiert.", "success")
 
                 if action == "add_tracks":
                     add_result = add_tracks_to_album(album, request.files.getlist("track_files"))

@@ -250,25 +250,17 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(queued_track["player"]["current_album"], "Queuealbum")
         self.assertEqual(queued_track["player"]["queue"], [])
 
-    def test_next_track_uses_backend_playlist_advance_when_available(self):
+    def test_next_track_reopens_explicit_target_entry(self):
         self.service.load_album_by_id("album-1", autoplay=True)
-        runtime_state = self.service.ensure_runtime()
-        advanced_session = {
-            **runtime_state["playback_session"],
-            "current_index": 1,
-            "entry": "02-weiter.mp3",
-            "state": "playing",
-            "position_seconds": 0,
-        }
-
-        with patch.object(self.service.playback, "next_track", return_value=advanced_session) as next_track:
+        with patch.object(self.service.playback, "next_track", wraps=self.service.playback.next_track) as next_track:
             with patch.object(self.service.playback, "open_track", wraps=self.service.playback.open_track) as open_track:
                 result = self.service.next_track(autoplay=True)
 
-        next_track.assert_called_once()
-        open_track.assert_not_called()
+        next_track.assert_not_called()
+        open_track.assert_called_once()
         self.assertEqual(result["player"]["current_track_index"], 1)
         self.assertEqual(result["player"]["current_track"], "02 weiter")
+        self.assertEqual(result["player"]["position_seconds"], 0)
 
     def test_queue_album_without_active_player_primes_first_track(self):
         queued = self.service.queue_album_by_id("album-2")
@@ -787,6 +779,30 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(repeated["runtime"]["active_rfid_uid"], "1234567890")
         self.assertEqual(repeated["player"]["playlist_entries"], ["02-weiter.mp3", "01-start.mp3"])
         self.assertEqual(repeated["player"]["current_track_index"], 1)
+
+    def test_next_track_reopens_target_entry_at_zero_when_session_state_is_stale(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        runtime_state = self.service.ensure_runtime()
+        player = self.service.load_player()
+        stale_session = {
+            **runtime_state["playback_session"],
+            "backend": "mpv",
+            "state": "playing",
+            "current_index": 1,
+            "position_seconds": 47,
+        }
+        runtime_state["playback_session"] = stale_session
+        self.service.save_runtime(runtime_state)
+
+        with patch.object(self.service.playback, "open_track", wraps=self.service.playback.open_track) as open_track:
+            advanced = self.service.next_track()
+
+        self.assertEqual(open_track.call_count, 1)
+        self.assertEqual(advanced["player"]["current_track_index"], 1)
+        self.assertEqual(advanced["player"]["current_track"], "02 weiter")
+        self.assertEqual(advanced["player"]["position_seconds"], 0)
+        self.assertEqual(advanced["runtime"]["playback_session"]["position_seconds"], 0)
+        self.assertEqual(advanced["runtime"]["playback_session"]["current_index"], 1)
 
     def test_presence_rfid_panel_next_at_album_end_does_not_reload_shuffle_album(self):
         write_json(

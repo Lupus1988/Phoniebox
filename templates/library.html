@@ -61,7 +61,18 @@
           </div>
           <div class="library-cell library-tag-cell">
             <div class="library-cell-title">Tag-ID</div>
-            <div class="library-value-box mono">{{ album.rfid_uid or "" }}</div>
+            <div class="library-value-box library-tag-box">
+              <input
+                type="text"
+                class="library-tag-comment-input"
+                data-rfid-comment-input
+                data-album-id="{{ album.id }}"
+                value="{{ album.rfid_comment or '' }}"
+                placeholder="Figur / Farbe / Kommentar"
+                aria-label="Tag-Kommentar für {{ album.name }}"
+              >
+              <div class="library-tag-id mono">{{ album.rfid_uid or "" }}</div>
+            </div>
           </div>
           <div class="library-action-cell">
             <div class="library-cell-title">Play</div>

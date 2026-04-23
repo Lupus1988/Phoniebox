@@ -14,6 +14,16 @@
             <span>Albumname</span>
             <input type="text" name="name" id="album-name-input" value="{{ album.name }}" required>
           </label>
+          <label class="album-inline-field">
+            <span>Tag-Kommentar</span>
+            <input
+              type="text"
+              name="rfid_comment"
+              id="album-rfid-comment-input"
+              value="{{ album.get('rfid_comment', '') }}"
+              placeholder="z. B. Feuerwehrmann, blau, Elsa"
+            >
+          </label>
           <button type="submit" class="album-icon-button" aria-label="Albumname speichern" title="Albumname speichern">
             <svg viewBox="0 0 64 64" aria-hidden="true">
               <path d="M14 12h30l6 6v34H14z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
@@ -150,6 +160,6 @@
     </div>
   </div>
 
-  <script id="album-editor-json" type="application/json">{{ {"album": {"id": album.id, "name": album.name, "track_count": album.track_count, "rfid_uid": album.rfid_uid, "playlist": album.playlist, "shuffle_enabled": album.get('shuffle_enabled', False)}, "track_rows": track_rows} | tojson }}</script>
+  <script id="album-editor-json" type="application/json">{{ {"album": {"id": album.id, "name": album.name, "track_count": album.track_count, "rfid_uid": album.rfid_uid, "rfid_comment": album.get('rfid_comment', ''), "playlist": album.playlist, "shuffle_enabled": album.get('shuffle_enabled', False)}, "track_rows": track_rows} | tojson }}</script>
   <script src="{{ url_for('static', filename='album-editor.js', v=asset_version) }}"></script>
 {% endblock %}

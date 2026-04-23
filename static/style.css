@@ -897,8 +897,49 @@ label {
 .library-tag-cell .library-value-box {
   min-height: 78px;
   font-size: 0.95rem;
-  justify-items: center;
   text-align: center;
+}
+
+.library-tag-box {
+  align-content: center;
+  gap: 0.35rem;
+}
+
+.library-tag-comment,
+.library-tag-id {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-tag-comment-input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.22rem 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.15;
+  text-align: center;
+}
+
+.library-tag-comment-input::placeholder {
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+.library-tag-comment-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(124, 170, 255, 0.15);
+}
+
+.library-tag-id {
+  font-size: 0.95rem;
+  color: var(--ink);
 }
 
 .rfid-status-badge {
