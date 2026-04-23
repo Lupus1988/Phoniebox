@@ -2428,6 +2428,25 @@ class RuntimeService:
                 self.save_player(result["player"])
                 return {"ok": True, "runtime": result["runtime"], "player": result["player"]}
 
+            if same_uid_active and same_album_active and runtime_state.get("playback_state") == "stopped" and session_has_track:
+                entries = list(player.get("playlist_entries", []))
+                current_index = max(0, int(player.get("current_track_index", 0) or 0))
+                if (entries and current_index + 1 < len(entries)) or player.get("queued_tracks"):
+                    result = self.next_track(runtime_state=runtime_state, player=player, autoplay=True)
+                    result["runtime"]["active_rfid_uid"] = normalized_uid
+                    result["runtime"]["manual_pause_rfid_uid"] = ""
+                    result["runtime"]["hardware"]["last_scanned_uid"] = normalized_uid
+                    self.save_runtime(result["runtime"])
+                    self.save_player(result["player"])
+                    return {"ok": True, "runtime": result["runtime"], "player": result["player"]}
+                runtime_state["manual_pause_rfid_uid"] = ""
+                runtime_state = self.update_hardware_profile(runtime_state)
+                runtime_state = self.apply_wifi_policy(runtime_state)
+                runtime_state = self.update_led_status(runtime_state)
+                self.save_runtime(runtime_state)
+                self.save_player(player)
+                return {"ok": True, "runtime": runtime_state, "player": player}
+
             if same_uid_active and same_album_active and runtime_state.get("playback_state") == "playing" and session_has_track:
                 runtime_state["manual_pause_rfid_uid"] = ""
                 runtime_state = self.update_hardware_profile(runtime_state)
