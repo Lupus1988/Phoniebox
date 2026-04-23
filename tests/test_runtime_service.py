@@ -676,6 +676,152 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(repeated["player"]["position_seconds"], 37)
         self.assertFalse(repeated["player"]["is_playing"])
 
+    def test_presence_rfid_panel_stop_blocks_reload_while_tag_stays_present(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {
+                    "type": "RC522",
+                    "connection_hint": "",
+                },
+                "buttons": [],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        self.service.assign_album_by_rfid("1234567890")
+        stopped = self.service.stop()
+
+        with patch.object(self.service, "load_album_into_player", wraps=self.service.load_album_into_player) as load_album:
+            repeated = self.service.assign_album_by_rfid("1234567890")
+
+        self.assertEqual(stopped["runtime"]["playback_state"], "stopped")
+        self.assertEqual(stopped["runtime"]["playback_session"], {})
+        self.assertEqual(stopped["runtime"]["active_album_id"], "album-1")
+        self.assertEqual(stopped["runtime"]["active_rfid_uid"], "1234567890")
+        self.assertEqual(stopped["runtime"]["manual_pause_rfid_uid"], "1234567890")
+        self.assertEqual(stopped["player"]["current_album"], "")
+        self.assertEqual(stopped["player"]["playlist_entries"], [])
+        self.assertEqual(stopped["player"]["queue"], [])
+        self.assertTrue(repeated["ok"])
+        self.assertEqual(load_album.call_count, 0)
+        self.assertEqual(repeated["runtime"]["playback_state"], "stopped")
+        self.assertEqual(repeated["runtime"]["active_album_id"], "album-1")
+        self.assertEqual(repeated["runtime"]["active_rfid_uid"], "1234567890")
+        self.assertEqual(repeated["runtime"]["manual_pause_rfid_uid"], "1234567890")
+        self.assertEqual(repeated["player"]["playlist_entries"], [])
+        self.assertFalse(repeated["player"]["is_playing"])
+
+    def test_presence_rfid_panel_stop_reloads_after_tag_was_removed(self):
+        write_json(
+            self.data_dir / "settings.json",
+            {
+                "max_volume": 85,
+                "volume_step": 5,
+                "sleep_timer_step": 5,
+                "rfid_read_action": "play",
+                "rfid_remove_action": "pause",
+            },
+        )
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {
+                    "type": "RC522",
+                    "connection_hint": "",
+                },
+                "buttons": [],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        self.service.assign_album_by_rfid("1234567890")
+        self.service.stop()
+        removed = self.service.remove_rfid_tag("1234567890")
+
+        with patch.object(self.service, "load_album_into_player", wraps=self.service.load_album_into_player) as load_album:
+            repeated = self.service.assign_album_by_rfid("1234567890")
+
+        self.assertEqual(removed["runtime"]["active_rfid_uid"], "")
+        self.assertEqual(removed["runtime"]["manual_pause_rfid_uid"], "")
+        self.assertTrue(repeated["ok"])
+        self.assertEqual(load_album.call_count, 1)
+        self.assertEqual(repeated["runtime"]["playback_state"], "playing")
+        self.assertEqual(repeated["runtime"]["active_album_id"], "album-1")
+        self.assertEqual(repeated["runtime"]["active_rfid_uid"], "1234567890")
+        self.assertTrue(repeated["player"]["is_playing"])
+
+    def test_presence_rfid_panel_next_does_not_reload_shuffle_album(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {
+                    "type": "RC522",
+                    "connection_hint": "",
+                },
+                "buttons": [],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+        library = self.service.load_library()
+        library["albums"][0]["shuffle_enabled"] = True
+        write_json(self.data_dir / "library.json", library)
+
+        with patch.object(service_module.random, "shuffle", side_effect=lambda items: items.reverse()):
+            started = self.service.assign_album_by_rfid("1234567890")
+        advanced = self.service.next_track()
+
+        with patch.object(self.service, "load_album_into_player", wraps=self.service.load_album_into_player) as load_album:
+            repeated = self.service.assign_album_by_rfid("1234567890")
+
+        self.assertEqual(started["player"]["playlist_entries"], ["02-weiter.mp3", "01-start.mp3"])
+        self.assertEqual(advanced["runtime"]["playback_state"], "playing")
+        self.assertEqual(advanced["player"]["current_track_index"], 1)
+        self.assertTrue(repeated["ok"])
+        self.assertEqual(load_album.call_count, 0)
+        self.assertEqual(repeated["runtime"]["playback_state"], "playing")
+        self.assertEqual(repeated["runtime"]["active_album_id"], "album-1")
+        self.assertEqual(repeated["runtime"]["active_rfid_uid"], "1234567890")
+        self.assertEqual(repeated["player"]["playlist_entries"], ["02-weiter.mp3", "01-start.mp3"])
+        self.assertEqual(repeated["player"]["current_track_index"], 1)
+
+    def test_presence_rfid_panel_next_at_album_end_does_not_reload_shuffle_album(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {
+                    "type": "RC522",
+                    "connection_hint": "",
+                },
+                "buttons": [],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+        library = self.service.load_library()
+        library["albums"][0]["shuffle_enabled"] = True
+        write_json(self.data_dir / "library.json", library)
+
+        with patch.object(service_module.random, "shuffle", side_effect=lambda items: items.reverse()):
+            self.service.assign_album_by_rfid("1234567890")
+        self.service.next_track()
+        finished = self.service.next_track()
+
+        with patch.object(self.service, "load_album_into_player", wraps=self.service.load_album_into_player) as load_album:
+            repeated = self.service.assign_album_by_rfid("1234567890")
+
+        self.assertEqual(finished["runtime"]["playback_state"], "stopped")
+        self.assertTrue(repeated["ok"])
+        self.assertEqual(load_album.call_count, 0)
+        self.assertEqual(repeated["runtime"]["playback_state"], "stopped")
+        self.assertEqual(repeated["runtime"]["active_album_id"], "album-1")
+        self.assertEqual(repeated["runtime"]["active_rfid_uid"], "1234567890")
+        self.assertEqual(repeated["player"]["playlist_entries"], ["02-weiter.mp3", "01-start.mp3"])
+        self.assertEqual(repeated["player"]["current_track_index"], 1)
+
     def test_presence_rfid_does_not_reload_same_tag_same_album_after_manual_resume(self):
         write_json(
             self.data_dir / "settings.json",

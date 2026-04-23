@@ -2135,10 +2135,18 @@ class RuntimeService:
             runtime_state = self.ensure_runtime()
             player = self.load_player()
             runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
+            stopped_rfid_uid = runtime_state.get("active_rfid_uid", "").strip()
+            stopped_album_id = runtime_state.get("active_album_id", "").strip()
+            stop_blocks_present_tag = bool(stopped_rfid_uid and self._reader_supports_presence())
             runtime_state["playback_state"] = "stopped"
             if runtime_state.get("playback_session"):
                 runtime_state["playback_session"] = self.playback.stop(runtime_state["playback_session"])
             runtime_state, player = self._clear_playback_context(runtime_state, player, keep_loaded_media=False)
+            if stop_blocks_present_tag:
+                runtime_state["active_rfid_uid"] = stopped_rfid_uid
+                runtime_state["manual_pause_rfid_uid"] = stopped_rfid_uid
+                runtime_state["active_album_id"] = stopped_album_id
+                runtime_state["hardware"]["last_scanned_uid"] = stopped_rfid_uid
             runtime_state = self.add_event(runtime_state, "Wiedergabe gestoppt")
             runtime_state = self.update_hardware_profile(runtime_state)
             runtime_state = self.apply_wifi_policy(runtime_state)
@@ -2483,6 +2491,15 @@ class RuntimeService:
                 if runtime_state["playback_session"].get("state") == "playing":
                     player["position_seconds"] = int(runtime_state["playback_session"].get("position_seconds", player.get("position_seconds", 0)) or 0)
                 runtime_state = self.add_event(runtime_state, f"RFID fortgesetzt: {target_album.get('name', '')}")
+                runtime_state = self.update_hardware_profile(runtime_state)
+                runtime_state = self.apply_wifi_policy(runtime_state)
+                runtime_state = self.update_led_status(runtime_state)
+                self.save_runtime(runtime_state)
+                self.save_player(player)
+                return {"ok": True, "runtime": runtime_state, "player": player}
+
+            if same_uid_active and same_album_active and runtime_state.get("manual_pause_rfid_uid", "").strip() == normalized_uid:
+                player["is_playing"] = False
                 runtime_state = self.update_hardware_profile(runtime_state)
                 runtime_state = self.apply_wifi_policy(runtime_state)
                 runtime_state = self.update_led_status(runtime_state)
