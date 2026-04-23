@@ -159,7 +159,7 @@ def post_json(url, payload=None):
             return int(getattr(response, "status", 200) or 200)
     except urllib.error.HTTPError as exc:
         return int(getattr(exc, "code", 500) or 500)
-    except (urllib.error.URLError, TimeoutError):
+    except (urllib.error.URLError, TimeoutError, OSError):
         return None
 
 

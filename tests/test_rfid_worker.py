@@ -275,6 +275,12 @@ class ProbeRC522BackendTest(unittest.TestCase):
 
         self.assertEqual(status_code, 404)
 
+    def test_post_json_treats_connection_reset_as_retryable_failure(self):
+        with patch.object(rfid_worker.urllib.request, "urlopen", side_effect=ConnectionResetError("reset")):
+            status_code = rfid_worker.post_json("http://127.0.0.1/api/runtime/rfid", {"uid": "ABC123"})
+
+        self.assertIsNone(status_code)
+
     def test_presence_reader_uses_fast_idle_sleep_before_tag_is_active(self):
         reader = FakeReader([])
         reader.presence_reader = True
