@@ -1600,11 +1600,14 @@ class RuntimeService:
         desired_state = runtime_state.get("playback_state", "paused")
         was_playing = session.get("state") == "playing"
         session = self.playback.sync_session(session)
+        recovered_reason = str(session.pop("recovered_reason", "") or "")
         if desired_state == "stopped" and session.get("state") != "stopped":
             session = self.playback.stop(session)
         elif desired_state == "paused" and session.get("state") == "playing":
             session = self.playback.pause(session)
         runtime_state["playback_session"] = session
+        if recovered_reason:
+            runtime_state = self.add_event(runtime_state, f"mpv automatisch neu gestartet: {recovered_reason}", "warning")
         entries = list(player.get("playlist_entries", []))
         if entries:
             current_index = max(0, min(len(entries) - 1, int(session.get("current_index", player.get("current_track_index", 0)))))

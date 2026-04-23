@@ -13,7 +13,7 @@ from system.audio import detect_audio_environment, resolve_output_device
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-MPV_STALL_GRACE_SECONDS = 5.0
+MPV_STALL_GRACE_SECONDS = 1.5
 MPV_STALL_POSITION_EPSILON_SECONDS = 0.25
 
 
@@ -424,6 +424,7 @@ class PlaybackController:
         session["state"] = "ready"
         session["started_at"] = None
         session["error"] = reason
+        session["recovered_reason"] = reason
         self._reset_mpv_progress_health(session)
         return self._launch(session)
 

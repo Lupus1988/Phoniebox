@@ -289,7 +289,7 @@ class PlaybackControllerTest(unittest.TestCase):
         with patch.object(self.controller, "_process_exists", return_value=True):
             with patch.object(self.controller, "_mpv_command_succeeded", return_value=True):
                 with patch.object(self.controller, "_mpv_get_property", side_effect=lambda current, name, default=None: values.get(name, default)):
-                    with patch.object(playback_module.time, "time", return_value=106.0):
+                    with patch.object(playback_module.time, "time", return_value=102.0):
                         with patch.object(self.controller, "_relaunch_mpv_session", return_value=relaunched) as relaunch:
                             updated = self.controller.sync_session(dict(session))
 
