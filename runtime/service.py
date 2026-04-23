@@ -2390,7 +2390,7 @@ class RuntimeService:
         with self.state_transaction():
             runtime_state = self.ensure_runtime()
             player = self.load_player()
-            runtime_state, player, _ = self._sync_playback_session(runtime_state, player)
+            runtime_state, player, session_finished = self._sync_playback_session(runtime_state, player)
             library = self.load_library()
             normalized_uid = str(uid or "").strip()
             if not normalized_uid:
@@ -2418,6 +2418,15 @@ class RuntimeService:
             same_uid_active = runtime_state.get("active_rfid_uid", "").strip() == normalized_uid
             session = runtime_state.get("playback_session", {})
             session_has_track = bool(session.get("track_path") or session.get("entry"))
+
+            if same_uid_active and same_album_active and session_finished:
+                result = self.next_track(runtime_state=runtime_state, player=player, autoplay=True)
+                result["runtime"]["active_rfid_uid"] = normalized_uid
+                result["runtime"]["manual_pause_rfid_uid"] = ""
+                result["runtime"]["hardware"]["last_scanned_uid"] = normalized_uid
+                self.save_runtime(result["runtime"])
+                self.save_player(result["player"])
+                return {"ok": True, "runtime": result["runtime"], "player": result["player"]}
 
             if same_uid_active and same_album_active and runtime_state.get("playback_state") == "playing" and session_has_track:
                 runtime_state["manual_pause_rfid_uid"] = ""

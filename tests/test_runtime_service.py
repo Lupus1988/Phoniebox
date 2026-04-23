@@ -501,6 +501,56 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(load_album.call_count, 1)
         self.assertEqual(second["runtime"]["active_rfid_uid"], "1234567890")
 
+    def test_presence_rfid_at_track_end_advances_instead_of_reloading_shuffle_album(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {
+                    "type": "RC522",
+                    "connection_hint": "",
+                },
+                "buttons": [],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+        library = self.service.load_library()
+        library["albums"][0]["shuffle_enabled"] = True
+        write_json(self.data_dir / "library.json", library)
+
+        with patch.object(service_module.random, "shuffle", side_effect=lambda items: items.reverse()):
+            started = self.service.assign_album_by_rfid("1234567890")
+
+        stopped_session = {
+            **started["runtime"]["playback_session"],
+            "state": "stopped",
+            "current_index": 0,
+            "position_seconds": 180,
+        }
+        original_sync = self.service._sync_playback_session
+        sync_calls = {"count": 0}
+
+        def sync_track_end_once(runtime_state, player):
+            sync_calls["count"] += 1
+            if sync_calls["count"] == 1:
+                runtime_state = {**runtime_state, "playback_session": dict(stopped_session), "playback_state": "stopped"}
+                player = {**player, "current_track_index": 0, "position_seconds": 0, "is_playing": False}
+                return runtime_state, player, True
+            return original_sync(runtime_state, player)
+
+        with patch.object(self.service, "_sync_playback_session", side_effect=sync_track_end_once), patch.object(
+            self.service, "load_album_into_player", wraps=self.service.load_album_into_player
+        ) as load_album:
+            repeated = self.service.assign_album_by_rfid("1234567890")
+
+        self.assertTrue(repeated["ok"])
+        self.assertEqual(load_album.call_count, 0)
+        self.assertEqual(repeated["player"]["playlist_entries"], ["02-weiter.mp3", "01-start.mp3"])
+        self.assertEqual(repeated["player"]["current_track_index"], 1)
+        self.assertEqual(repeated["player"]["current_track"], "01 start")
+        self.assertEqual(repeated["runtime"]["active_rfid_uid"], "1234567890")
+        self.assertEqual(repeated["runtime"]["last_event"], "Nächster Titel: 01 start")
+
     def test_presence_rfid_resumes_paused_same_tag_same_album(self):
         write_json(
             self.data_dir / "settings.json",
