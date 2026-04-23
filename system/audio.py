@@ -10,7 +10,10 @@ def command_exists(name):
 
 
 def run_command(command):
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=2.0)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "output": "Zeitüberschreitung bei Systemabfrage."}
     output = (result.stdout or result.stderr or "").strip()
     return {"ok": result.returncode == 0, "output": output}
 

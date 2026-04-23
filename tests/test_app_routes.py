@@ -763,6 +763,39 @@ class AppRoutesTest(unittest.TestCase):
         save_setup.assert_called_once_with(setup)
         apply_action.assert_not_called()
 
+    def test_setup_page_disables_browser_cache(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "app.get_wifi_snapshot", return_value={"nmcli_available": False, "wifi_enabled": "unbekannt", "connectivity": "unbekannt", "active_ssid": "-", "device": "-", "scanned_networks": []}
+        ), patch("app.detect_audio_environment", return_value={"device_model": "Test", "has_analog_audio": False, "recommended_external_card": False}):
+            response = self.client.get("/setup")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("no-store", response.headers["Cache-Control"])
+
+    def test_run_nmcli_returns_none_on_timeout(self):
+        with patch("app.subprocess.run", side_effect=app_module.subprocess.TimeoutExpired(["nmcli"], 2)):
+            self.assertIsNone(app_module.run_nmcli(["nmcli", "dev", "wifi"]))
+
+    def test_wifi_snapshot_uses_short_cache(self):
+        app_module._wifi_snapshot_cache.update({"timestamp": 0.0, "snapshot": None})
+        app_module._active_ssid_cache.update({"timestamp": 0.0, "ssid": ""})
+        completed = app_module.subprocess.CompletedProcess(
+            args=["nmcli"],
+            returncode=0,
+            stdout="enabled:full\n",
+            stderr="",
+        )
+
+        with patch("app.shutil.which", return_value="/usr/bin/nmcli"), patch("app.subprocess.run", return_value=completed) as run:
+            first = app_module.get_wifi_snapshot()
+            second = app_module.get_wifi_snapshot()
+
+        self.assertEqual(first, second)
+        self.assertEqual(run.call_count, 3)
+
     def test_reader_install_action_uses_transition_helper(self):
         setup = default_setup()
         runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}

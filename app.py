@@ -12,7 +12,7 @@ import threading
 import time
 from pathlib import Path
 
-from flask import Flask, flash, redirect, render_template, request, send_file, send_from_directory, url_for
+from flask import Flask, flash, g, redirect, render_template, request, send_file, send_from_directory, url_for
 from werkzeug.utils import secure_filename
 try:
     import gpiod
@@ -96,6 +96,11 @@ READER_GUIDE_DIR = BASE_DIR / "assets" / "reader-guides"
 AUDIO_GUIDE_DIR = BASE_DIR / "assets" / "audio-guides"
 READER_NONE_ID = "NONE"
 APP_CONFIG = load_config()
+COMMAND_TIMEOUT_SECONDS = 2.0
+WIFI_SNAPSHOT_CACHE_SECONDS = 8.0
+ACTIVE_SSID_CACHE_SECONDS = 30.0
+_wifi_snapshot_cache = {"timestamp": 0.0, "snapshot": None}
+_active_ssid_cache = {"timestamp": 0.0, "ssid": ""}
 
 def create_app():
     application = Flask(
@@ -110,6 +115,15 @@ def create_app():
 
 app = create_app()
 app.secret_key = app.config["SECRET_KEY"]
+
+
+@app.after_request
+def add_dynamic_page_headers(response):
+    if request.endpoint == "setup":
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 @app.route("/media/<path:filename>")
@@ -1062,29 +1076,51 @@ def nmcli_available():
 
 
 def run_nmcli(command):
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return None
     if result.returncode != 0:
         return None
     return result.stdout.strip()
 
 
 def detect_active_ssid():
+    now = time.monotonic()
+    cached = _active_ssid_cache.get("ssid")
+    if cached is not None and now - float(_active_ssid_cache.get("timestamp", 0.0)) < ACTIVE_SSID_CACHE_SECONDS:
+        return cached
+
+    ssid = ""
     active = run_nmcli(["nmcli", "-t", "-f", "ACTIVE,SSID", "dev", "wifi"])
     if active:
         for line in active.splitlines():
             active_flag, ssid = (line.split(":", 1) + [""])[:2]
             if active_flag == "yes" and ssid:
+                _active_ssid_cache.update({"timestamp": now, "ssid": ssid})
                 return ssid
 
-    result = subprocess.run(["iwgetid", "-r"], capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(
+            ["iwgetid", "-r"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        _active_ssid_cache.update({"timestamp": now, "ssid": ""})
+        return ""
     if result.returncode == 0:
-        return (result.stdout or "").strip()
-    return ""
+        ssid = (result.stdout or "").strip()
+    _active_ssid_cache.update({"timestamp": now, "ssid": ssid})
+    return ssid
 
 
 def find_password_in_nmconnections(ssid):
@@ -1173,6 +1209,11 @@ def import_active_wifi_into_setup(setup_data):
 
 
 def get_wifi_snapshot():
+    now = time.monotonic()
+    cached = _wifi_snapshot_cache.get("snapshot")
+    if cached is not None and now - float(_wifi_snapshot_cache.get("timestamp", 0.0)) < WIFI_SNAPSHOT_CACHE_SECONDS:
+        return copy.deepcopy(cached)
+
     snapshot = {
         "nmcli_available": nmcli_available(),
         "wifi_enabled": "unbekannt",
@@ -1182,6 +1223,7 @@ def get_wifi_snapshot():
         "scanned_networks": [],
     }
     if not snapshot["nmcli_available"]:
+        _wifi_snapshot_cache.update({"timestamp": now, "snapshot": copy.deepcopy(snapshot)})
         return snapshot
 
     general = run_nmcli(["nmcli", "-t", "-f", "WIFI,CONNECTIVITY", "general"])
@@ -1212,7 +1254,13 @@ def get_wifi_snapshot():
                     "security": security or "offen",
                 }
             )
+    _wifi_snapshot_cache.update({"timestamp": now, "snapshot": copy.deepcopy(snapshot)})
     return snapshot
+
+
+def invalidate_wifi_caches():
+    _wifi_snapshot_cache.update({"timestamp": 0.0, "snapshot": None})
+    _active_ssid_cache.update({"timestamp": 0.0, "ssid": ""})
 
 
 def assigned_button_pins(setup_data):
@@ -1511,8 +1559,10 @@ ensure_data_files()
 
 @app.context_processor
 def inject_choices():
-    setup_data = load_setup()
-    audio_environment = detect_audio_environment()
+    if request.endpoint != "setup":
+        return {}
+    setup_data = getattr(g, "setup_data", None) or load_setup()
+    audio_environment = getattr(g, "audio_environment", None) or detect_audio_environment()
     return {
         "reader_options": reader_catalog(),
         "button_functions": BUTTON_FUNCTIONS,
@@ -2013,6 +2063,7 @@ def setup():
             ).strip() or f"{wifi['hostname']}.local"
             save_setup(data)
             report = apply_network_setup(wifi)
+            invalidate_wifi_caches()
             flash(
                 "Hotspot gespeichert und angewendet." if report["ok"] else "Hotspot gespeichert, Systemprofil aber nur teilweise angewendet.",
                 "success" if report["ok"] else "error",
@@ -2022,6 +2073,7 @@ def setup():
         if section == "factory_wifi":
             data["wifi"] = factory_wifi_defaults()
             save_setup(data)
+            invalidate_wifi_caches()
             save_apply_report(
                 {
                     "ok": True,
@@ -2038,6 +2090,7 @@ def setup():
 
         if section == "apply_network":
             report = apply_network_setup(data["wifi"])
+            invalidate_wifi_caches()
             flash(report["summary"], "success" if report["ok"] else "error")
             return redirect(url_for("setup"))
 
@@ -2077,6 +2130,7 @@ def setup():
                 )
             save_setup(data)
             report = apply_network_setup(wifi)
+            invalidate_wifi_caches()
             flash(
                 f"Netzwerk {ssid} gespeichert und angewendet." if report["ok"] else f"Netzwerk {ssid} gespeichert, Systemprofil aber nur teilweise angewendet.",
                 "success" if report["ok"] else "error",
@@ -2091,6 +2145,7 @@ def setup():
             ]
             save_setup(data)
             report = apply_network_setup(wifi)
+            invalidate_wifi_caches()
             flash(
                 "Gespeichertes WLAN entfernt und Systemprofil aktualisiert." if report["ok"] else "WLAN entfernt, Systemprofil aber nur teilweise aktualisiert.",
                 "success" if report["ok"] else "error",
@@ -2099,6 +2154,9 @@ def setup():
 
     wifi_snapshot = get_wifi_snapshot()
     reader_management = reader_install_state(data.get("reader", {}))
+    audio_environment = detect_audio_environment()
+    g.setup_data = data
+    g.audio_environment = audio_environment
     reader_reboot_notice = {
         "active": request.args.get("reader_reboot") == "1",
         "action": request.args.get("reader_action", "").strip(),
@@ -2111,7 +2169,7 @@ def setup():
         setup_warnings=collect_conflicts(data),
         network_info=network_targets(data),
         apply_report=load_apply_report(),
-        audio_environment=detect_audio_environment(),
+        audio_environment=audio_environment,
         audio_profile_dir=AUDIO_PROFILE_DIR,
         hardware_profile=runtime_snapshot["runtime"]["hardware"].get("profile", {}),
         reader_status=load_reader_status(),
