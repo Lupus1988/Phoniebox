@@ -108,6 +108,13 @@ def _mark_audio_state(service, ready, reason):
             runtime_state.get("playback_state") == "playing"
             or session_had_process
         )
+        should_resume_playback = (
+            ready
+            and previous_ready is False
+            and bool(watchdog.get("resume_on_recovery"))
+            and runtime_state.get("playback_state") == "paused"
+            and bool(session)
+        )
 
         if should_stop_playback and session:
             runtime_state["playback_session"] = service.playback.pause(session)
@@ -120,10 +127,22 @@ def _mark_audio_state(service, ready, reason):
             runtime_state["playback_session"]["state"] = "error"
             runtime_state["playback_session"]["error"] = reason
 
+        resumed_session = None
+        if should_resume_playback:
+            resumed_session = service.playback.play(session)
+            runtime_state["playback_session"] = resumed_session
+            runtime_state["playback_state"] = resumed_session.get("state", "paused")
+            player["is_playing"] = runtime_state["playback_state"] == "playing"
+            player["position_seconds"] = max(
+                0,
+                int(runtime_state["playback_session"].get("position_seconds", player.get("position_seconds", 0)) or 0),
+            )
+
         watchdog.update(
             {
                 "ready": bool(ready),
                 "message": "" if ready else str(reason or "Audioausgabe nicht verfügbar."),
+                "resume_on_recovery": bool(should_stop_playback and session),
                 "updated_at": int(time.time()),
             }
         )
@@ -131,6 +150,8 @@ def _mark_audio_state(service, ready, reason):
 
         if should_stop_playback:
             runtime_state = service.add_event(runtime_state, f"Audioausgabe verloren: {reason}", "warning")
+        elif resumed_session and runtime_state["playback_state"] == "playing":
+            runtime_state = service.add_event(runtime_state, "Audioausgabe wieder verfügbar: Wiedergabe fortgesetzt")
         elif ready and previous_ready is False:
             runtime_state = service.add_event(runtime_state, "Audioausgabe wieder verfügbar")
         elif (not ready) and previous_ready is not False:

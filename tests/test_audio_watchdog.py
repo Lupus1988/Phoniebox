@@ -73,7 +73,52 @@ class AudioWatchdogTest(unittest.TestCase):
         self.assertEqual(updated["playback_session"]["state"], "error")
         self.assertEqual(updated["playback_session"]["error"], "USB-Soundkarte nicht erkannt.")
         self.assertEqual(updated["audio_watchdog"]["ready"], False)
+        self.assertTrue(updated["audio_watchdog"]["resume_on_recovery"])
         self.assertEqual(updated["last_event"], "Audioausgabe verloren: USB-Soundkarte nicht erkannt.")
+        service.save_runtime.assert_called_once()
+        service.save_player.assert_called_once()
+
+    def test_watchdog_resumes_playback_when_audio_returns(self):
+        service = Mock()
+        runtime_state = {
+            "playback_state": "paused",
+            "playback_session": {
+                "backend": "mpv",
+                "state": "error",
+                "pid": None,
+                "position_seconds": 42,
+                "error": "USB-Soundkarte nicht erkannt.",
+            },
+            "audio_watchdog": {
+                "ready": False,
+                "resume_on_recovery": True,
+            },
+            "event_log": [],
+        }
+        player = {"is_playing": False, "position_seconds": 42}
+        resumed_session = {
+            **runtime_state["playback_session"],
+            "state": "playing",
+            "pid": 4321,
+            "error": "",
+        }
+        paused_session = dict(runtime_state["playback_session"])
+        service.state_transaction.return_value = nullcontext()
+        service.ensure_runtime.return_value = runtime_state
+        service.load_player.return_value = player
+        service.playback.play.return_value = resumed_session
+        service.add_event.side_effect = lambda state, message, level="info", mark_activity=True: {**state, "last_event": message}
+
+        updated = audio_watchdog._mark_audio_state(service, True, "")
+
+        service.playback.play.assert_called_once_with(paused_session)
+        self.assertEqual(updated["playback_state"], "playing")
+        self.assertEqual(updated["playback_session"]["pid"], 4321)
+        self.assertTrue(player["is_playing"])
+        self.assertEqual(player["position_seconds"], 42)
+        self.assertEqual(updated["audio_watchdog"]["ready"], True)
+        self.assertFalse(updated["audio_watchdog"]["resume_on_recovery"])
+        self.assertEqual(updated["last_event"], "Audioausgabe wieder verfügbar: Wiedergabe fortgesetzt")
         service.save_runtime.assert_called_once()
         service.save_player.assert_called_once()
 
