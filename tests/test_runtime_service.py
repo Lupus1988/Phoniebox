@@ -126,6 +126,12 @@ class RuntimeServiceTest(unittest.TestCase):
             patcher.stop()
         self.temp_dir.cleanup()
 
+    def queue_titles(self, queue):
+        return [item["title"] if isinstance(item, dict) else item for item in queue]
+
+    def queue_states(self, queue):
+        return [item.get("state", "") if isinstance(item, dict) else "" for item in queue]
+
     def test_runtime_service_uses_audio_backend_factory(self):
         self.assertIs(self.service.playback, self.service.audio_backend)
 
@@ -138,7 +144,8 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(result["runtime"]["playback_state"], "playing")
         self.assertEqual(result["player"]["current_album"], "Testalbum")
         self.assertEqual(result["player"]["current_track"], "01 start")
-        self.assertEqual(result["player"]["queue"], ["02 weiter"])
+        self.assertEqual(self.queue_titles(result["player"]["queue"]), ["01 start", "02 weiter"])
+        self.assertEqual(self.queue_states(result["player"]["queue"]), ["current", "upcoming"])
         self.assertEqual(result["runtime"]["playback_session"]["backend"], "mock")
 
     def test_load_album_autoplay_keeps_state_paused_when_backend_reports_error(self):
@@ -181,9 +188,10 @@ class RuntimeServiceTest(unittest.TestCase):
         cleared = self.service.clear_queue()
 
         self.assertTrue(queued["ok"])
-        self.assertIn("03 bonus", queued["player"]["queue"])
+        self.assertIn("03 bonus", self.queue_titles(queued["player"]["queue"]))
         self.assertEqual(sought["player"]["position_seconds"], 37)
-        self.assertEqual(cleared["player"]["queue"], [])
+        self.assertEqual(self.queue_titles(cleared["player"]["queue"]), ["01 start"])
+        self.assertEqual(self.queue_states(cleared["player"]["queue"]), ["current"])
 
     def test_queue_album_persists_in_snapshot(self):
         self.service.load_album_by_id("album-1", autoplay=False)
@@ -191,7 +199,8 @@ class RuntimeServiceTest(unittest.TestCase):
         self.service.queue_album_by_id("album-2")
         snapshot = self.service.player_snapshot()
 
-        self.assertEqual(snapshot["player"]["queue"], ["02 weiter", "03 bonus"])
+        self.assertEqual(self.queue_titles(snapshot["player"]["queue"]), ["01 start", "02 weiter", "03 bonus"])
+        self.assertEqual(self.queue_states(snapshot["player"]["queue"]), ["current", "upcoming", "queued"])
 
     def test_load_album_uses_persisted_track_durations(self):
         library = self.service.load_library()
@@ -248,7 +257,8 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(second_track["player"]["current_track"], "02 weiter")
         self.assertEqual(queued_track["player"]["current_track"], "03 bonus")
         self.assertEqual(queued_track["player"]["current_album"], "Queuealbum")
-        self.assertEqual(queued_track["player"]["queue"], [])
+        self.assertEqual(self.queue_titles(queued_track["player"]["queue"]), ["03 bonus"])
+        self.assertEqual(self.queue_states(queued_track["player"]["queue"]), ["current"])
 
     def test_next_track_reopens_explicit_target_entry(self):
         self.service.load_album_by_id("album-1", autoplay=True)
@@ -268,7 +278,8 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertTrue(queued["ok"])
         self.assertEqual(queued["player"]["current_track"], "03 bonus")
         self.assertEqual(queued["player"]["current_album"], "Queuealbum")
-        self.assertEqual(queued["player"]["queue"], [])
+        self.assertEqual(self.queue_titles(queued["player"]["queue"]), ["03 bonus"])
+        self.assertEqual(self.queue_states(queued["player"]["queue"]), ["current"])
 
     def test_load_album_by_id_shuffle_uses_randomized_order(self):
         with patch.object(service_module.random, "shuffle", side_effect=lambda items: items.reverse()):
@@ -277,7 +288,7 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["player"]["playlist_entries"], ["02-weiter.mp3", "01-start.mp3"])
         self.assertEqual(result["player"]["current_track"], "02 weiter")
-        self.assertEqual(result["player"]["queue"], ["01 start"])
+        self.assertEqual(self.queue_titles(result["player"]["queue"]), ["02 weiter", "01 start"])
         self.assertEqual(result["runtime"]["last_event"], "Album gestartet: Testalbum (Shuffle)")
 
     def test_load_album_by_id_shuffle_keeps_each_track_exactly_once(self):
@@ -308,7 +319,7 @@ class RuntimeServiceTest(unittest.TestCase):
             [item["entry"] for item in result["player"]["queued_tracks"]],
             ["01-start.mp3"],
         )
-        self.assertEqual(result["player"]["queue"], ["01 start"])
+        self.assertEqual(self.queue_titles(result["player"]["queue"]), ["02 weiter", "01 start"])
         self.assertEqual(result["runtime"]["last_event"], "Album zur Warteschlange hinzugefügt: Testalbum (Shuffle)")
 
     def test_queue_album_by_id_shuffle_keeps_each_track_exactly_once(self):
@@ -323,7 +334,7 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["player"]["current_track"], "02 weiter")
         self.assertEqual([item["entry"] for item in result["player"]["queued_tracks"]], ["01-start.mp3"])
-        self.assertEqual(result["player"]["queue"], ["01 start"])
+        self.assertEqual(self.queue_titles(result["player"]["queue"]), ["02 weiter", "01 start"])
 
     def test_load_album_by_id_uses_saved_album_shuffle_setting(self):
         library = self.service.load_library()
@@ -588,6 +599,104 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(repeated["runtime"]["active_rfid_uid"], "1234567890")
         self.assertEqual(repeated["runtime"]["last_event"], "Nächster Titel: 01 start")
 
+    def test_presence_rfid_after_finished_album_with_same_tag_still_present_stays_stopped(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {
+                    "type": "RC522",
+                    "connection_hint": "",
+                },
+                "buttons": [],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        started = self.service.assign_album_by_rfid("1234567890")
+        runtime_state = started["runtime"]
+        player = started["player"]
+        runtime_state["playback_state"] = "stopped"
+        runtime_state["active_rfid_uid"] = "1234567890"
+        runtime_state["playback_session"] = {
+            **runtime_state["playback_session"],
+            "state": "stopped",
+            "current_index": 1,
+            "position_seconds": 0,
+        }
+        player["current_track_index"] = 1
+        player["current_track"] = "02 weiter"
+        player["position_seconds"] = 0
+        player["is_playing"] = False
+        self.service.save_runtime(runtime_state)
+        self.service.save_player(player)
+
+        repeated = self.service.assign_album_by_rfid("1234567890")
+
+        self.assertTrue(repeated["ok"])
+        self.assertEqual(repeated["runtime"]["playback_state"], "stopped")
+        self.assertEqual(repeated["runtime"]["active_rfid_uid"], "1234567890")
+        self.assertEqual(repeated["player"]["current_track_index"], 1)
+        self.assertEqual(repeated["player"]["current_track"], "02 weiter")
+        self.assertFalse(repeated["player"]["is_playing"])
+
+    def test_presence_rfid_after_finished_album_reloads_same_album_from_start_after_remove(self):
+        write_json(
+            self.data_dir / "settings.json",
+            {
+                "max_volume": 85,
+                "volume_step": 5,
+                "sleep_timer_step": 5,
+                "rfid_read_action": "play",
+                "rfid_remove_action": "pause",
+            },
+        )
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {
+                    "type": "RC522",
+                    "connection_hint": "",
+                },
+                "buttons": [],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        started = self.service.assign_album_by_rfid("1234567890")
+        runtime_state = started["runtime"]
+        player = started["player"]
+        runtime_state["playback_state"] = "stopped"
+        runtime_state["active_rfid_uid"] = "1234567890"
+        runtime_state["playback_session"] = {
+            **runtime_state["playback_session"],
+            "state": "stopped",
+            "current_index": 1,
+            "position_seconds": 0,
+        }
+        player["current_track_index"] = 1
+        player["current_track"] = "02 weiter"
+        player["position_seconds"] = 0
+        player["is_playing"] = False
+        self.service.save_runtime(runtime_state)
+        self.service.save_player(player)
+
+        removed = self.service.remove_rfid_tag()
+        removed_runtime = dict(removed["runtime"])
+        repeated = self.service.assign_album_by_rfid("1234567890")
+
+        self.assertEqual(removed_runtime["playback_state"], "stopped")
+        self.assertEqual(removed_runtime["active_rfid_uid"], "")
+        self.assertEqual(removed_runtime["last_event"], "Tag entfernt: Album beendet")
+        self.assertTrue(repeated["ok"])
+        self.assertEqual(repeated["runtime"]["playback_state"], "playing")
+        self.assertEqual(repeated["runtime"]["active_rfid_uid"], "1234567890")
+        self.assertEqual(repeated["player"]["current_track_index"], 0)
+        self.assertEqual(repeated["player"]["current_track"], "01 start")
+        self.assertTrue(repeated["player"]["is_playing"])
+        self.assertEqual(repeated["runtime"]["last_event"], "RFID gestartet: Testalbum")
+
     def test_presence_rfid_resumes_paused_same_tag_same_album(self):
         write_json(
             self.data_dir / "settings.json",
@@ -804,7 +913,7 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(advanced["runtime"]["playback_session"]["position_seconds"], 0)
         self.assertEqual(advanced["runtime"]["playback_session"]["current_index"], 1)
 
-    def test_presence_rfid_panel_next_at_album_end_does_not_reload_shuffle_album(self):
+    def test_presence_rfid_panel_next_at_album_end_stays_stopped_until_tag_is_removed(self):
         write_json(
             self.data_dir / "setup.json",
             {
@@ -837,6 +946,7 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(repeated["runtime"]["active_rfid_uid"], "1234567890")
         self.assertEqual(repeated["player"]["playlist_entries"], ["02-weiter.mp3", "01-start.mp3"])
         self.assertEqual(repeated["player"]["current_track_index"], 1)
+        self.assertEqual(repeated["player"]["current_track"], "01 start")
 
     def test_presence_rfid_does_not_reload_same_tag_same_album_after_manual_resume(self):
         write_json(
@@ -931,7 +1041,8 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(switched["runtime"]["active_album_id"], "album-2")
         self.assertEqual(switched["runtime"]["active_rfid_uid"], "ABCDEFGHIJ")
         self.assertEqual(switched["player"]["current_album"], "Queuealbum")
-        self.assertEqual(switched["player"]["queue"], [])
+        self.assertEqual(self.queue_titles(switched["player"]["queue"]), ["03 bonus"])
+        self.assertEqual(self.queue_states(switched["player"]["queue"]), ["current"])
 
     def test_sync_playback_session_updates_current_track_from_mpv_playlist_position(self):
         self.service.load_album_by_id("album-1", autoplay=True)
@@ -955,7 +1066,8 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertFalse(session_finished)
         self.assertEqual(player["current_track_index"], 1)
         self.assertEqual(player["current_track"], "02 weiter")
-        self.assertEqual(player["queue"], [])
+        self.assertEqual(self.queue_titles(player["queue"]), ["01 start", "02 weiter"])
+        self.assertEqual(self.queue_states(player["queue"]), ["played", "current"])
         self.assertEqual(player["duration_seconds"], 222)
         self.assertEqual(player["position_seconds"], 12)
 

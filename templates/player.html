@@ -21,8 +21,17 @@
           </div>
         </div>
         <div class="title-stage">
-          <p class="overline">Aktueller Titel</p>
-          <h3 id="player-track">{{ player_state.current_track }}</h3>
+          <div class="overline track-overline">
+            <span>Aktueller Titel</span>
+            <span id="player-track-progress" class="track-progress">
+              {% if player_state.playlist_entries %}
+                {{ player_state.current_track_index + 1 }}/{{ player_state.playlist_entries|length }}
+              {% endif %}
+            </span>
+          </div>
+          <div class="track-heading">
+            <h3 id="player-track">{{ player_state.current_track }}</h3>
+          </div>
           <p id="player-album-secondary">{{ player_state.current_album }}</p>
           <div class="timeline-box">
             <div class="timeline-labels">
@@ -123,9 +132,14 @@
       </div>
       <ul id="player-queue" class="queue-list">
         {% for item in player_state.queue %}
-          <li>{{ item }}</li>
+          <li class="queue-item queue-item-{{ item.state }}">
+            <span class="queue-index">{{ item.index }}.</span>
+            <span class="queue-title">{{ item.title }}</span>
+          </li>
         {% else %}
-          <li>Keine weiteren Titel</li>
+          <li class="queue-item queue-item-empty">
+            <span class="queue-title">Keine Titel geladen</span>
+          </li>
         {% endfor %}
       </ul>
     </article>

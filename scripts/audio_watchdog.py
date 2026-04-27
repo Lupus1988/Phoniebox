@@ -59,6 +59,32 @@ def usb_audio_devices():
     return list(devices.values())
 
 
+def _usb_power_targets(device):
+    targets = []
+    seen = set()
+
+    def add_target(path):
+        key = str(path)
+        if key in seen:
+            return
+        if (path / "power").exists():
+            targets.append(path)
+            seen.add(key)
+
+    current = device
+    while current and current != USB_SYSFS and current.parent != current:
+        add_target(current)
+        parent = current.parent
+        if parent == USB_SYSFS:
+            break
+        current = parent
+    device_name = str(device.name or "")
+    if "-" in device_name:
+        root_hub = USB_SYSFS / f"usb{device_name.split('-', 1)[0]}"
+        add_target(root_hub)
+    return targets
+
+
 def disable_usb_audio_autosuspend():
     touched = []
     if USBCORE_AUTOSUSPEND.exists() and _read_text(USBCORE_AUTOSUSPEND) != "-1":
@@ -71,24 +97,30 @@ def disable_usb_audio_autosuspend():
                     "name": "Global USB autosuspend disabled",
                 }
             )
+    handled = set()
     for device in usb_audio_devices():
-        power_dir = device / "power"
-        control = power_dir / "control"
-        delay = power_dir / "autosuspend_delay_ms"
-        changed = False
-        if control.exists() and _read_text(control) != "on":
-            changed = _write_text(control, "on") or changed
-        if delay.exists() and _read_text(delay) != "-1":
-            changed = _write_text(delay, "-1") or changed
-        if changed:
-            touched.append(
-                {
-                    "path": str(device),
-                    "vendor": _read_text(device / "idVendor"),
-                    "product": _read_text(device / "idProduct"),
-                    "name": _read_text(device / "product"),
-                }
-            )
+        for target in _usb_power_targets(device):
+            target_key = str(target)
+            if target_key in handled:
+                continue
+            handled.add(target_key)
+            power_dir = target / "power"
+            control = power_dir / "control"
+            delay = power_dir / "autosuspend_delay_ms"
+            changed = False
+            if control.exists() and _read_text(control) != "on":
+                changed = _write_text(control, "on") or changed
+            if delay.exists() and _read_text(delay) != "-1":
+                changed = _write_text(delay, "-1") or changed
+            if changed:
+                touched.append(
+                    {
+                        "path": str(target),
+                        "vendor": _read_text(target / "idVendor"),
+                        "product": _read_text(target / "idProduct"),
+                        "name": _read_text(target / "product"),
+                    }
+                )
     return touched
 
 

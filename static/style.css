@@ -419,6 +419,23 @@ textarea {
   margin: 0.15rem 0 0.2rem;
 }
 
+.track-heading {
+  display: block;
+}
+
+.track-overline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.track-progress {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
 .title-stage p {
   margin: 0;
   font-size: 0.98rem;
@@ -604,6 +621,42 @@ textarea {
   margin-top: 1rem;
 }
 
+.queue-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.9rem;
+  align-items: center;
+}
+
+.queue-index {
+  min-width: 2.2rem;
+  font-size: 0.9rem;
+  font-weight: 800;
+  color: rgba(245, 247, 250, 0.62);
+}
+
+.queue-title {
+  min-width: 0;
+}
+
+.queue-item-played {
+  opacity: 0.62;
+}
+
+.queue-item-played .queue-title {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
+.queue-item-upcoming .queue-index,
+.queue-item-queued .queue-index {
+  color: rgba(245, 247, 250, 0.78);
+}
+
+.queue-item-empty {
+  grid-template-columns: 1fr;
+}
+
 .queue-list li,
 .plain-list li,
 .info-panel,
@@ -613,6 +666,17 @@ textarea {
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.04);
   padding: 0.9rem 1rem;
+}
+
+.queue-list li.queue-item-current {
+  border-color: rgba(82, 198, 124, 0.95);
+  background: linear-gradient(135deg, rgba(82, 198, 124, 0.22), rgba(255, 255, 255, 0.05));
+  box-shadow: 0 0 0 1px rgba(82, 198, 124, 0.24);
+}
+
+.queue-list li.queue-item-current .queue-index,
+.queue-list li.queue-item-current .queue-title {
+  color: #eefbef;
 }
 
 

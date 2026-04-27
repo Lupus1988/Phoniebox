@@ -24,7 +24,7 @@ if str(BASE_DIR) not in sys.path:
 from hardware.gpio import GPIO_TO_BOARD_PIN, SysfsGPIOInput, gpio_display_label, sample_gpio_levels_pinctrl, sysfs_gpio_available
 from hardware.manager import detect_hardware
 from hardware.pins import filter_reserved_gpio_names, potential_system_pins, reserved_system_pins
-from runtime.audio import build_track_queue, load_playlist_entries, pick_track_duration, track_title_from_entry
+from runtime.audio import load_playlist_entries, pick_track_duration, track_title_from_entry
 from services.audio_backends import create_audio_backend
 from system.networking import run_wifi_state_command, wifi_radio_enabled
 
@@ -1668,8 +1668,39 @@ class RuntimeService:
     def _rebuild_queue_display(self, player):
         entries = list(player.get("playlist_entries", []))
         current_index = max(0, int(player.get("current_track_index", 0)))
-        queue = build_track_queue(entries, current_index) if entries else []
-        queue.extend(item.get("title", "") for item in player.get("queued_tracks", []) if item.get("title"))
+        queue = []
+        for offset, entry in enumerate(entries, start=1):
+            title = self._track_title_for_entry(player, entry)
+            if offset - 1 < current_index:
+                state = "played"
+            elif offset - 1 == current_index:
+                state = "current"
+            else:
+                state = "upcoming"
+            queue.append(
+                {
+                    "index": offset,
+                    "title": title,
+                    "state": state,
+                    "is_current": state == "current",
+                    "is_played": state == "played",
+                }
+            )
+        next_index = len(queue) + 1
+        for item in player.get("queued_tracks", []):
+            title = str(item.get("title", "") or "").strip()
+            if not title:
+                continue
+            queue.append(
+                {
+                    "index": next_index,
+                    "title": title,
+                    "state": "queued",
+                    "is_current": False,
+                    "is_played": False,
+                }
+            )
+            next_index += 1
         player["queue"] = queue
         return player
 
@@ -2364,15 +2395,21 @@ class RuntimeService:
                 runtime_state, player = self._clear_playback_context(runtime_state, player, keep_loaded_media=False)
                 runtime_state = self.add_event(runtime_state, "Tag entfernt: Wiedergabe gestoppt")
             elif action == "pause":
-                runtime_state["playback_state"] = "paused"
-                player["is_playing"] = False
-                if runtime_state.get("playback_session"):
-                    runtime_state["playback_session"] = self.playback.pause(runtime_state["playback_session"])
-                    player["position_seconds"] = max(
-                        0,
-                        int(runtime_state["playback_session"].get("position_seconds", player.get("position_seconds", 0))),
-                    )
-                runtime_state = self.add_event(runtime_state, "Tag entfernt: Wiedergabe pausiert")
+                session = runtime_state.get("playback_session", {})
+                if runtime_state.get("playback_state") == "stopped" or session.get("state") == "stopped":
+                    runtime_state["playback_state"] = "stopped"
+                    player["is_playing"] = False
+                    runtime_state = self.add_event(runtime_state, "Tag entfernt: Album beendet")
+                else:
+                    runtime_state["playback_state"] = "paused"
+                    player["is_playing"] = False
+                    if session:
+                        runtime_state["playback_session"] = self.playback.pause(session)
+                        player["position_seconds"] = max(
+                            0,
+                            int(runtime_state["playback_session"].get("position_seconds", player.get("position_seconds", 0))),
+                        )
+                    runtime_state = self.add_event(runtime_state, "Tag entfernt: Wiedergabe pausiert")
             else:
                 runtime_state = self.add_event(runtime_state, "Tag entfernt: keine Aktion")
             runtime_state = self.update_hardware_profile(runtime_state)
@@ -2436,6 +2473,19 @@ class RuntimeService:
                     self.save_player(result["player"])
                     return {"ok": True, "runtime": result["runtime"], "player": result["player"]}
                 runtime_state["manual_pause_rfid_uid"] = ""
+                runtime_state = self.update_hardware_profile(runtime_state)
+                runtime_state = self.apply_wifi_policy(runtime_state)
+                runtime_state = self.update_led_status(runtime_state)
+                self.save_runtime(runtime_state)
+                self.save_player(player)
+                return {"ok": True, "runtime": runtime_state, "player": player}
+
+            if same_album_active and runtime_state.get("playback_state") == "stopped" and session_has_track:
+                runtime_state, player = self.load_album_into_player(target_album, runtime_state, player, autoplay=True)
+                runtime_state["active_rfid_uid"] = normalized_uid
+                runtime_state["manual_pause_rfid_uid"] = ""
+                runtime_state["hardware"]["last_scanned_uid"] = normalized_uid
+                runtime_state = self.add_event(runtime_state, f"RFID gestartet: {target_album.get('name', '')}")
                 runtime_state = self.update_hardware_profile(runtime_state)
                 runtime_state = self.apply_wifi_policy(runtime_state)
                 runtime_state = self.update_led_status(runtime_state)

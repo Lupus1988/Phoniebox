@@ -15,6 +15,7 @@ from system.audio import detect_audio_environment, resolve_output_device
 BASE_DIR = Path(__file__).resolve().parent.parent
 MPV_STALL_GRACE_SECONDS = 1.5
 MPV_STALL_POSITION_EPSILON_SECONDS = 0.25
+MPV_STALL_NEAR_END_SECONDS = 8.0
 
 
 def configured_backend():
@@ -376,7 +377,7 @@ class PlaybackController:
         session.pop("mpv_health_checked_at", None)
         session.pop("mpv_stall_started_at", None)
 
-    def _mpv_playback_stalled(self, session, position_seconds, paused, idle_active):
+    def _mpv_playback_stalled(self, session, position_seconds, paused, idle_active, duration_seconds=0):
         if session.get("state") != "playing" or paused or idle_active:
             self._reset_mpv_progress_health(session)
             return False
@@ -385,6 +386,14 @@ class PlaybackController:
         try:
             position = float(position_seconds or 0)
         except (TypeError, ValueError):
+            self._reset_mpv_progress_health(session)
+            return False
+
+        try:
+            duration = float(duration_seconds or 0)
+        except (TypeError, ValueError):
+            duration = 0.0
+        if duration > 0 and position >= max(0.0, duration - MPV_STALL_NEAR_END_SECONDS):
             self._reset_mpv_progress_health(session)
             return False
 
@@ -643,7 +652,7 @@ class PlaybackController:
                     session["socket_path"] = ""
                 else:
                     session["state"] = "paused" if paused else "playing"
-                    if self._mpv_playback_stalled(session, position_float, paused, idle_active):
+                    if self._mpv_playback_stalled(session, position_float, paused, idle_active, duration_seconds):
                         return self._relaunch_mpv_session(session, "mpv Zeitposition steht trotz laufender Wiedergabe.")
                 return session
 

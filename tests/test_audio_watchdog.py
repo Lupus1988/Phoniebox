@@ -17,10 +17,17 @@ class AudioWatchdogTest(unittest.TestCase):
     def test_disable_usb_audio_autosuspend_sets_power_control_on(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             sysfs = Path(temp_dir)
+            root_hub = sysfs / "usb1"
             device = sysfs / "1-1"
             interface = sysfs / "1-1:1.0"
+            (root_hub / "power").mkdir(parents=True)
             (device / "power").mkdir(parents=True)
             interface.mkdir(parents=True)
+            (root_hub / "idVendor").write_text("1d6b", encoding="utf-8")
+            (root_hub / "idProduct").write_text("0002", encoding="utf-8")
+            (root_hub / "product").write_text("DWC OTG Controller", encoding="utf-8")
+            (root_hub / "power" / "control").write_text("auto", encoding="utf-8")
+            (root_hub / "power" / "autosuspend_delay_ms").write_text("0", encoding="utf-8")
             (device / "idVendor").write_text("8087", encoding="utf-8")
             (device / "idProduct").write_text("1024", encoding="utf-8")
             (device / "product").write_text("USB2.0 Device", encoding="utf-8")
@@ -33,8 +40,10 @@ class AudioWatchdogTest(unittest.TestCase):
             with patch.object(audio_watchdog, "USB_SYSFS", sysfs), patch.object(audio_watchdog, "USBCORE_AUTOSUSPEND", usbcore_autosuspend):
                 touched = audio_watchdog.disable_usb_audio_autosuspend()
 
-            self.assertEqual(len(touched), 2)
+            self.assertEqual(len(touched), 3)
             self.assertEqual(usbcore_autosuspend.read_text(encoding="utf-8"), "-1")
+            self.assertEqual((root_hub / "power" / "control").read_text(encoding="utf-8"), "on")
+            self.assertEqual((root_hub / "power" / "autosuspend_delay_ms").read_text(encoding="utf-8"), "-1")
             self.assertEqual((device / "power" / "control").read_text(encoding="utf-8"), "on")
             self.assertEqual((device / "power" / "autosuspend_delay_ms").read_text(encoding="utf-8"), "-1")
 

@@ -298,6 +298,45 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertEqual(updated["pid"], 5678)
         self.assertEqual(updated["state"], "playing")
 
+    def test_sync_session_does_not_relaunch_mpv_when_stall_happens_near_track_end(self):
+        session = {
+            "backend": "mpv",
+            "state": "playing",
+            "pid": 1234,
+            "socket_path": "/tmp/phoniebox-mpv.sock",
+            "position_seconds": 177,
+            "duration_seconds": 180,
+            "current_index": 0,
+            "track_path": "/tmp/test.mp3",
+            "mpv_health_time_pos": 177.2,
+            "mpv_stall_started_at": 100.0,
+        }
+
+        values = {
+            "time-pos": 177.2,
+            "pause": False,
+            "idle-active": False,
+            "playlist-pos": 0,
+            "duration": 180,
+            "path": "/tmp/test.mp3",
+        }
+
+        with patch.object(self.controller, "_process_exists", return_value=True):
+            with patch.object(self.controller, "_mpv_command_succeeded", return_value=True):
+                with patch.object(
+                    self.controller,
+                    "_mpv_get_property",
+                    side_effect=lambda current, name, default=None: values.get(name, default),
+                ):
+                    with patch.object(playback_module.time, "time", return_value=102.0):
+                        with patch.object(self.controller, "_relaunch_mpv_session") as relaunch:
+                            updated = self.controller.sync_session(dict(session))
+
+        relaunch.assert_not_called()
+        self.assertEqual(updated["pid"], 1234)
+        self.assertEqual(updated["state"], "playing")
+        self.assertNotIn("mpv_stall_started_at", updated)
+
     def test_play_resumes_paused_mpv_without_relaunch(self):
         session = {
             "backend": "mpv",

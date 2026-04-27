@@ -58,16 +58,42 @@ document.addEventListener("DOMContentLoaded", () => {
     return percent;
   }
 
+  function trackProgressLabel(player) {
+    const entries = Array.isArray(player.playlist_entries) ? player.playlist_entries : [];
+    if (!entries.length) {
+      return "";
+    }
+    const currentIndex = Math.max(0, Number(player.current_track_index) || 0);
+    return `${Math.min(entries.length, currentIndex + 1)}/${entries.length}`;
+  }
+
   function updateQueue(items) {
     const queue = document.getElementById("player-queue");
     if (!queue) {
       return;
     }
     queue.innerHTML = "";
-    const entries = items && items.length ? items : ["Keine weiteren Titel"];
+    const entries = items && items.length ? items : [{title: "Keine Titel geladen", state: "empty"}];
     for (const item of entries) {
       const li = document.createElement("li");
-      li.textContent = item;
+      const normalized = typeof item === "string" ? {title: item, state: "queued"} : item;
+      li.className = `queue-item queue-item-${normalized.state || "queued"}`;
+      if (normalized.state === "empty") {
+        const title = document.createElement("span");
+        title.className = "queue-title";
+        title.textContent = normalized.title || "Keine Titel geladen";
+        li.appendChild(title);
+        queue.appendChild(li);
+        continue;
+      }
+      const index = document.createElement("span");
+      index.className = "queue-index";
+      index.textContent = `${normalized.index || "?"}.`;
+      const title = document.createElement("span");
+      title.className = "queue-title";
+      title.textContent = normalized.title || "";
+      li.appendChild(index);
+      li.appendChild(title);
       queue.appendChild(li);
     }
   }
@@ -175,6 +201,7 @@ document.addEventListener("DOMContentLoaded", () => {
     setText("player-album", player.current_album || "");
     setText("player-album-secondary", player.current_album || "");
     setText("player-track", player.current_track || "");
+    setText("player-track-progress", trackProgressLabel(player));
     updateCover(player);
     setText("player-volume-value", `${payload.volume_percent}%`);
     const volumeValue = document.getElementById("player-volume-value");
