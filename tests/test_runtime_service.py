@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from runtime import audio as audio_module
 from runtime import playback as playback_module
@@ -304,6 +304,60 @@ class RuntimeServiceTest(unittest.TestCase):
         sync_session.assert_not_called()
         set_volume.assert_called_once()
         self.assertEqual(result["player"]["volume"], 50)
+
+    def test_sync_volume_backends_sets_amixer_to_100_when_mpd_controls_volume(self):
+        passive_backend = Mock()
+        passive_backend.status.return_value = {"available": True, "volume": 13, "muted": False}
+        passive_backend.set_volume.return_value = {"available": True, "volume": 100, "muted": False}
+
+        with patch("runtime.service.detect_audio_environment", return_value={}), patch(
+            "runtime.service.create_volume_backend", return_value=passive_backend
+        ) as create_volume_backend:
+            result = self.service.sync_volume_backends(force=True)
+
+        create_volume_backend.assert_called_with(
+            "amixer",
+            config={"alsa_volume_card": "", "alsa_mixer_controls": [], "alsa_mixer_control": ""},
+        )
+        passive_backend.set_volume.assert_called_once_with(100)
+        self.assertTrue(result["changed"])
+
+    def test_sync_volume_backends_sets_mpd_to_100_when_amixer_controls_volume(self):
+        self.service.volume_backend.backend_name = "amixer"
+        passive_backend = Mock()
+        passive_backend.status.return_value = {"available": True, "volume": 42, "muted": False}
+        passive_backend.set_volume.return_value = {"available": True, "volume": 100, "muted": False}
+
+        with patch("runtime.service.create_volume_backend", return_value=passive_backend) as create_volume_backend:
+            result = self.service.sync_volume_backends(force=True)
+
+        create_volume_backend.assert_called_with("mpd", config={})
+        passive_backend.set_volume.assert_called_once_with(100)
+        self.assertTrue(result["changed"])
+
+    def test_sync_volume_backends_uses_detected_alsa_fallback_for_passive_amixer(self):
+        passive_backend = Mock()
+        passive_backend.status.return_value = {"available": True, "volume": 13, "muted": False}
+        passive_backend.set_volume.return_value = {"available": True, "volume": 100, "muted": False}
+        detected_audio = {
+            "alsa_volume_card": "0",
+            "alsa_mixer_controls": ["PCM", "Mic"],
+            "alsa_mixer_control": "PCM",
+        }
+
+        with patch("runtime.service.detect_audio_environment", return_value=detected_audio), patch(
+            "runtime.service.create_volume_backend", return_value=passive_backend
+        ) as create_volume_backend:
+            self.service.sync_volume_backends(force=True)
+
+        create_volume_backend.assert_called_with(
+            "amixer",
+            config={
+                "alsa_volume_card": "0",
+                "alsa_mixer_controls": ["PCM", "Mic"],
+                "alsa_mixer_control": "PCM",
+            },
+        )
 
     def test_queue_album_persists_in_snapshot(self):
         self.service.load_album_by_id("album-1", autoplay=False)

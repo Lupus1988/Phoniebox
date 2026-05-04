@@ -526,6 +526,8 @@ class AppRoutesTest(unittest.TestCase):
                 "has_alsa_mixer": False,
             },
         ), patch("app.apply_audio_profile"), patch("app.deploy_audio_profile", return_value={"ok": True, "details": ["ok"]}), patch(
+            "app.runtime_service.sync_volume_backends"
+        ) as sync_volume_backends, patch(
             "app.save_apply_report"
         ):
             response = self.client.post("/setup", data={"section": "audio", "output_mode": "usb_dac", "volume_backend": "amixer"})
@@ -533,6 +535,7 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(setup["audio"]["volume_backend"], "mpd")
         save_setup.assert_called_once_with(setup)
+        sync_volume_backends.assert_called_once_with(force=True)
 
     def test_setup_audio_save_accepts_amixer_with_alsa_mixer(self):
         setup = default_setup()
@@ -550,6 +553,8 @@ class AppRoutesTest(unittest.TestCase):
                 "has_alsa_mixer": True,
             },
         ), patch("app.apply_audio_profile"), patch("app.deploy_audio_profile", return_value={"ok": True, "details": ["ok"]}), patch(
+            "app.runtime_service.sync_volume_backends"
+        ) as sync_volume_backends, patch(
             "app.save_apply_report"
         ):
             response = self.client.post("/setup", data={"section": "audio", "output_mode": "usb_dac", "volume_backend": "amixer"})
@@ -557,6 +562,7 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(setup["audio"]["volume_backend"], "amixer")
         save_setup.assert_called_once_with(setup)
+        sync_volume_backends.assert_called_once_with(force=True)
 
     def test_default_setup_includes_global_led_tuning_fields(self):
         setup = default_setup()

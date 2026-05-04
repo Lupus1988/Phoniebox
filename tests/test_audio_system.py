@@ -23,13 +23,40 @@ class AudioSystemTest(unittest.TestCase):
         self.assertEqual(
             devices[0],
             {
-                "card_index": "00",
-                "device_index": "00",
+                "card_index": "0",
+                "device_index": "0",
                 "name": "USB Audio",
                 "device_name": "USB Audio",
-                "alsa_hw": "hw:00,00",
+                "alsa_hw": "hw:0,0",
             },
         )
+
+    def test_resolve_output_device_matches_zero_padded_proc_indices_to_usb_card(self):
+        device = audio_module.resolve_output_device(
+            {
+                "cards": [
+                    {
+                        "card_index": "0",
+                        "card_id": "Device",
+                        "name": ": USB-Audio - USB2.0 Device",
+                        "description": "Generic USB2.0 Device at usb-3f980000.usb-1, full speed",
+                    },
+                    {
+                        "card_index": "1",
+                        "card_id": "vc4hdmi",
+                        "name": ": vc4-hdmi - vc4-hdmi",
+                        "description": "vc4-hdmi",
+                    },
+                ],
+                "playback_devices": [
+                    {"card_index": "00", "device_index": "00", "alsa_hw": "hw:0,0", "name": "USB Audio"},
+                    {"card_index": "01", "device_index": "00", "alsa_hw": "hw:1,0", "name": "MAI PCM i2s-hifi-0"},
+                ],
+            },
+            {"output_mode": "usb_dac"},
+        )
+
+        self.assertEqual(device, "hw:0,0")
 
     @patch.object(audio_module, "parse_proc_asound_pcm")
     @patch.object(audio_module, "run_command")

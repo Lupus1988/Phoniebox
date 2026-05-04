@@ -27,6 +27,7 @@ from hardware.pins import filter_reserved_gpio_names, potential_system_pins, res
 from runtime.audio import load_playlist_entries, pick_track_duration, track_title_from_entry
 from services.audio_backends import create_audio_backend
 from services.volume_backends import create_volume_backend
+from system.audio import detect_audio_environment
 from system.networking import run_wifi_state_command, wifi_radio_enabled
 
 DATA_DIR = BASE_DIR / "data"
@@ -215,6 +216,7 @@ class RuntimeService:
     GPIO_ACTIVITY_HOLD_SECONDS = 1.0
     VOLUME_SYNC_DEBOUNCE_SECONDS = 0.15
     VOLUME_SYNC_APPLY_INTERVAL_SECONDS = 0.05
+    PASSIVE_VOLUME_SYNC_INTERVAL_SECONDS = 15.0
     ENCODER_CLOCKWISE_TRANSITIONS = {
         (0b00, 0b01),
         (0b01, 0b11),
@@ -265,6 +267,8 @@ class RuntimeService:
         self._encoder_fast_poll_until = 0.0
         self._gpio_activity_until = 0.0
         self._pending_volume_due_at = 0.0
+        self._passive_volume_backend = ""
+        self._passive_volume_checked_at = 0.0
 
     def _audio_runtime_config_signature(self, audio_setup):
         config = dict(audio_setup or {})
@@ -296,6 +300,9 @@ class RuntimeService:
 
     def _volume_backend_active(self):
         return self._volume_backend_name() == "amixer"
+
+    def _passive_volume_backend_name(self):
+        return "mpd" if self._volume_backend_active() else "amixer"
 
     def _wifi_radio_enabled_cached(self, force_refresh=False):
         now = time.monotonic()
@@ -703,6 +710,38 @@ class RuntimeService:
         runtime_state["hardware"]["profile"]["audio"]["alsa_mixer_control"] = status.get("control", "")
         return runtime_state, player
 
+    def _sync_passive_volume_backend(self, runtime_state, force=False):
+        passive_backend_name = self._passive_volume_backend_name()
+        now = time.time()
+        if (
+            not force
+            and self._passive_volume_backend == passive_backend_name
+            and (now - float(self._passive_volume_checked_at or 0.0)) < self.PASSIVE_VOLUME_SYNC_INTERVAL_SECONDS
+        ):
+            return runtime_state, False
+
+        audio_config = dict((self.load_setup().get("audio") or {}))
+        if passive_backend_name == "amixer":
+            detected_audio = detect_audio_environment()
+            if not str(audio_config.get("alsa_volume_card") or "").strip():
+                audio_config["alsa_volume_card"] = str(detected_audio.get("alsa_volume_card") or "").strip()
+            if not list(audio_config.get("alsa_mixer_controls") or []):
+                audio_config["alsa_mixer_controls"] = list(detected_audio.get("alsa_mixer_controls") or [])
+            if not str(audio_config.get("alsa_mixer_control") or "").strip():
+                audio_config["alsa_mixer_control"] = str(detected_audio.get("alsa_mixer_control") or "").strip()
+        passive_backend = create_volume_backend(passive_backend_name, config=audio_config)
+        passive_status = dict(passive_backend.status() or {})
+        self._passive_volume_backend = passive_backend_name
+        self._passive_volume_checked_at = now
+
+        if passive_status.get("available", False):
+            current_volume = passive_status.get("volume")
+            current_muted = bool(passive_status.get("muted", False))
+            if current_muted or current_volume is None or int(current_volume) != 100:
+                passive_backend.set_volume(100)
+                return runtime_state, True
+        return runtime_state, False
+
     def _apply_effective_volume_to_session(self, runtime_state, player):
         session = dict(runtime_state.get("playback_session", {}) or {})
         if not session:
@@ -758,6 +797,7 @@ class RuntimeService:
                 status=volume_status,
             )
             runtime_state = self._apply_effective_volume_to_session(runtime_state, player)
+            runtime_state, _ = self._sync_passive_volume_backend(runtime_state)
             self.save_runtime(runtime_state)
             self.save_player(player)
             return {"runtime": runtime_state, "player": player, "applied": True}
@@ -1487,6 +1527,8 @@ class RuntimeService:
             merged, player, boot_changed = self._apply_boot_recovery(merged, player)
             changed = changed or boot_changed
             self._boot_recovery_checked = True
+        merged, passive_changed = self._sync_passive_volume_backend(merged)
+        changed = changed or passive_changed
         if changed:
             self.save_runtime(merged)
             if player is not None:
@@ -2741,6 +2783,7 @@ class RuntimeService:
                 status=volume_status,
             )
             runtime_state = self._apply_effective_volume_to_session(runtime_state, player)
+            runtime_state, _ = self._sync_passive_volume_backend(runtime_state, force=not defer_backend_sync)
             if defer_backend_sync:
                 runtime_state["last_updated"] = int(now)
             elif announce:
@@ -2793,10 +2836,24 @@ class RuntimeService:
                 status=volume_status,
             )
             runtime_state = self._apply_effective_volume_to_session(runtime_state, player)
+            runtime_state, _ = self._sync_passive_volume_backend(runtime_state, force=True)
             runtime_state = self.add_event(runtime_state, "Stumm" if player.get("muted") else f"Lautstärke {player['volume']}%")
             self.save_runtime(runtime_state)
             self.save_player(player)
             return {"runtime": runtime_state, "player": player}
+
+    def sync_volume_backends(self, force=False):
+        with self.state_transaction():
+            if force:
+                runtime_state = merge_defaults(self.load_runtime(), default_runtime_state())
+            else:
+                runtime_state = self.ensure_runtime()
+            changed = False
+            if force:
+                runtime_state, changed = self._sync_passive_volume_backend(runtime_state, force=True)
+                if changed:
+                    self.save_runtime(runtime_state)
+            return {"runtime": runtime_state, "player": self.load_player(), "changed": changed}
 
     def append_album_to_queue(self, album, runtime_state=None, player=None, shuffle=None):
         runtime_state = runtime_state or self.ensure_runtime()

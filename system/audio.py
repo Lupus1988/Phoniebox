@@ -37,6 +37,15 @@ def parse_simple_mixer_controls(output):
     return controls
 
 
+def normalize_alsa_index(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.isdigit():
+        return str(int(text))
+    return text
+
+
 def preferred_mixer_control(controls):
     normalized = [str(control or "").strip() for control in list(controls or []) if str(control or "").strip()]
     preferred_names = ("PCM", "Master", "Speaker", "Digital")
@@ -79,7 +88,7 @@ def parse_asound_cards():
             description = lines[index + 1].strip()
         devices.append(
             {
-                "card_index": raw_index.strip(),
+                "card_index": normalize_alsa_index(raw_index),
                 "card_id": card_id.strip(),
                 "name": name.strip(" -"),
                 "description": description,
@@ -103,9 +112,9 @@ def list_playback_devices():
         try:
             prefix, rest = stripped.split(":", 1)
             card_part, device_part = prefix.split(",")
-            card_index = card_part.replace("card", "").strip()
+            card_index = normalize_alsa_index(card_part.replace("card", ""))
             card_name = rest.split("[", 1)[0].strip()
-            device_index = device_part.replace("device", "").strip()
+            device_index = normalize_alsa_index(device_part.replace("device", ""))
             device_name = rest.split("[", 1)[1].split("]", 1)[0].strip() if "[" in rest else rest.strip()
             devices.append(
                 {
@@ -147,11 +156,11 @@ def parse_proc_asound_pcm(pcm_path=None):
             device_name = device_part.split(":", 1)[0].strip()
             devices.append(
                 {
-                    "card_index": card_index.strip(),
-                    "device_index": device_index.strip(),
+                    "card_index": normalize_alsa_index(card_index),
+                    "device_index": normalize_alsa_index(device_index),
                     "name": name,
                     "device_name": device_name,
-                    "alsa_hw": f"hw:{card_index.strip()},{device_index.strip()}",
+                    "alsa_hw": f"hw:{normalize_alsa_index(card_index)},{normalize_alsa_index(device_index)}",
                 }
             )
         except ValueError:
@@ -250,17 +259,20 @@ def resolve_output_device(snapshot, config):
     cards = snapshot.get("cards", [])
     playback_devices = snapshot.get("playback_devices", [])
     for device in playback_devices:
-        card_index = str(device.get("card_index", ""))
-        matching_card = next((card for card in cards if str(card.get("card_index", "")) == card_index), None)
+        card_index = normalize_alsa_index(device.get("card_index", ""))
+        matching_card = next(
+            (card for card in cards if normalize_alsa_index(card.get("card_index", "")) == card_index),
+            None,
+        )
         if matching_card and _card_matches_mode(matching_card, mode):
             return device.get("alsa_hw", "default")
     for card in cards:
         if _card_matches_mode(card, mode):
-            return f"hw:{card.get('card_index', '0')},0"
+            return f"hw:{normalize_alsa_index(card.get('card_index', '0'))},0"
     if playback_devices:
         return playback_devices[0].get("alsa_hw", "default")
     if cards:
-        return f"hw:{cards[0].get('card_index', '0')},0"
+        return f"hw:{normalize_alsa_index(cards[0].get('card_index', '0'))},0"
     return "default"
 
 

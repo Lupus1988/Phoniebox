@@ -2059,6 +2059,7 @@ def setup():
             audio_config = build_audio_runtime_config(audio, load_settings())
             apply_audio_profile(audio_config, AUDIO_PROFILE_DIR)
             result = deploy_audio_profile(audio_config, AUDIO_PROFILE_DIR)
+            runtime_service.sync_volume_backends(force=True)
             report = {
                 "ok": result.get("ok", False),
                 "summary": "Soundkarte gespeichert und angewendet." if result.get("ok") else "Soundkarte gespeichert, Systemprofil aber nur teilweise angewendet.",
