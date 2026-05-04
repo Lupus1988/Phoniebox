@@ -279,3 +279,9 @@ class LibraryServiceMetadataTest(unittest.TestCase):
 
         self.assertEqual(updated["tracks"][0]["duration_seconds"], 456)
         self.assertEqual(updated["tracks"][0]["title"], "Mein Titel")
+
+    def test_is_audio_file_accepts_only_mp3(self):
+        self.assertTrue(library_service.is_audio_file(Path("track.mp3")))
+        self.assertFalse(library_service.is_audio_file(Path("track.wav")))
+        self.assertFalse(library_service.is_audio_file(Path("track.flac")))
+        self.assertFalse(library_service.is_audio_file(Path("track.m4a")))

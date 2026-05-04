@@ -102,7 +102,7 @@
         <h3>Lautstärke</h3>
         <span id="player-volume-value" class="{% if volume_muted %}muted{% endif %}">{{ volume_percent }}%</span>
       </div>
-      <form class="mini-controls utility-controls utility-controls-three" method="post" data-player-form>
+      <form class="mini-controls utility-controls utility-controls-three" method="post" data-player-form data-volume-form>
         <button name="action" value="volume_down">-{{ volume_step }}%</button>
         <button name="action" value="mute">Stumm</button>
         <button name="action" value="volume_up">+{{ volume_step }}%</button>

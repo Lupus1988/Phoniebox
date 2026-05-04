@@ -51,6 +51,10 @@ def get_audio_environment():
     return detect_audio_environment()
 
 
+def get_volume_snapshot():
+    return runtime_service.volume_snapshot()
+
+
 def _execute_player_action(action, snapshot, seek_position=0):
     runtime_state = snapshot["runtime"]
     settings = snapshot["settings"]
@@ -90,6 +94,23 @@ def handle_player_action(action, payload=None):
     if result is None:
         return {"ok": False, "message": "Unbekannte Player-Aktion."}, 400
     return {"ok": True, **get_player_snapshot()}, 200
+
+
+def handle_volume_action(payload=None):
+    payload = payload or {}
+    action = str(payload.get("action", "") or "").strip().lower()
+    if action == "volume_up":
+        result = runtime_service.set_volume(runtime_service.volume_step(), announce=False)
+    elif action == "volume_down":
+        result = runtime_service.set_volume(-runtime_service.volume_step(), announce=False)
+    elif action == "mute":
+        result = runtime_service.toggle_mute()
+    elif action == "set":
+        result = runtime_service.set_absolute_volume(payload.get("volume", 0), announce=False)
+    else:
+        return {"ok": False, "message": "Unbekannte Lautstärke-Aktion."}, 400
+    snapshot = runtime_service.volume_snapshot()
+    return {"ok": True, **snapshot, "player_state": result["player"]}, 200
 
 
 def runtime_trigger_tick(payload=None):

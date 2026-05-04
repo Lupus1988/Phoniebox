@@ -37,8 +37,16 @@ def get_runtime_snapshot(*args, **kwargs):
     return _player_runtime_module().get_runtime_snapshot(*args, **kwargs)
 
 
+def get_volume_snapshot(*args, **kwargs):
+    return _player_runtime_module().get_volume_snapshot(*args, **kwargs)
+
+
 def handle_player_action(*args, **kwargs):
     return _player_runtime_module().handle_player_action(*args, **kwargs)
+
+
+def handle_volume_action(*args, **kwargs):
+    return _player_runtime_module().handle_volume_action(*args, **kwargs)
 
 
 def runtime_trigger_audio_test(*args, **kwargs):
@@ -91,7 +99,9 @@ __all__ = [
     "get_hardware_profile",
     "get_player_snapshot",
     "get_runtime_snapshot",
+    "get_volume_snapshot",
     "handle_player_action",
+    "handle_volume_action",
     "runtime_service",
     "runtime_trigger_audio_test",
     "runtime_trigger_button",

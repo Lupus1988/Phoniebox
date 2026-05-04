@@ -134,7 +134,7 @@ sudo mkdir -p "$APP_DIR" "$BIN_DIR"
 sudo cp -a "$SOURCE_DIR"/. "$APP_DIR"/
 
 sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip python3-lgpio network-manager avahi-daemon alsa-utils mpv mpg123
+sudo apt-get install -y python3 python3-venv python3-pip python3-lgpio network-manager avahi-daemon alsa-utils mpv mpg123 mpd mpc
 ensure_hardware_groups
 ensure_panel_env_file
 
@@ -184,6 +184,23 @@ if [ -d "$BACKUP_DIR/media" ]; then
   sudo mkdir -p "$APP_DIR/media"
   sudo cp -a "$BACKUP_DIR/media"/. "$APP_DIR/media"/
 fi
+
+sudo "$VENV_DIR/bin/python" - <<EOF
+import sys
+from pathlib import Path
+
+app_dir = Path("$APP_DIR")
+sys.path.insert(0, str(app_dir))
+from app import AUDIO_PROFILE_DIR, build_audio_runtime_config, load_settings, load_setup
+from system.audio import apply_audio_profile, deploy_audio_profile
+
+setup = load_setup()
+audio_setup = dict((setup or {}).get("audio") or {})
+settings = load_settings()
+runtime_config = build_audio_runtime_config(audio_setup, settings)
+apply_audio_profile(runtime_config, AUDIO_PROFILE_DIR)
+deploy_audio_profile(runtime_config, AUDIO_PROFILE_DIR)
+EOF
 
 if [ ! -f "$BIN_DIR/phoniebox-set-startup-volume.sh" ]; then
   sudo tee "$BIN_DIR/phoniebox-set-startup-volume.sh" >/dev/null <<'EOF'

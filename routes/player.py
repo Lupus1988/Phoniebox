@@ -5,7 +5,9 @@ from services import (
     get_hardware_profile,
     get_player_snapshot,
     get_runtime_snapshot,
+    get_volume_snapshot,
     handle_player_action,
+    handle_volume_action,
     load_link_session,
     runtime_trigger_audio_test,
     runtime_trigger_button,
@@ -122,6 +124,20 @@ def api_player_action():
     payload["seek_position"] = payload.get("seek_position", request.form.get("seek_position", 0))
     result, status_code = handle_player_action(payload["action"], payload)
     return _json_result(result, status_code, "Playerstatus aktualisiert.")
+
+
+@player_bp.route("/api/volume", methods=["GET", "PUT", "POST"])
+def api_volume():
+    if request.method == "GET":
+        return json_success(**get_volume_snapshot())
+    payload = request.get_json(silent=True) or {}
+    if not payload:
+        payload = dict(request.form)
+    payload["action"] = str(payload.get("action", request.form.get("action", ""))).strip()
+    if "volume" not in payload:
+        payload["volume"] = request.form.get("volume", 0)
+    result, status_code = handle_volume_action(payload)
+    return _json_result(result, status_code, "Lautstärke aktualisiert.")
 
 
 @player_bp.route("/api/player/snapshot")

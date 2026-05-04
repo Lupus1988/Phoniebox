@@ -6,7 +6,7 @@ from .base import AudioBackend
 class CurrentAudioBackend(AudioBackend):
     backend_name = "current"
 
-    def __init__(self):
+    def __init__(self, config=None):
         self._controller = PlaybackController()
 
     def status(self):

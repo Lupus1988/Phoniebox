@@ -132,8 +132,12 @@ def _mark_audio_state(service, ready, reason):
     with service.state_transaction():
         runtime_state = service.ensure_runtime()
         player = _load_player(service)
+        settings_loader = getattr(service, "load_settings", None)
+        settings = settings_loader() if callable(settings_loader) else {}
+        max_volume = max(0, min(100, int((settings or {}).get("max_volume", 100) or 100)))
         watchdog = dict(runtime_state.get("audio_watchdog") or {})
         previous_ready = watchdog.get("ready")
+        volume_status = None
         session = runtime_state.get("playback_session", {})
         session_had_process = bool(session.get("pid"))
         should_stop_playback = (not ready) and (
@@ -147,6 +151,26 @@ def _mark_audio_state(service, ready, reason):
             and runtime_state.get("playback_state") == "paused"
             and bool(session)
         )
+
+        volume_backend = getattr(service, "volume_backend", None)
+        desired_volume = max(0, min(max_volume, int(player.get("volume", 45) or 0)))
+        if ready and volume_backend is not None:
+            try:
+                current_volume_status = volume_backend.status()
+            except Exception:
+                current_volume_status = {}
+            current_volume = current_volume_status.get("volume")
+            if current_volume is None or int(current_volume) != desired_volume:
+                try:
+                    volume_status = volume_backend.set_volume(desired_volume)
+                except Exception:
+                    volume_status = None
+                if hasattr(service, "_apply_volume_backend_status"):
+                    runtime_state, player = service._apply_volume_backend_status(
+                        runtime_state,
+                        player,
+                        status=volume_status,
+                    )
 
         if should_stop_playback and session:
             runtime_state["playback_session"] = service.playback.pause(session)

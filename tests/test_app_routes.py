@@ -200,6 +200,24 @@ class AppRoutesTest(unittest.TestCase):
         response = self.client.get("/api/player/snapshot")
         self.assertEqual(response.status_code, 200)
 
+    def test_volume_snapshot_endpoint_renders(self):
+        response = self.client.get("/api/volume")
+        self.assertEqual(response.status_code, 200)
+
+    def test_volume_action_endpoint_uses_direct_handler(self):
+        with patch(
+            "routes.player.handle_volume_action",
+            return_value=({"ok": True, "volume": 52, "muted": False, "step": 5, "max_volume": 100}, 200),
+        ) as handle_volume_action:
+            response = self.client.post("/api/volume", json={"action": "volume_up"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        payload = response.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["message"], "Lautstärke aktualisiert.")
+        handle_volume_action.assert_called_once()
+
     def test_media_route_serves_album_files(self):
         with TemporaryDirectory() as tmpdir:
             media_dir = Path(tmpdir)
@@ -485,25 +503,59 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(setup["wifi"]["saved_networks"], [])
         self.assertFalse(setup["wifi"]["auto_wifi_off_enabled"])
         self.assertEqual(setup["wifi"]["auto_wifi_off_minutes"], 30)
-        self.assertNotIn("playback_backend", setup["audio"])
+        self.assertEqual(setup["audio"]["playback_backend"], "current")
+        self.assertEqual(setup["audio"]["volume_backend"], "mpd")
         self.assertEqual(setup["reader"]["idle_scan_interval_seconds"], 0.05)
         self.assertEqual(setup["reader"]["tag_confirm_count"], 2)
         self.assertEqual(setup["reader"]["presence_interval_seconds"], 0.55)
         self.assertEqual(setup["reader"]["presence_miss_count"], 2)
 
-    def test_setup_audio_save_ignores_playback_backend(self):
+    def test_setup_audio_save_rejects_amixer_without_alsa_mixer(self):
         setup = default_setup()
         runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
 
         with patch("app.load_setup", return_value=setup), patch("app.save_setup") as save_setup, patch(
             "app.runtime_service.status", return_value=runtime_snapshot
+        ), patch(
+            "app.detect_audio_environment",
+            return_value={
+                "device_model": "Test",
+                "has_analog_audio": False,
+                "recommended_external_card": False,
+                "has_alsa": True,
+                "has_alsa_mixer": False,
+            },
         ), patch("app.apply_audio_profile"), patch("app.deploy_audio_profile", return_value={"ok": True, "details": ["ok"]}), patch(
             "app.save_apply_report"
         ):
-            response = self.client.post("/setup", data={"section": "audio", "output_mode": "usb_dac", "playback_backend": "mpg123"})
+            response = self.client.post("/setup", data={"section": "audio", "output_mode": "usb_dac", "volume_backend": "amixer"})
 
         self.assertEqual(response.status_code, 302)
-        self.assertNotIn("playback_backend", setup["audio"])
+        self.assertEqual(setup["audio"]["volume_backend"], "mpd")
+        save_setup.assert_called_once_with(setup)
+
+    def test_setup_audio_save_accepts_amixer_with_alsa_mixer(self):
+        setup = default_setup()
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+
+        with patch("app.load_setup", return_value=setup), patch("app.save_setup") as save_setup, patch(
+            "app.runtime_service.status", return_value=runtime_snapshot
+        ), patch(
+            "app.detect_audio_environment",
+            return_value={
+                "device_model": "Test",
+                "has_analog_audio": False,
+                "recommended_external_card": False,
+                "has_alsa": True,
+                "has_alsa_mixer": True,
+            },
+        ), patch("app.apply_audio_profile"), patch("app.deploy_audio_profile", return_value={"ok": True, "details": ["ok"]}), patch(
+            "app.save_apply_report"
+        ):
+            response = self.client.post("/setup", data={"section": "audio", "output_mode": "usb_dac", "volume_backend": "amixer"})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(setup["audio"]["volume_backend"], "amixer")
         save_setup.assert_called_once_with(setup)
 
     def test_default_setup_includes_global_led_tuning_fields(self):
@@ -513,13 +565,15 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(setup["led_tuning"]["brightness_gamma"], 1.0)
         self.assertEqual(setup["led_tuning"]["update_rate_ms"], 70)
 
-    def test_normalize_setup_removes_legacy_playback_backend(self):
+    def test_normalize_setup_normalizes_audio_backends(self):
         setup = default_setup()
         setup["audio"]["playback_backend"] = "mpg123"
+        setup["audio"]["volume_backend"] = "alsa"
 
         normalized = normalize_setup_data(setup)
 
-        self.assertNotIn("playback_backend", normalized["audio"])
+        self.assertEqual(normalized["audio"]["playback_backend"], "current")
+        self.assertEqual(normalized["audio"]["volume_backend"], "mpd")
 
     def test_setup_led_save_accepts_global_led_tuning_fields(self):
         setup = default_setup()

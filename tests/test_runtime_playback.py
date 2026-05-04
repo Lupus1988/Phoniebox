@@ -80,7 +80,7 @@ class PlaybackControllerTest(unittest.TestCase):
 
     def test_detect_backend_uses_mpv_when_available(self):
         with patch.object(
-            playback_module.shutil, "which", side_effect=lambda name: "/usr/bin/" + name if name == "mpv" else None
+            playback_module.shutil, "which", side_effect=lambda name: "/usr/bin/mpv" if name == "mpv" else None
         ):
             status = playback_module.detect_backend()
 
@@ -209,6 +209,7 @@ class PlaybackControllerTest(unittest.TestCase):
             "time-pos": 177,
             "pause": False,
             "idle-active": False,
+            "eof-reached": False,
             "playlist-pos": 0,
             "duration": 180,
             "path": "/tmp/test.mp3",
@@ -222,6 +223,84 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertEqual(updated["state"], "playing")
         self.assertEqual(updated["pid"], 1234)
         self.assertEqual(updated["position_seconds"], 177)
+
+    def test_sync_session_stops_mpv_when_eof_is_reached_for_single_track_playback(self):
+        session = {
+            "backend": "mpv",
+            "state": "playing",
+            "pid": 1234,
+            "socket_path": "/tmp/phoniebox-mpv.sock",
+            "position_seconds": 179,
+            "duration_seconds": 180,
+            "current_index": 0,
+            "track_path": "/tmp/test.mp3",
+        }
+
+        values = {
+            "time-pos": 180,
+            "pause": False,
+            "idle-active": False,
+            "eof-reached": True,
+            "playlist-pos": 0,
+            "duration": 180,
+            "path": "/tmp/test.mp3",
+        }
+
+        with patch.object(self.controller, "_process_exists", return_value=True):
+            with patch.object(self.controller, "_mpv_command_succeeded", return_value=True):
+                with patch.object(
+                    self.controller,
+                    "_mpv_get_property",
+                    side_effect=lambda current, name, default=None: values.get(name, default),
+                ):
+                    with patch.object(self.controller, "_terminate_process_group") as terminate_process:
+                        with patch.object(self.controller, "_cleanup_socket") as cleanup_socket:
+                            updated = self.controller.sync_session(dict(session))
+
+        terminate_process.assert_called_once_with(1234)
+        cleanup_socket.assert_called_once_with("/tmp/phoniebox-mpv.sock")
+        self.assertEqual(updated["state"], "stopped")
+        self.assertIsNone(updated["pid"])
+        self.assertEqual(updated["socket_path"], "")
+
+    def test_sync_session_stops_mpv_when_player_turns_idle(self):
+        session = {
+            "backend": "mpv",
+            "state": "playing",
+            "pid": 1234,
+            "socket_path": "/tmp/phoniebox-mpv.sock",
+            "position_seconds": 180,
+            "duration_seconds": 180,
+            "current_index": 0,
+            "track_path": "/tmp/test.mp3",
+        }
+
+        values = {
+            "time-pos": 180,
+            "pause": False,
+            "idle-active": True,
+            "eof-reached": False,
+            "playlist-pos": 0,
+            "duration": 180,
+            "path": "/tmp/test.mp3",
+        }
+
+        with patch.object(self.controller, "_process_exists", return_value=True):
+            with patch.object(self.controller, "_mpv_command_succeeded", return_value=True):
+                with patch.object(
+                    self.controller,
+                    "_mpv_get_property",
+                    side_effect=lambda current, name, default=None: values.get(name, default),
+                ):
+                    with patch.object(self.controller, "_terminate_process_group") as terminate_process:
+                        with patch.object(self.controller, "_cleanup_socket") as cleanup_socket:
+                            updated = self.controller.sync_session(dict(session))
+
+        terminate_process.assert_called_once_with(1234)
+        cleanup_socket.assert_called_once_with("/tmp/phoniebox-mpv.sock")
+        self.assertEqual(updated["state"], "stopped")
+        self.assertIsNone(updated["pid"])
+        self.assertEqual(updated["socket_path"], "")
 
     def test_sync_session_marks_mpv_error_when_ipc_is_unreachable(self):
         session = {
@@ -289,7 +368,7 @@ class PlaybackControllerTest(unittest.TestCase):
         with patch.object(self.controller, "_process_exists", return_value=True):
             with patch.object(self.controller, "_mpv_command_succeeded", return_value=True):
                 with patch.object(self.controller, "_mpv_get_property", side_effect=lambda current, name, default=None: values.get(name, default)):
-                    with patch.object(playback_module.time, "time", return_value=102.0):
+                    with patch.object(playback_module.time, "time", return_value=105.0):
                         with patch.object(self.controller, "_relaunch_mpv_session", return_value=relaunched) as relaunch:
                             updated = self.controller.sync_session(dict(session))
 
@@ -297,6 +376,46 @@ class PlaybackControllerTest(unittest.TestCase):
         self.assertEqual(relaunch.call_args.args[1], "mpv Zeitposition steht trotz laufender Wiedergabe.")
         self.assertEqual(updated["pid"], 5678)
         self.assertEqual(updated["state"], "playing")
+
+    def test_sync_session_does_not_relaunch_mpv_during_startup_window(self):
+        session = {
+            "backend": "mpv",
+            "state": "playing",
+            "pid": 1234,
+            "socket_path": "/tmp/phoniebox-mpv.sock",
+            "position_seconds": 6,
+            "duration_seconds": 90,
+            "current_index": 0,
+            "track_path": "/tmp/test.mp3",
+            "mpv_health_time_pos": 6.0,
+            "mpv_stall_started_at": 100.0,
+        }
+
+        values = {
+            "time-pos": 6.0,
+            "pause": False,
+            "idle-active": False,
+            "eof-reached": False,
+            "playlist-pos": 0,
+            "duration": 90,
+            "path": "/tmp/test.mp3",
+        }
+
+        with patch.object(self.controller, "_process_exists", return_value=True):
+            with patch.object(self.controller, "_mpv_command_succeeded", return_value=True):
+                with patch.object(
+                    self.controller,
+                    "_mpv_get_property",
+                    side_effect=lambda current, name, default=None: values.get(name, default),
+                ):
+                    with patch.object(playback_module.time, "time", return_value=102.0):
+                        with patch.object(self.controller, "_relaunch_mpv_session") as relaunch:
+                            updated = self.controller.sync_session(dict(session))
+
+        relaunch.assert_not_called()
+        self.assertEqual(updated["pid"], 1234)
+        self.assertEqual(updated["state"], "playing")
+        self.assertNotIn("mpv_stall_started_at", updated)
 
     def test_sync_session_does_not_relaunch_mpv_when_stall_happens_near_track_end(self):
         session = {
@@ -316,6 +435,7 @@ class PlaybackControllerTest(unittest.TestCase):
             "time-pos": 177.2,
             "pause": False,
             "idle-active": False,
+            "eof-reached": False,
             "playlist-pos": 0,
             "duration": 180,
             "path": "/tmp/test.mp3",
@@ -451,6 +571,7 @@ class PlaybackControllerTest(unittest.TestCase):
 
             self.assertNotIn("generated_playlist_source", session)
             self.assertNotIn("playlist_mode", session)
+            self.assertNotIn("playlist_source", session)
             self.assertEqual(session["entry"], "02.mp3")
             self.assertEqual(session["track_path"], str((album_dir / "02.mp3").resolve()))
             self.assertEqual(session["playlist_entries"], ["02.mp3", "01.mp3"])

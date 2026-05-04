@@ -62,7 +62,7 @@ def save_link_session(data):
 
 
 def is_audio_file(path):
-    return path.suffix.lower() in {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".aac", ".opus", ".oga", ".aif", ".aiff", ".m4b", ".mp4"}
+    return path.suffix.lower() in {".mp3"}
 
 
 def is_cover_file(path):
@@ -248,18 +248,6 @@ def _normalization_encoder_args(path):
     suffix = path.suffix.lower()
     if suffix == ".mp3":
         return ["-codec:a", "libmp3lame", "-q:a", "2"]
-    if suffix in {".m4a", ".aac", ".mp4", ".m4b"}:
-        return ["-codec:a", "aac", "-b:a", "192k"]
-    if suffix == ".flac":
-        return ["-codec:a", "flac"]
-    if suffix in {".wav"}:
-        return ["-codec:a", "pcm_s16le"]
-    if suffix in {".aif", ".aiff"}:
-        return ["-codec:a", "pcm_s16be"]
-    if suffix in {".opus"}:
-        return ["-codec:a", "libopus", "-b:a", "128k"]
-    if suffix in {".ogg", ".oga"}:
-        return ["-codec:a", "libvorbis", "-q:a", "5"]
     return []
 
 
@@ -767,7 +755,7 @@ def import_album_folder(files, album_name, rfid_uid=""):
     playlist_path, audio_files = build_playlist(album_dir)
     if not audio_files:
         shutil.rmtree(album_dir, ignore_errors=True)
-        raise ValueError("Im hochgeladenen Ordner wurden keine Audiodateien gefunden.")
+        raise ValueError("Im hochgeladenen Ordner wurden keine unterstützten Audiodateien gefunden. Unterstützt werden nur MP3-Dateien.")
 
     cover_url = detect_cover(album_dir)
     album_entry = {
@@ -953,7 +941,7 @@ def add_tracks_to_album(album, files):
         uploaded_audio_paths.append(target)
 
     if not saved_audio:
-        raise ValueError("Es wurden keine unterstützten Audiodateien hochgeladen.")
+        raise ValueError("Es wurden keine unterstützten Audiodateien hochgeladen. Unterstützt werden nur MP3-Dateien.")
     audio_report = default_audio_processing_report()
     return refresh_album_metadata(album), audio_report
 

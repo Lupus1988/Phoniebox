@@ -168,8 +168,9 @@
           <input name="name" id="album-create-name" placeholder="Albumname" required>
         </label>
         <label class="full hidden-input-wrap">
-          <input type="file" name="track_files" id="album-track-input-create" multiple accept=".mp3,.m4a,.wav,.flac,.ogg,.aac,.opus,.oga,.aif,.aiff,.m4b,.mp4">
+          <input type="file" name="track_files" id="album-track-input-create" multiple accept=".mp3,audio/mpeg">
         </label>
+        <p class="page-copy full">Unterstützt werden nur MP3-Dateien.</p>
         <div id="album-create-warning" class="create-warning-box full" hidden>Albumname bereits vorhanden.</div>
         <div id="album-create-upload-status" class="upload-status-box full" hidden>
           <div class="upload-status-head">

@@ -1,5 +1,6 @@
 document.addEventListener("DOMContentLoaded", () => {
   const forms = document.querySelectorAll("[data-player-form]");
+  const volumeForms = document.querySelectorAll("[data-volume-form]");
   if (!forms.length) {
     return;
   }
@@ -263,6 +264,50 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  async function submitVolumeForm(form, submitter) {
+    if (actionInFlight) {
+      return;
+    }
+    const formData = new FormData(form);
+    if (submitter?.name) {
+      formData.set(submitter.name, submitter.value);
+    }
+    const payload = Object.fromEntries(formData.entries());
+
+    actionInFlight = true;
+    setFormsDisabled(true);
+    setStatus(actionLabel(payload.action), "busy");
+
+    try {
+      const response = await fetch("/api/volume", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.ok === false) {
+        setStatus(extractError(result, "Lautstärke konnte nicht geändert werden."), "error");
+        return;
+      }
+      const volumeValue = document.getElementById("player-volume-value");
+      if (volumeValue) {
+        volumeValue.textContent = `${result.volume ?? 0}%`;
+        volumeValue.classList.toggle("muted", Boolean(result.muted));
+      }
+      setStatus(result.message || "Lautstärke aktualisiert.", "success");
+      window.setTimeout(() => {
+        if (!actionInFlight) {
+          pollSnapshot();
+        }
+      }, 150);
+    } catch (_error) {
+      setStatus("Lautstärke konnte nicht geändert werden.", "error");
+    } finally {
+      actionInFlight = false;
+      setFormsDisabled(false);
+    }
+  }
+
   async function pollSnapshot() {
     try {
       const response = await fetch("/api/player/snapshot");
@@ -278,6 +323,10 @@ document.addEventListener("DOMContentLoaded", () => {
   for (const form of forms) {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (form.hasAttribute("data-volume-form")) {
+        await submitVolumeForm(form, event.submitter);
+        return;
+      }
       await submitPlayerForm(form, event.submitter);
     });
   }

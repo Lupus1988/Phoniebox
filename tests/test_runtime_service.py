@@ -22,14 +22,19 @@ class RuntimeServiceTest(unittest.TestCase):
         self.media_dir = self.base_dir / "media" / "albums"
         self.album_dir = self.media_dir / "test-album"
         self.album_dir_2 = self.media_dir / "queue-album"
+        self.album_dir_3 = self.media_dir / "queue-album-multi"
         self.album_dir.mkdir(parents=True, exist_ok=True)
         self.album_dir_2.mkdir(parents=True, exist_ok=True)
+        self.album_dir_3.mkdir(parents=True, exist_ok=True)
 
         (self.album_dir / "playlist.m3u").write_text("#EXTM3U\n01-start.mp3\n02-weiter.mp3\n", encoding="utf-8")
         (self.album_dir_2 / "playlist.m3u").write_text("#EXTM3U\n03-bonus.mp3\n", encoding="utf-8")
+        (self.album_dir_3 / "playlist.m3u").write_text("#EXTM3U\n04-mehr.mp3\n05-finale.mp3\n", encoding="utf-8")
         (self.album_dir / "01-start.mp3").write_bytes(b"")
         (self.album_dir / "02-weiter.mp3").write_bytes(b"")
         (self.album_dir_2 / "03-bonus.mp3").write_bytes(b"")
+        (self.album_dir_3 / "04-mehr.mp3").write_bytes(b"")
+        (self.album_dir_3 / "05-finale.mp3").write_bytes(b"")
 
         write_json(
             self.data_dir / "player_state.json",
@@ -95,6 +100,15 @@ class RuntimeServiceTest(unittest.TestCase):
                         "rfid_uid": "",
                         "cover_url": "",
                     },
+                    {
+                        "id": "album-3",
+                        "name": "Queuealbum Mehrteilig",
+                        "folder": "media/albums/queue-album-multi",
+                        "playlist": "media/albums/queue-album-multi/playlist.m3u",
+                        "track_count": 2,
+                        "rfid_uid": "",
+                        "cover_url": "",
+                    },
                 ]
             },
         )
@@ -134,6 +148,44 @@ class RuntimeServiceTest(unittest.TestCase):
 
     def test_runtime_service_uses_audio_backend_factory(self):
         self.assertIs(self.service.playback, self.service.audio_backend)
+
+    def test_runtime_service_reads_backend_name_from_setup(self):
+        setup = service_module.load_json(self.data_dir / "setup.json", {})
+        setup["audio"] = {"playback_backend": "mpd", "mpd_music_directory": str(self.base_dir)}
+        write_json(self.data_dir / "setup.json", setup)
+
+        with patch("runtime.service.create_audio_backend") as create_backend:
+            create_backend.return_value = self.service.audio_backend
+            service_module.RuntimeService()
+
+        create_backend.assert_called_once_with(
+            "mpd",
+            config={"playback_backend": "mpd", "mpd_music_directory": str(self.base_dir)},
+        )
+
+    def test_runtime_service_uses_amixer_volume_backend_from_setup(self):
+        setup = service_module.load_json(self.data_dir / "setup.json", {})
+        setup["audio"] = {
+            "playback_backend": "mpd",
+            "volume_backend": "amixer",
+            "alsa_volume_card": "Device",
+            "alsa_mixer_control": "PCM",
+        }
+        write_json(self.data_dir / "setup.json", setup)
+
+        with patch("runtime.service.create_volume_backend") as create_volume_backend:
+            create_volume_backend.return_value = self.service.volume_backend
+            service_module.RuntimeService()
+
+        create_volume_backend.assert_called_once_with(
+            "amixer",
+            config={
+                "playback_backend": "mpd",
+                "volume_backend": "amixer",
+                "alsa_volume_card": "Device",
+                "alsa_mixer_control": "PCM",
+            },
+        )
 
     def test_load_album_by_id_autoplay_populates_player(self):
         result = self.service.load_album_by_id("album-1", autoplay=True)
@@ -193,6 +245,66 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(self.queue_titles(cleared["player"]["queue"]), ["01 start"])
         self.assertEqual(self.queue_states(cleared["player"]["queue"]), ["current"])
 
+    def test_deferred_volume_sync_flushes_latest_encoder_target(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        first = self.service.set_volume(5, defer_backend_sync=True)
+        second = self.service.set_volume(5, defer_backend_sync=True)
+
+        pending_before = second["runtime"]["volume_sync"]["pending_target"]
+        self.assertEqual(pending_before, second["player"]["volume"])
+
+        with patch.object(service_module.time, "time", return_value=999.0):
+            second["runtime"]["volume_sync"]["updated_at"] = 998.0
+            self.service._pending_volume_due_at = 0.0
+            with patch.object(self.service.volume_backend, "set_volume", wraps=self.service.volume_backend.set_volume) as set_volume:
+                flushed = self.service._apply_pending_volume_sync(second["runtime"], second["player"])
+
+        self.assertTrue(flushed["applied"])
+        self.assertIsNone(flushed["runtime"]["volume_sync"]["pending_target"])
+        self.assertGreaterEqual(set_volume.call_count, 1)
+
+    def test_deferred_volume_sync_applies_periodically_while_encoder_keeps_turning(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        runtime_state = self.service.ensure_runtime()
+        runtime_state["volume_sync"]["last_applied_at"] = 100.0
+        self.service.save_runtime(runtime_state)
+
+        with patch.object(service_module.time, "time", return_value=100.06):
+            with patch.object(self.service.volume_backend, "set_volume", wraps=self.service.volume_backend.set_volume) as set_volume:
+                result = self.service.set_volume(5, defer_backend_sync=True)
+
+        self.assertIsNone(result["runtime"]["volume_sync"]["pending_target"])
+        self.assertEqual(result["runtime"]["volume_sync"]["last_applied_at"], 100.06)
+        self.assertEqual(set_volume.call_count, 1)
+
+    def test_set_volume_uses_amixer_backend_when_configured(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        self.service.volume_backend.backend_name = "amixer"
+
+        with patch.object(self.service.volume_backend, "set_volume", return_value={"volume": 50, "muted": False}) as set_volume:
+            with patch.object(self.service.volume_backend, "status", return_value={"volume": 50, "muted": False, "card": "Device", "control": "PCM"}):
+                with patch.object(self.service.playback, "set_volume", wraps=self.service.playback.set_volume) as playback_set_volume:
+                    result = self.service.set_volume(5)
+
+        set_volume.assert_called_once_with(50)
+        playback_set_volume.assert_not_called()
+        self.assertEqual(result["player"]["volume"], 50)
+        self.assertEqual(result["runtime"]["playback_session"]["volume"], 100)
+
+    def test_set_volume_uses_fast_path_for_mpd_backend(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        runtime_state = self.service.ensure_runtime()
+        runtime_state["playback_session"]["backend"] = "mpd"
+        self.service.save_runtime(runtime_state)
+
+        with patch.object(self.service, "_sync_playback_session", wraps=self.service._sync_playback_session) as sync_session:
+            with patch.object(self.service.volume_backend, "set_volume", wraps=self.service.volume_backend.set_volume) as set_volume:
+                result = self.service.set_volume(5)
+
+        sync_session.assert_not_called()
+        set_volume.assert_called_once()
+        self.assertEqual(result["player"]["volume"], 50)
+
     def test_queue_album_persists_in_snapshot(self):
         self.service.load_album_by_id("album-1", autoplay=False)
 
@@ -247,6 +359,100 @@ class RuntimeServiceTest(unittest.TestCase):
 
         save_json.assert_not_called()
 
+    def test_load_player_rebuilds_derived_queue_and_current_track_from_persisted_state(self):
+        write_json(
+            self.data_dir / "player_state.json",
+            {
+                "current_album": "Testalbum",
+                "current_track": "veraltet",
+                "cover_url": "",
+                "volume": 45,
+                "position_seconds": 0,
+                "duration_seconds": 0,
+                "sleep_timer_minutes": 0,
+                "is_playing": False,
+                "queue": [{"index": 99, "title": "falsch", "state": "queued"}],
+                "playlist": "media/albums/test-album/playlist.m3u",
+                "playlist_entries": ["01-start.mp3", "02-weiter.mp3"],
+                "playlist_tracks": [
+                    {"path": "01-start.mp3", "title": "01 start", "duration_seconds": 180},
+                    {"path": "02-weiter.mp3", "title": "02 weiter", "duration_seconds": 180},
+                ],
+                "current_track_index": 1,
+                "queued_tracks": [
+                    {
+                        "album": "Queuealbum",
+                        "album_id": "album-2",
+                        "cover_url": "",
+                        "playlist": "media/albums/queue-album/playlist.m3u",
+                        "entry": "03-bonus.mp3",
+                        "title": "03 bonus",
+                        "duration_seconds": 180,
+                    }
+                ],
+            },
+        )
+
+        player = self.service.load_player()
+
+        self.assertEqual(player["current_track"], "02 weiter")
+        self.assertEqual(self.queue_titles(player["queue"]), ["01 start", "02 weiter", "03 bonus"])
+        self.assertEqual(self.queue_states(player["queue"]), ["played", "current", "queued"])
+        self.assertEqual(player["queued_tracks"][0]["type"], "album")
+        self.assertEqual([item["entry"] for item in player["queued_tracks"][0]["tracks"]], ["03-bonus.mp3"])
+
+    def test_load_json_quarantines_corrupt_json_and_returns_default(self):
+        player_file = self.data_dir / "player_state.json"
+        player_file.write_bytes(b"\x00" * 64)
+
+        recovered = service_module.load_json(player_file, {"volume": 45})
+
+        self.assertEqual(recovered, {"volume": 45})
+        self.assertFalse(player_file.exists())
+        quarantined = list(self.data_dir.glob("player_state.json.corrupt-*"))
+        self.assertEqual(len(quarantined), 1)
+        self.assertEqual(quarantined[0].read_bytes(), b"\x00" * 64)
+
+    def test_load_player_recovers_from_corrupt_player_state_file(self):
+        player_file = self.data_dir / "player_state.json"
+        player_file.write_bytes(b"\x00" * 64)
+
+        player = self.service.load_player()
+
+        self.assertEqual(player["current_album"], "")
+        self.assertEqual(player["current_track"], "")
+        self.assertEqual(player["volume"], 45)
+        self.assertEqual(player["queued_tracks"], [])
+        quarantined = list(self.data_dir.glob("player_state.json.corrupt-*"))
+        self.assertEqual(len(quarantined), 1)
+
+    def test_save_player_persists_normalized_derived_state(self):
+        stale_player = {
+            "current_album": "Testalbum",
+            "current_track": "veraltet",
+            "cover_url": "",
+            "volume": 45,
+            "position_seconds": 0,
+            "duration_seconds": 0,
+            "sleep_timer_minutes": 0,
+            "is_playing": False,
+            "queue": [{"index": 1, "title": "falsch", "state": "queued"}],
+            "playlist": "media/albums/test-album/playlist.m3u",
+            "playlist_entries": ["01-start.mp3", "02-weiter.mp3"],
+            "playlist_tracks": [
+                {"path": "01-start.mp3", "title": "01 start", "duration_seconds": 180},
+                {"path": "02-weiter.mp3", "title": "02 weiter", "duration_seconds": 180},
+            ],
+            "current_track_index": 1,
+            "queued_tracks": [],
+        }
+
+        self.service.save_player(stale_player)
+        persisted = service_module.load_json(self.data_dir / "player_state.json", {})
+
+        self.assertEqual(persisted["current_track"], "02 weiter")
+        self.assertNotIn("queue", persisted)
+
     def test_next_track_continues_into_queued_album(self):
         self.service.load_album_by_id("album-1", autoplay=True)
         self.service.queue_album_by_id("album-2")
@@ -260,6 +466,57 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(self.queue_titles(queued_track["player"]["queue"]), ["03 bonus"])
         self.assertEqual(self.queue_states(queued_track["player"]["queue"]), ["current"])
 
+    def test_next_track_loads_queued_multi_track_album_as_single_mpd_session(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        self.service.queue_album_by_id("album-3")
+        runtime_state = self.service.ensure_runtime()
+        player = self.service.load_player()
+        runtime_state["playback_session"] = {
+            "backend": "mpd",
+            "state": "playing",
+            "playlist": "media/albums/test-album/playlist.m3u",
+            "playlist_entries": ["01-start.mp3", "02-weiter.mp3"],
+            "entry": "02-weiter.mp3",
+            "current_index": 1,
+            "position_seconds": 0,
+            "duration_seconds": 180,
+            "volume": 45,
+        }
+        player["playlist"] = "media/albums/test-album/playlist.m3u"
+        player["playlist_entries"] = ["01-start.mp3", "02-weiter.mp3"]
+        player["playlist_tracks"] = [
+            {"path": "01-start.mp3", "title": "01 start", "duration_seconds": 180},
+            {"path": "02-weiter.mp3", "title": "02 weiter", "duration_seconds": 180},
+        ]
+        player["current_track_index"] = 1
+        player["current_track"] = "02 weiter"
+        self.service.save_runtime(runtime_state)
+        self.service.save_player(player)
+
+        with patch.object(self.service.playback, "open_track", wraps=self.service.playback.open_track) as open_track:
+            queued_album = self.service.next_track(autoplay=True)
+
+        open_track.assert_called_once()
+        self.assertEqual(queued_album["player"]["current_album"], "Queuealbum Mehrteilig")
+        self.assertEqual(queued_album["player"]["playlist_entries"], ["04-mehr.mp3", "05-finale.mp3"])
+        self.assertEqual(self.queue_titles(queued_album["player"]["queue"]), ["04 mehr", "05 finale"])
+        self.assertEqual(self.queue_states(queued_album["player"]["queue"]), ["current", "upcoming"])
+        self.assertEqual(queued_album["player"]["queued_tracks"], [])
+
+    def test_queue_album_without_active_player_loads_complete_album_for_mpd(self):
+        runtime_state = self.service.ensure_runtime()
+        runtime_state["playback_session"] = {"backend": "mpd"}
+        self.service.save_runtime(runtime_state)
+
+        queued = self.service.queue_album_by_id("album-3")
+
+        self.assertTrue(queued["ok"])
+        self.assertEqual(queued["player"]["current_album"], "Queuealbum Mehrteilig")
+        self.assertEqual(queued["player"]["playlist_entries"], ["04-mehr.mp3", "05-finale.mp3"])
+        self.assertEqual(self.queue_titles(queued["player"]["queue"]), ["04 mehr", "05 finale"])
+        self.assertEqual(self.queue_states(queued["player"]["queue"]), ["current", "upcoming"])
+        self.assertEqual(queued["player"]["queued_tracks"], [])
+
     def test_next_track_reopens_explicit_target_entry(self):
         self.service.load_album_by_id("album-1", autoplay=True)
         with patch.object(self.service.playback, "next_track", wraps=self.service.playback.next_track) as next_track:
@@ -268,6 +525,32 @@ class RuntimeServiceTest(unittest.TestCase):
 
         next_track.assert_not_called()
         open_track.assert_called_once()
+        self.assertEqual(result["player"]["current_track_index"], 1)
+        self.assertEqual(result["player"]["current_track"], "02 weiter")
+        self.assertEqual(result["player"]["position_seconds"], 0)
+
+    def test_next_track_uses_backend_native_step_for_mpd(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        runtime_state = self.service.ensure_runtime()
+        runtime_state["playback_session"]["backend"] = "mpd"
+        self.service.save_runtime(runtime_state)
+        advanced_session = {
+            **runtime_state["playback_session"],
+            "backend": "mpd",
+            "state": "playing",
+            "current_index": 1,
+            "entry": "02-weiter.mp3",
+            "position_seconds": 0,
+            "duration_seconds": 180,
+        }
+
+        with patch.object(self.service.playback, "next_track", return_value=advanced_session) as next_track:
+            with patch.object(self.service.playback, "open_track", wraps=self.service.playback.open_track) as open_track:
+                with patch.object(self.service.playback, "sync_session", return_value=advanced_session):
+                    result = self.service.next_track(autoplay=True)
+
+        next_track.assert_called_once()
+        open_track.assert_not_called()
         self.assertEqual(result["player"]["current_track_index"], 1)
         self.assertEqual(result["player"]["current_track"], "02 weiter")
         self.assertEqual(result["player"]["position_seconds"], 0)
@@ -315,8 +598,10 @@ class RuntimeServiceTest(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["player"]["current_track"], "02 weiter")
+        self.assertEqual(len(result["player"]["queued_tracks"]), 1)
+        self.assertEqual(result["player"]["queued_tracks"][0]["type"], "album")
         self.assertEqual(
-            [item["entry"] for item in result["player"]["queued_tracks"]],
+            [item["entry"] for item in result["player"]["queued_tracks"][0]["tracks"]],
             ["01-start.mp3"],
         )
         self.assertEqual(self.queue_titles(result["player"]["queue"]), ["02 weiter", "01 start"])
@@ -333,7 +618,7 @@ class RuntimeServiceTest(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["player"]["current_track"], "02 weiter")
-        self.assertEqual([item["entry"] for item in result["player"]["queued_tracks"]], ["01-start.mp3"])
+        self.assertEqual([item["entry"] for item in result["player"]["queued_tracks"][0]["tracks"]], ["01-start.mp3"])
         self.assertEqual(self.queue_titles(result["player"]["queue"]), ["02 weiter", "01 start"])
 
     def test_load_album_by_id_uses_saved_album_shuffle_setting(self):
@@ -400,6 +685,66 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(result["player"]["position_seconds"], 0)
         self.assertEqual(result["runtime"]["last_event"], "Vorheriger Titel: 01 start")
 
+    def test_previous_track_uses_backend_native_step_for_mpd(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        advanced = self.service.next_track(autoplay=True)
+        runtime_state = advanced["runtime"]
+        runtime_state["playback_session"]["backend"] = "mpd"
+        runtime_state["playback_session"]["state"] = "playing"
+        runtime_state["playback_session"]["current_index"] = 1
+        runtime_state["playback_session"]["entry"] = "02-weiter.mp3"
+        runtime_state["playback_session"]["position_seconds"] = 2
+        self.service.save_runtime(runtime_state)
+        player = self.service.load_player()
+        player["position_seconds"] = 2
+        self.service.save_player(player)
+        synced_session = dict(runtime_state["playback_session"])
+        previous_session = {
+            **runtime_state["playback_session"],
+            "backend": "mpd",
+            "state": "playing",
+            "current_index": 0,
+            "entry": "01-start.mp3",
+            "position_seconds": 0,
+            "duration_seconds": 180,
+        }
+
+        with patch.object(self.service.playback, "previous_track", return_value=previous_session) as previous_track:
+            with patch.object(self.service.playback, "open_track", wraps=self.service.playback.open_track) as open_track:
+                with patch.object(self.service.playback, "sync_session", side_effect=[synced_session, previous_session]):
+                    result = self.service.previous_track()
+
+        previous_track.assert_called_once()
+        open_track.assert_not_called()
+        self.assertEqual(result["player"]["current_track_index"], 0)
+        self.assertEqual(result["player"]["current_track"], "01 start")
+
+    def test_previous_track_restart_uses_seek_for_mpd(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        runtime_state = self.service.ensure_runtime()
+        runtime_state["playback_session"]["backend"] = "mpd"
+        self.service.save_runtime(runtime_state)
+        restarted_session = {
+            **runtime_state["playback_session"],
+            "backend": "mpd",
+            "state": "playing",
+            "current_index": 0,
+            "entry": "01-start.mp3",
+            "position_seconds": 0,
+            "duration_seconds": 180,
+        }
+
+        self.service.seek(9)
+        with patch.object(self.service.playback, "seek", return_value=restarted_session) as seek_track:
+            with patch.object(self.service.playback, "previous_track", wraps=self.service.playback.previous_track) as previous_track:
+                with patch.object(self.service.playback, "sync_session", return_value=restarted_session):
+                    result = self.service.previous_track()
+
+        seek_track.assert_called()
+        previous_track.assert_not_called()
+        self.assertEqual(result["player"]["current_track_index"], 0)
+        self.assertEqual(result["player"]["position_seconds"], 0)
+
     def test_sync_playback_session_marks_runtime_stopped_when_backend_stops_unexpectedly(self):
         runtime_state = self.service.ensure_runtime()
         player = self.service.load_player()
@@ -419,6 +764,75 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertTrue(session_finished)
         self.assertEqual(updated_runtime["playback_state"], "stopped")
         self.assertFalse(updated_player["is_playing"])
+
+    def test_sync_playback_session_logs_stop_diagnostics(self):
+        runtime_state = self.service.ensure_runtime()
+        player = self.service.load_player()
+        runtime_state, player = self.service.load_album_into_player(
+            self.service._album_by_id("album-1"),
+            runtime_state,
+            player,
+            autoplay=True,
+        )
+
+        stopped_session = dict(runtime_state["playback_session"])
+        stopped_session["state"] = "stopped"
+        stopped_session["stopped_reason"] = "eof-reached"
+        stopped_session["stopped_debug"] = {
+            "position_seconds": 148.2,
+            "duration_seconds": 205.0,
+            "eof_reached": True,
+            "idle_active": False,
+        }
+
+        with patch.object(self.service.playback, "sync_session", return_value=stopped_session):
+            updated_runtime, _updated_player, session_finished = self.service._sync_playback_session(runtime_state, player)
+
+        self.assertTrue(session_finished)
+        self.assertIn("Trackende-Diagnose: eof-reached", updated_runtime["last_event"])
+        self.assertIn("pos=148.2s", updated_runtime["last_event"])
+
+    def test_tick_advances_into_queued_album_when_session_finished_already_stopped_runtime(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        self.service.queue_album_by_id("album-3")
+        runtime_state = self.service.ensure_runtime()
+        player = self.service.load_player()
+        runtime_state["playback_state"] = "playing"
+        runtime_state["playback_session"] = {
+            "backend": "mpd",
+            "state": "playing",
+            "playlist": "media/albums/test-album/playlist.m3u",
+            "playlist_entries": ["01-start.mp3", "02-weiter.mp3"],
+            "entry": "02-weiter.mp3",
+            "current_index": 1,
+            "position_seconds": 179,
+            "duration_seconds": 180,
+            "volume": 45,
+        }
+        player["playlist"] = "media/albums/test-album/playlist.m3u"
+        player["playlist_entries"] = ["01-start.mp3", "02-weiter.mp3"]
+        player["playlist_tracks"] = [
+            {"path": "01-start.mp3", "title": "01 start", "duration_seconds": 180},
+            {"path": "02-weiter.mp3", "title": "02 weiter", "duration_seconds": 180},
+        ]
+        player["current_track_index"] = 1
+        player["current_track"] = "02 weiter"
+        self.service.save_runtime(runtime_state)
+        self.service.save_player(player)
+
+        stopped_session = {
+            **runtime_state["playback_session"],
+            "state": "stopped",
+            "position_seconds": 0,
+        }
+
+        with patch.object(self.service.playback, "sync_session", return_value=stopped_session):
+            result = self.service.tick()
+
+        self.assertEqual(result["runtime"]["playback_state"], "playing")
+        self.assertEqual(result["player"]["current_album"], "Queuealbum Mehrteilig")
+        self.assertEqual(result["player"]["playlist_entries"], ["04-mehr.mp3", "05-finale.mp3"])
+        self.assertEqual(self.queue_states(result["player"]["queue"]), ["current", "upcoming"])
 
     def test_remove_rfid_pause_uses_settings_and_preserves_position(self):
         write_json(
@@ -889,6 +1303,62 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(repeated["player"]["playlist_entries"], ["02-weiter.mp3", "01-start.mp3"])
         self.assertEqual(repeated["player"]["current_track_index"], 1)
 
+    def test_presence_rfid_does_not_jump_back_to_original_album_while_same_tag_stays_present_during_queued_album(self):
+        write_json(
+            self.data_dir / "setup.json",
+            {
+                "reader": {
+                    "type": "RC522",
+                    "connection_hint": "",
+                },
+                "buttons": [],
+                "leds": [],
+                "wifi": {},
+            },
+        )
+
+        self.service.assign_album_by_rfid("1234567890")
+        self.service.queue_album_by_id("album-3")
+        runtime_state = self.service.ensure_runtime()
+        player = self.service.load_player()
+        runtime_state["playback_state"] = "playing"
+        runtime_state["playback_session"] = {
+            "backend": "mpd",
+            "state": "playing",
+            "playlist": "media/albums/queue-album-multi/playlist.m3u",
+            "playlist_entries": ["04-mehr.mp3", "05-finale.mp3"],
+            "entry": "04-mehr.mp3",
+            "current_index": 0,
+            "position_seconds": 12,
+            "duration_seconds": 180,
+            "volume": 45,
+        }
+        runtime_state["active_album_id"] = "album-3"
+        runtime_state["active_rfid_uid"] = "1234567890"
+        player["current_album"] = "Queuealbum Mehrteilig"
+        player["current_track"] = "04 mehr"
+        player["playlist"] = "media/albums/queue-album-multi/playlist.m3u"
+        player["playlist_entries"] = ["04-mehr.mp3", "05-finale.mp3"]
+        player["playlist_tracks"] = [
+            {"path": "04-mehr.mp3", "title": "04 mehr", "duration_seconds": 180},
+            {"path": "05-finale.mp3", "title": "05 finale", "duration_seconds": 180},
+        ]
+        player["current_track_index"] = 0
+        player["is_playing"] = True
+        self.service.save_runtime(runtime_state)
+        self.service.save_player(player)
+
+        with patch.object(self.service, "_sync_playback_session", return_value=(runtime_state, player, False)):
+            with patch.object(self.service, "load_album_into_player", wraps=self.service.load_album_into_player) as load_album:
+                repeated = self.service.assign_album_by_rfid("1234567890")
+
+        self.assertTrue(repeated["ok"])
+        self.assertEqual(load_album.call_count, 0)
+        self.assertEqual(repeated["player"]["current_album"], "Queuealbum Mehrteilig")
+        self.assertEqual(repeated["player"]["playlist_entries"], ["04-mehr.mp3", "05-finale.mp3"])
+        self.assertEqual(repeated["runtime"]["active_album_id"], "album-3")
+        self.assertEqual(repeated["runtime"]["active_rfid_uid"], "1234567890")
+
     def test_next_track_reopens_target_entry_at_zero_when_session_state_is_stale(self):
         self.service.load_album_by_id("album-1", autoplay=True)
         runtime_state = self.service.ensure_runtime()
@@ -1070,6 +1540,43 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(self.queue_states(player["queue"]), ["played", "current"])
         self.assertEqual(player["duration_seconds"], 222)
         self.assertEqual(player["position_seconds"], 12)
+
+    def test_sync_playback_session_prefers_mpd_session_playlist_over_stale_player_state(self):
+        runtime_state = self.service.ensure_runtime()
+        player = self.service.load_player()
+        runtime_state["active_album_id"] = "album-3"
+        runtime_state["playback_state"] = "playing"
+        runtime_state["playback_session"] = {
+            "backend": "mpd",
+            "state": "playing",
+            "playlist": "media/albums/queue-album-multi/playlist.m3u",
+            "playlist_entries": ["04-mehr.mp3", "05-finale.mp3"],
+            "current_index": 1,
+            "entry": "05-finale.mp3",
+            "position_seconds": 21,
+            "duration_seconds": 180,
+            "volume": 45,
+        }
+        player["current_album"] = "Testalbum"
+        player["current_track"] = "01 start"
+        player["playlist"] = "media/albums/test-album/playlist.m3u"
+        player["playlist_entries"] = ["01-start.mp3", "02-weiter.mp3"]
+        player["playlist_tracks"] = [
+            {"path": "01-start.mp3", "title": "01 start", "duration_seconds": 180},
+            {"path": "02-weiter.mp3", "title": "02 weiter", "duration_seconds": 180},
+        ]
+        player["current_track_index"] = 0
+
+        with patch.object(self.service.playback, "sync_session", return_value=dict(runtime_state["playback_session"])):
+            runtime_state, player, session_finished = self.service._sync_playback_session(runtime_state, player)
+
+        self.assertFalse(session_finished)
+        self.assertEqual(player["current_album"], "Queuealbum Mehrteilig")
+        self.assertEqual(player["playlist"], "media/albums/queue-album-multi/playlist.m3u")
+        self.assertEqual(player["playlist_entries"], ["04-mehr.mp3", "05-finale.mp3"])
+        self.assertEqual(player["current_track_index"], 1)
+        self.assertEqual(player["current_track"], "05 finale")
+        self.assertEqual(self.queue_states(player["queue"]), ["played", "current"])
 
     def test_reader_behavior_always_plays_and_uses_remove_setting(self):
         write_json(
@@ -1754,7 +2261,7 @@ class RuntimeServiceTest(unittest.TestCase):
             self.service.poll_buttons_once(now=100.15)
             self.service.poll_buttons_once(now=100.20)
 
-        self.assertEqual(self.service.load_player()["volume"], 50)
+        self.assertEqual(self.service.load_player()["volume"], 55)
 
     def test_encoder_decoder_ignores_bounce_without_full_step(self):
         write_json(
@@ -1838,7 +2345,7 @@ class RuntimeServiceTest(unittest.TestCase):
             self.service.poll_buttons_once(now=100.20)
             self.service.poll_buttons_once(now=100.25)
 
-        self.assertEqual(self.service.load_player()["volume"], 50)
+        self.assertEqual(self.service.load_player()["volume"], 55)
 
     def test_encoder_direction_change_resets_partial_accumulator(self):
         write_json(
@@ -1883,7 +2390,7 @@ class RuntimeServiceTest(unittest.TestCase):
             self.service.poll_buttons_once(now=100.25)
             self.service.poll_buttons_once(now=100.30)
 
-        self.assertEqual(self.service.load_player()["volume"], 40)
+        self.assertEqual(self.service.load_player()["volume"], 35)
 
     def test_encoder_press_uses_module_switch_pin(self):
         write_json(

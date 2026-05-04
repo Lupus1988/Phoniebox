@@ -4,7 +4,6 @@ import shutil
 import socket
 import signal
 import subprocess
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -13,9 +12,10 @@ from system.audio import detect_audio_environment, resolve_output_device
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-MPV_STALL_GRACE_SECONDS = 1.5
+MPV_STALL_GRACE_SECONDS = 4.0
+MPV_STALL_STARTUP_GRACE_SECONDS = 10.0
 MPV_STALL_POSITION_EPSILON_SECONDS = 0.25
-MPV_STALL_NEAR_END_SECONDS = 8.0
+MPV_STALL_NEAR_END_SECONDS = 15.0
 
 
 def configured_backend():
@@ -277,33 +277,6 @@ class PlaybackController:
         except OSError:
             pass
 
-    def _cleanup_generated_playlist(self, playlist_path):
-        if not playlist_path:
-            return
-        try:
-            path = Path(playlist_path)
-            if path.exists():
-                path.unlink()
-        except OSError:
-            pass
-
-    def _build_runtime_playlist(self, playlist_relative_path, entries):
-        playlist_path = self._resolve_playlist_path(playlist_relative_path)
-        if not playlist_path or not entries:
-            return ""
-        lines = ["#EXTM3U"]
-        for entry in entries:
-            track_path = self._resolve_track_path(playlist_relative_path, entry)
-            if not track_path:
-                continue
-            lines.append(str(track_path))
-        if len(lines) <= 1:
-            return ""
-        handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".m3u", prefix="phoniebox-runtime-", delete=False)
-        with handle:
-            handle.write("\n".join(lines) + "\n")
-        return handle.name
-
     def _entry_for_current_path(self, playlist_relative_path, current_path, entries):
         if not current_path:
             return ""
@@ -393,6 +366,16 @@ class PlaybackController:
             duration = float(duration_seconds or 0)
         except (TypeError, ValueError):
             duration = 0.0
+        try:
+            started_at = float(session.get("started_at") or 0)
+        except (TypeError, ValueError):
+            started_at = 0.0
+        playback_age = position
+        if started_at > 0:
+            playback_age = max(playback_age, max(0.0, now - started_at))
+        if playback_age < MPV_STALL_STARTUP_GRACE_SECONDS:
+            self._reset_mpv_progress_health(session)
+            return False
         if duration > 0 and position >= max(0.0, duration - MPV_STALL_NEAR_END_SECONDS):
             self._reset_mpv_progress_health(session)
             return False
@@ -576,13 +559,10 @@ class PlaybackController:
         if previous_session:
             self.stop(previous_session)
         backend = self.status()["active_backend"]
-        playlist_path = self._resolve_playlist_path(playlist_relative_path)
         track_path = self._resolve_track_path(playlist_relative_path, entry)
-        playlist_source = str(playlist_path) if playlist_path else ""
         return {
             "backend": backend,
             "playlist": playlist_relative_path,
-            "playlist_source": playlist_source,
             "playlist_entries": list(entries or []),
             "entry": entry,
             "current_index": max(0, int(current_index)),
@@ -620,6 +600,7 @@ class PlaybackController:
                 position = self._mpv_get_property(session, "time-pos", session.get("position_seconds", 0))
                 paused = bool(self._mpv_get_property(session, "pause", session.get("state") == "paused"))
                 idle_active = bool(self._mpv_get_property(session, "idle-active", False))
+                eof_reached = bool(self._mpv_get_property(session, "eof-reached", False))
                 playlist_pos = self._mpv_get_property(session, "playlist-pos", session.get("current_index", 0))
                 duration_seconds = self._mpv_get_property(session, "duration", session.get("duration_seconds", 0))
                 current_path = self._mpv_get_property(session, "path", session.get("track_path", ""))
@@ -640,11 +621,27 @@ class PlaybackController:
                         if current_entry in entries:
                             session["current_index"] = entries.index(current_entry)
                 session["started_at"] = None if paused else time.time() - session["position_seconds"]
-                # `eof-reached` can transiently flip to true while mpv is still
-                # alive and advancing within the current playlist. Treat only an
-                # actually idle player as a finished session.
-                if idle_active:
+                # Phoniebox drives mpv as a single-track player. `eof-reached`
+                # therefore means the current file is done and can be advanced
+                # by the runtime without waiting for a separate playlist state.
+                if idle_active or eof_reached:
                     self._reset_mpv_progress_health(session)
+                    if pid:
+                        self._terminate_process_group(pid)
+                    reason_parts = []
+                    if eof_reached:
+                        reason_parts.append("eof-reached")
+                    if idle_active:
+                        reason_parts.append("idle-active")
+                    session["stopped_reason"] = ", ".join(reason_parts) or "mpv-stopped"
+                    session["stopped_debug"] = {
+                        "position_seconds": round(position_float, 3),
+                        "duration_seconds": round(float(duration_seconds or 0), 3),
+                        "paused": paused,
+                        "idle_active": idle_active,
+                        "eof_reached": eof_reached,
+                        "track_path": session.get("track_path", ""),
+                    }
                     session["state"] = "stopped"
                     session["pid"] = None
                     session["started_at"] = None
@@ -667,6 +664,12 @@ class PlaybackController:
         self._cleanup_socket(session.get("socket_path", ""))
         session["socket_path"] = ""
         if session.get("state") == "playing":
+            session["stopped_reason"] = "process-missing"
+            session["stopped_debug"] = {
+                "position_seconds": float(session.get("position_seconds", 0) or 0),
+                "duration_seconds": float(session.get("duration_seconds", 0) or 0),
+                "track_path": session.get("track_path", ""),
+            }
             session["state"] = "stopped"
         return session
 

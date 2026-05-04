@@ -71,6 +71,7 @@ class AudioWatchdogTest(unittest.TestCase):
         service.state_transaction.return_value = nullcontext()
         service.ensure_runtime.return_value = runtime_state
         service.load_player.return_value = player
+        service.load_settings.return_value = {"max_volume": 60}
         service.playback.pause.return_value = paused_session
         service.add_event.side_effect = lambda state, message, level="info", mark_activity=True: {**state, "last_event": message}
 
@@ -104,7 +105,7 @@ class AudioWatchdogTest(unittest.TestCase):
             },
             "event_log": [],
         }
-        player = {"is_playing": False, "position_seconds": 42}
+        player = {"is_playing": False, "position_seconds": 42, "volume": 42}
         resumed_session = {
             **runtime_state["playback_session"],
             "state": "playing",
@@ -115,11 +116,17 @@ class AudioWatchdogTest(unittest.TestCase):
         service.state_transaction.return_value = nullcontext()
         service.ensure_runtime.return_value = runtime_state
         service.load_player.return_value = player
+        service.load_settings.return_value = {"max_volume": 60}
+        service.volume_backend = Mock()
+        service.volume_backend.status.return_value = {"volume": 60, "muted": False}
+        service.volume_backend.set_volume.return_value = {"volume": 42, "muted": False}
+        service._apply_volume_backend_status.side_effect = lambda state, current_player, status=None: (state, current_player)
         service.playback.play.return_value = resumed_session
         service.add_event.side_effect = lambda state, message, level="info", mark_activity=True: {**state, "last_event": message}
 
         updated = audio_watchdog._mark_audio_state(service, True, "")
 
+        service.volume_backend.set_volume.assert_called_once_with(42)
         service.playback.play.assert_called_once_with(paused_session)
         self.assertEqual(updated["playback_state"], "playing")
         self.assertEqual(updated["playback_session"]["pid"], 4321)
@@ -130,6 +137,87 @@ class AudioWatchdogTest(unittest.TestCase):
         self.assertEqual(updated["last_event"], "Audioausgabe wieder verfügbar: Wiedergabe fortgesetzt")
         service.save_runtime.assert_called_once()
         service.save_player.assert_called_once()
+
+    def test_watchdog_reapplies_volume_when_audio_returns_without_resume(self):
+        service = Mock()
+        runtime_state = {
+            "playback_state": "playing",
+            "playback_session": {},
+            "audio_watchdog": {
+                "ready": False,
+                "resume_on_recovery": False,
+            },
+            "event_log": [],
+        }
+        player = {"is_playing": True, "position_seconds": 12, "volume": 48}
+        service.state_transaction.return_value = nullcontext()
+        service.ensure_runtime.return_value = runtime_state
+        service.load_player.return_value = player
+        service.load_settings.return_value = {"max_volume": 60}
+        service.volume_backend = Mock()
+        service.volume_backend.status.return_value = {"volume": 88, "muted": False}
+        service.volume_backend.set_volume.return_value = {"volume": 48, "muted": False}
+        service._apply_volume_backend_status.side_effect = lambda state, current_player, status=None: (state, current_player)
+        service.add_event.side_effect = lambda state, message, level="info", mark_activity=True: {**state, "last_event": message}
+
+        updated = audio_watchdog._mark_audio_state(service, True, "")
+
+        service.volume_backend.set_volume.assert_called_once_with(48)
+        self.assertEqual(updated["audio_watchdog"]["ready"], True)
+        self.assertEqual(updated["last_event"], "Audioausgabe wieder verfügbar")
+
+    def test_watchdog_recovery_respects_max_volume_limit(self):
+        service = Mock()
+        runtime_state = {
+            "playback_state": "playing",
+            "playback_session": {},
+            "audio_watchdog": {
+                "ready": False,
+                "resume_on_recovery": False,
+            },
+            "event_log": [],
+        }
+        player = {"is_playing": True, "position_seconds": 12, "volume": 88}
+        service.state_transaction.return_value = nullcontext()
+        service.ensure_runtime.return_value = runtime_state
+        service.load_player.return_value = player
+        service.load_settings.return_value = {"max_volume": 60}
+        service.volume_backend = Mock()
+        service.volume_backend.status.return_value = {"volume": 88, "muted": False}
+        service.volume_backend.set_volume.return_value = {"volume": 60, "muted": False}
+        service._apply_volume_backend_status.side_effect = lambda state, current_player, status=None: (state, current_player)
+        service.add_event.side_effect = lambda state, message, level="info", mark_activity=True: {**state, "last_event": message}
+
+        audio_watchdog._mark_audio_state(service, True, "")
+
+        service.volume_backend.set_volume.assert_called_once_with(60)
+
+    def test_watchdog_enforces_saved_volume_when_backend_drifted(self):
+        service = Mock()
+        runtime_state = {
+            "playback_state": "playing",
+            "playback_session": {},
+            "audio_watchdog": {
+                "ready": True,
+                "resume_on_recovery": False,
+            },
+            "event_log": [],
+        }
+        player = {"is_playing": True, "position_seconds": 12, "volume": 45}
+        service.state_transaction.return_value = nullcontext()
+        service.ensure_runtime.return_value = runtime_state
+        service.load_player.return_value = player
+        service.load_settings.return_value = {"max_volume": 60}
+        service.volume_backend = Mock()
+        service.volume_backend.status.return_value = {"volume": 88, "muted": False}
+        service.volume_backend.set_volume.return_value = {"volume": 45, "muted": False}
+        service._apply_volume_backend_status.side_effect = lambda state, current_player, status=None: (state, current_player)
+        service.add_event.side_effect = lambda state, message, level="info", mark_activity=True: {**state, "last_event": message}
+
+        updated = audio_watchdog._mark_audio_state(service, True, "")
+
+        service.volume_backend.set_volume.assert_called_once_with(45)
+        self.assertEqual(updated["audio_watchdog"]["ready"], True)
 
 
 if __name__ == "__main__":

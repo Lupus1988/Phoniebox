@@ -122,9 +122,19 @@
             {% endfor %}
           </select>
         </label>
+        <label>
+          <span>Volume-Backend</span>
+          <select name="volume_backend">
+            {% for option in audio_volume_backend_options %}
+              <option value="{{ option.id }}" {% if setup_data.audio.volume_backend == option.id %}selected{% endif %} {% if option.disabled %}disabled{% endif %}>
+                {{ option.label }}
+              </option>
+            {% endfor %}
+          </select>
+        </label>
       </div>
       <ul class="plain-list setup-audio-info">
-        <li>Gerät erkannt: {{ audio_environment.device_model }}</li>
+        <li>ALSA-Mixer: {% if audio_environment.has_alsa_mixer %}vorhanden{% else %}nicht vorhanden{% endif %}</li>
         {% if audio_environment.has_analog_audio %}
           <li>Onboard-Soundkarte vorhanden.</li>
         {% elif audio_environment.recommended_external_card %}

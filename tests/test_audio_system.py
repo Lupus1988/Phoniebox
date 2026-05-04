@@ -48,6 +48,7 @@ class AudioSystemTest(unittest.TestCase):
 
         self.assertEqual(devices, [{"card_index": "0", "device_index": "0", "alsa_hw": "hw:0,0"}])
 
+    @patch.object(audio_module, "mixer_controls_for_card", return_value=[])
     @patch.object(audio_module, "list_playback_devices")
     @patch.object(audio_module, "parse_asound_cards")
     @patch.object(audio_module, "detect_device_model")
@@ -56,6 +57,7 @@ class AudioSystemTest(unittest.TestCase):
         mock_model,
         mock_cards,
         mock_devices,
+        _mock_mixer_controls,
     ):
         mock_model.return_value = "Raspberry Pi 4 Model B Rev 1.1"
         mock_cards.return_value = [
@@ -70,9 +72,12 @@ class AudioSystemTest(unittest.TestCase):
 
         snapshot = audio_module.detect_audio_environment()
 
+        self.assertTrue(snapshot["has_alsa"])
+        self.assertFalse(snapshot["has_alsa_mixer"])
         self.assertTrue(snapshot["has_analog_audio"])
         self.assertIn("Onboard-Analog-Audio erkannt.", snapshot["notes"])
 
+    @patch.object(audio_module, "mixer_controls_for_card")
     @patch.object(audio_module, "list_playback_devices")
     @patch.object(audio_module, "parse_asound_cards")
     @patch.object(audio_module, "detect_device_model")
@@ -81,6 +86,7 @@ class AudioSystemTest(unittest.TestCase):
         mock_model,
         mock_cards,
         mock_devices,
+        mock_mixer_controls,
     ):
         mock_model.return_value = "Raspberry Pi Zero 2 W Rev 1.0"
         mock_cards.return_value = [
@@ -92,13 +98,18 @@ class AudioSystemTest(unittest.TestCase):
             }
         ]
         mock_devices.return_value = [{"card_index": "0", "device_index": "0", "alsa_hw": "hw:0,0"}]
+        mock_mixer_controls.return_value = ["PCM"]
 
         snapshot = audio_module.detect_audio_environment()
 
+        self.assertTrue(snapshot["has_alsa"])
+        self.assertTrue(snapshot["has_alsa_mixer"])
+        self.assertEqual(snapshot["alsa_mixer_controls"], ["PCM"])
         self.assertTrue(snapshot["has_usb_audio"])
         self.assertFalse(snapshot["recommended_external_card"])
         self.assertIn("USB-Audio erkannt.", snapshot["notes"])
 
+    @patch.object(audio_module, "mixer_controls_for_card", return_value=[])
     @patch.object(audio_module, "list_playback_devices")
     @patch.object(audio_module, "parse_asound_cards")
     @patch.object(audio_module, "detect_device_model")
@@ -107,6 +118,7 @@ class AudioSystemTest(unittest.TestCase):
         mock_model,
         mock_cards,
         mock_devices,
+        _mock_mixer_controls,
     ):
         mock_model.return_value = "Raspberry Pi Zero 2 W Rev 1.0"
         mock_cards.return_value = []
@@ -169,6 +181,7 @@ class AudioSystemTest(unittest.TestCase):
             self.assertTrue((Path(temp_dir) / "boot-config.txt").exists())
             self.assertTrue((Path(temp_dir) / "set-startup-volume.sh").exists())
             self.assertTrue((Path(temp_dir) / "README.txt").exists())
+            self.assertTrue((Path(temp_dir) / "mpd.conf").exists())
 
     def test_deploy_audio_profile_installs_generated_files(self):
         with tempfile.TemporaryDirectory() as generated_dir, tempfile.TemporaryDirectory() as target_root:
@@ -178,6 +191,7 @@ class AudioSystemTest(unittest.TestCase):
             startup_script = generated_path / "set-startup-volume.sh"
             startup_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
             startup_script.chmod(0o755)
+            (generated_path / "mpd.conf").write_text("music_directory \"/opt/phoniebox-panel\"\n", encoding="utf-8")
 
             result = audio_module.deploy_audio_profile(
                 {
@@ -192,7 +206,47 @@ class AudioSystemTest(unittest.TestCase):
             self.assertTrue((Path(target_root) / "etc" / "asound.conf").exists())
             self.assertTrue((Path(target_root) / "usr" / "local" / "bin" / "phoniebox-set-startup-volume.sh").exists())
             self.assertTrue((Path(target_root) / "etc" / "systemd" / "system" / "phoniebox-audio-init.service").exists())
+            self.assertTrue((Path(target_root) / "etc" / "mpd.conf").exists())
             self.assertTrue((Path(target_root) / "boot" / "firmware" / "usercfg.txt").exists())
+
+    def test_build_mpd_conf_targets_repo_media_root(self):
+        conf = audio_module.build_mpd_conf(
+            {
+                "cards": [{"card_index": "1", "card_id": "Device", "name": "USB DAC", "description": "USB Audio"}],
+                "playback_devices": [{"card_index": "1", "device_index": "0", "alsa_hw": "hw:1,0"}],
+            },
+            {
+                "output_mode": "usb_dac",
+                "mixer_control": "auto",
+            },
+            app_root="/opt/phoniebox-panel",
+        )
+
+        self.assertIn('music_directory "/opt/phoniebox-panel"', conf)
+        self.assertIn('device "plughw:1,0"', conf)
+        self.assertIn('bind_to_address "localhost"', conf)
+
+    def test_build_mpd_conf_uses_null_mixer_for_amixer_backend(self):
+        conf = audio_module.build_mpd_conf(
+            {
+                "cards": [{"card_index": "1", "card_id": "Device", "name": "USB DAC", "description": "USB Audio"}],
+                "playback_devices": [{"card_index": "1", "device_index": "0", "alsa_hw": "hw:1,0"}],
+            },
+            {
+                "output_mode": "usb_dac",
+                "volume_backend": "amixer",
+                "mixer_control": "PCM",
+            },
+            app_root="/opt/phoniebox-panel",
+        )
+
+        self.assertIn('mixer_type "null"', conf)
+        self.assertNotIn('mixer_control "PCM"', conf)
+
+    def test_preferred_mixer_control_prefers_pcm(self):
+        control = audio_module.preferred_mixer_control(["Mic", "PCM", "Master"])
+
+        self.assertEqual(control, "PCM")
 
     @patch.object(audio_module, "command_exists")
     @patch.object(audio_module, "detect_audio_environment")

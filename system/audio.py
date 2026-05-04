@@ -3,6 +3,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
+APP_ROOT = Path("/opt/phoniebox-panel")
+MPD_CONFIG_PATH = Path("/etc/mpd.conf")
+MPD_SERVICE_NAME = "mpd.service"
 
 
 def command_exists(name):
@@ -16,6 +19,32 @@ def run_command(command):
         return {"ok": False, "output": "Zeitüberschreitung bei Systemabfrage."}
     output = (result.stdout or result.stderr or "").strip()
     return {"ok": result.returncode == 0, "output": output}
+
+
+def parse_simple_mixer_controls(output):
+    controls = []
+    for line in (output or "").splitlines():
+        stripped = line.strip()
+        prefix = "Simple mixer control '"
+        if not stripped.startswith(prefix):
+            continue
+        remainder = stripped[len(prefix) :]
+        if "'," not in remainder:
+            continue
+        control_name = remainder.split("',", 1)[0].strip()
+        if control_name and control_name not in controls:
+            controls.append(control_name)
+    return controls
+
+
+def preferred_mixer_control(controls):
+    normalized = [str(control or "").strip() for control in list(controls or []) if str(control or "").strip()]
+    preferred_names = ("PCM", "Master", "Speaker", "Digital")
+    for preferred in preferred_names:
+        for control in normalized:
+            if control.lower() == preferred.lower():
+                return control
+    return normalized[0] if normalized else ""
 
 
 def detect_device_model():
@@ -92,6 +121,15 @@ def list_playback_devices():
     return devices or parse_proc_asound_pcm()
 
 
+def mixer_controls_for_card(card_name):
+    if not command_exists("amixer"):
+        return []
+    result = run_command(["amixer", "-c", str(card_name), "scontrols"])
+    if not result["ok"]:
+        return []
+    return parse_simple_mixer_controls(result["output"])
+
+
 def parse_proc_asound_pcm(pcm_path=None):
     pcm_path = Path(pcm_path or "/proc/asound/pcm")
     devices = []
@@ -151,11 +189,33 @@ def detect_audio_environment():
         notes.append("USB-Audio erkannt.")
     if has_analog:
         notes.append("Onboard-Analog-Audio erkannt.")
+    mixer_controls = []
+    volume_card = None
+    for card in cards:
+        card_id = str(card.get("card_id", "") or "").strip()
+        card_index = str(card.get("card_index", "") or "").strip()
+        controls = mixer_controls_for_card(card_id) if card_id else []
+        if not controls and card_index:
+            controls = mixer_controls_for_card(card_index)
+        if controls:
+            mixer_controls = controls
+            volume_card = card_index or card_id
+            break
+    has_alsa = bool(cards)
+    if has_alsa:
+        notes.append("ALSA-Soundsystem erkannt.")
+    if mixer_controls:
+        notes.append(f"ALSA-Mixer erkannt ({', '.join(mixer_controls)}).")
     return {
         "device_model": model or "Unbekannt",
         "is_pi_zero_2w": is_pi_zero_2w,
         "cards": cards,
         "playback_devices": playback_devices,
+        "has_alsa": has_alsa,
+        "has_alsa_mixer": bool(mixer_controls),
+        "alsa_mixer_controls": mixer_controls,
+        "alsa_volume_card": volume_card or "",
+        "alsa_mixer_control": preferred_mixer_control(mixer_controls),
         "has_usb_audio": has_usb,
         "has_i2s_audio": has_i2s_hat,
         "has_hdmi_audio": has_hdmi,
@@ -286,6 +346,48 @@ def build_summary(snapshot, config):
     return "\n".join(lines) + "\n"
 
 
+def build_mpd_conf(snapshot, config, app_root=APP_ROOT):
+    app_root = Path(app_root)
+    output_device = resolve_output_device(snapshot, config)
+    mpd_device = f"plug{output_device}" if str(output_device).startswith("hw:") else str(output_device)
+    volume_backend = str(config.get("volume_backend", "mpd") or "mpd").strip().lower()
+    mixer_control = str(config.get("mixer_control", "auto") or "auto").strip()
+    if volume_backend == "amixer":
+        mixer_type = "null"
+        mixer_block = ""
+    else:
+        mixer_type = "hardware" if mixer_control not in {"", "auto"} else "software"
+        mixer_block = ""
+        if mixer_type == "hardware":
+            mixer_block = f'\n  mixer_control "{mixer_control}"'
+    db_dir = Path("/var/lib/mpd")
+    playlists_dir = db_dir / "playlists"
+    state_dir = Path("/var/run/mpd")
+    return f"""# Generiert durch Phoniebox Panel
+music_directory "{app_root}"
+playlist_directory "{playlists_dir}"
+db_file "{db_dir / 'database'}"
+state_file "{db_dir / 'state'}"
+sticker_file "{db_dir / 'sticker.sql'}"
+pid_file "{state_dir / 'pid'}"
+bind_to_address "localhost"
+auto_update "yes"
+restore_paused "yes"
+follow_inside_symlinks "yes"
+follow_outside_symlinks "no"
+
+audio_output {{
+  type "alsa"
+  name "Phoniebox ALSA"
+  device "{mpd_device}"
+  auto_resample "no"
+  auto_channels "no"
+  auto_format "no"
+  mixer_type "{mixer_type}"{mixer_block}
+}}
+"""
+
+
 def write_audio_artifacts(output_dir, snapshot, config):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -293,16 +395,19 @@ def write_audio_artifacts(output_dir, snapshot, config):
     boot_config, boot_notes = build_boot_config(config)
     startup_script = build_startup_volume_script(config)
     summary = build_summary(snapshot, config)
+    mpd_conf = build_mpd_conf(snapshot, config)
 
     asound_path = output_dir / "asound.conf"
     boot_path = output_dir / "boot-config.txt"
     startup_path = output_dir / "set-startup-volume.sh"
     summary_path = output_dir / "README.txt"
+    mpd_path = output_dir / "mpd.conf"
 
     asound_path.write_text(asound_conf, encoding="utf-8")
     boot_path.write_text(boot_config, encoding="utf-8")
     startup_path.write_text(startup_script, encoding="utf-8")
     summary_path.write_text(summary, encoding="utf-8")
+    mpd_path.write_text(mpd_conf, encoding="utf-8")
     startup_path.chmod(0o755)
 
     return {
@@ -310,6 +415,7 @@ def write_audio_artifacts(output_dir, snapshot, config):
         "boot_config": boot_path,
         "startup_script": startup_path,
         "summary": summary_path,
+        "mpd_conf": mpd_path,
         "boot_notes": boot_notes,
     }
 
@@ -355,8 +461,9 @@ def deploy_audio_profile(config, generated_dir, target_root="/"):
         asound_target = etc_dir / "asound.conf"
         startup_target = usr_local_bin / "phoniebox-set-startup-volume.sh"
         service_target = systemd_dir / "phoniebox-audio-init.service"
+        mpd_target = target_root / MPD_CONFIG_PATH.relative_to("/")
 
-        for target in [asound_target, startup_target, service_target]:
+        for target in [asound_target, startup_target, service_target, mpd_target]:
             backup = _backup_file(target)
             if backup:
                 details.append(f"Backup erstellt: {backup}")
@@ -387,6 +494,10 @@ WantedBy=multi-user.target
         deployed_files.append(service_target)
         details.append(f"Systemd-Service installiert: {service_target}")
 
+        shutil.copy2(generated_dir / "mpd.conf", mpd_target)
+        deployed_files.append(mpd_target)
+        details.append(f"MPD-Konfiguration installiert: {mpd_target}")
+
         if config.get("apply_boot_config"):
             boot_candidates = [
                 target_root / "boot" / "firmware" / "usercfg.txt",
@@ -409,6 +520,18 @@ WantedBy=multi-user.target
                 details.append("Systemd-Service aktiviert.")
             else:
                 details.append(f"Service-Aktivierung unvollständig: {daemon_reload['output'] or enable['output']}")
+
+        if (
+            str(config.get("playback_backend", "current") or "current").strip().lower() == "mpd"
+            and command_exists("systemctl")
+            and target_root == Path("/")
+        ):
+            enable_mpd = run_command(["sudo", "systemctl", "enable", MPD_SERVICE_NAME])
+            restart_mpd = run_command(["sudo", "systemctl", "restart", MPD_SERVICE_NAME])
+            if enable_mpd["ok"] and restart_mpd["ok"]:
+                details.append("MPD-Service aktiviert und neu gestartet.")
+            else:
+                details.append(f"MPD-Service konnte nicht vollständig aktualisiert werden: {enable_mpd['output'] or restart_mpd['output']}")
 
         return {"ok": True, "details": details, "deployed_files": [str(path) for path in deployed_files]}
     except OSError as exc:

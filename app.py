@@ -57,7 +57,7 @@ from services.library_service import (
     start_link_session,
     track_rows,
 )
-from system.audio import apply_audio_profile, deploy_audio_profile, detect_audio_environment
+from system.audio import apply_audio_profile, deploy_audio_profile, detect_audio_environment, preferred_mixer_control
 from system.networking import apply_wifi_profile, ensure_hostname, fallback_hotspot_cycle
 from utils import (
     album_editor_response,
@@ -340,6 +340,8 @@ def default_setup():
         "audio": {
             "output_mode": "usb_dac",
             "i2s_profile": "auto",
+            "playback_backend": "current",
+            "volume_backend": "mpd",
             "connection_hint": "Onboard- oder USB-Soundkarte auswählen",
         },
         "wifi": {
@@ -743,7 +745,14 @@ def normalize_setup_data(data):
     if audio.get("output_mode") not in {"analog_jack", "usb_dac"}:
         audio["output_mode"] = "usb_dac"
     audio["i2s_profile"] = "auto"
-    audio.pop("playback_backend", None)
+    backend = str(audio.get("playback_backend") or "current").strip().lower()
+    if backend not in {"current", "mpv", "mpd", "playback_controller"}:
+        backend = "current"
+    audio["playback_backend"] = "mpd" if backend == "mpd" else "current"
+    volume_backend = str(audio.get("volume_backend") or "mpd").strip().lower()
+    if volume_backend not in {"mpd", "amixer"}:
+        volume_backend = "mpd"
+    audio["volume_backend"] = volume_backend
     return data
 
 
@@ -861,8 +870,19 @@ def apply_reader_install_action(data, action, selected_type):
 
 def build_audio_runtime_config(audio_setup, settings):
     config = dict(audio_setup or {})
-    config["playback_backend"] = "mpv"
-    config["mixer_control"] = "auto"
+    backend = str(config.get("playback_backend") or "current").strip().lower()
+    config["playback_backend"] = "mpd" if backend == "mpd" else "current"
+    volume_backend = str(config.get("volume_backend") or "mpd").strip().lower()
+    config["volume_backend"] = "amixer" if volume_backend == "amixer" else "mpd"
+    if config["volume_backend"] == "amixer":
+        config["mixer_control"] = str(
+            config.get("alsa_mixer_control")
+            or config.get("mixer_control")
+            or preferred_mixer_control(config.get("alsa_mixer_controls", []))
+            or "auto"
+        ).strip() or "auto"
+    else:
+        config["mixer_control"] = "auto"
     config["preferred_output"] = "auto"
     config["mono_downmix"] = False
     config["external_soundcard_required"] = False
@@ -1488,6 +1508,29 @@ def audio_output_choices(environment=None):
     return choices
 
 
+def audio_volume_backend_choices(environment=None):
+    environment = environment or detect_audio_environment()
+    has_amixer = bool(environment.get("has_alsa") and environment.get("has_alsa_mixer"))
+    return [
+        {
+            "id": "mpd",
+            "label": "MPD",
+            "disabled": False,
+            "hint": "Lautstärke direkt über den Player regeln.",
+        },
+        {
+            "id": "amixer",
+            "label": "AMIXER",
+            "disabled": not has_amixer,
+            "hint": (
+                "Lautstärke über ALSA/PCM regeln."
+                if has_amixer
+                else "Nur verfügbar, wenn ALSA mit nutzbarem Mixer erkannt wurde."
+            ),
+        },
+    ]
+
+
 def network_targets(setup_data):
     wifi = setup_data.get("wifi", {})
     hostname = (wifi.get("hostname") or "phoniebox").strip()
@@ -1573,6 +1616,7 @@ def inject_choices():
         "power_off_routine_options": power_routine_options("power_off"),
         "power_routine_options": power_routine_catalog(),
         "audio_output_options": audio_output_choices(audio_environment),
+        "audio_volume_backend_options": audio_volume_backend_choices(audio_environment),
         "audio_environment": audio_environment,
     }
 
@@ -1992,10 +2036,25 @@ def setup():
 
         if section == "audio":
             audio = data["audio"]
+            audio_environment = detect_audio_environment()
             audio["output_mode"] = request.form.get("output_mode", audio.get("output_mode", "usb_dac")).strip() or "usb_dac"
             if audio["output_mode"] not in {"analog_jack", "usb_dac"}:
                 audio["output_mode"] = "usb_dac"
             audio["i2s_profile"] = "auto"
+            requested_volume_backend = str(request.form.get("volume_backend", audio.get("volume_backend", "mpd")) or "mpd").strip().lower()
+            available_volume_backends = {
+                option["id"]
+                for option in audio_volume_backend_choices(audio_environment)
+                if not option.get("disabled")
+            }
+            audio["volume_backend"] = requested_volume_backend if requested_volume_backend in available_volume_backends else "mpd"
+            audio["alsa_volume_card"] = str(audio_environment.get("alsa_volume_card") or "").strip()
+            audio["alsa_mixer_controls"] = list(audio_environment.get("alsa_mixer_controls") or [])
+            audio["alsa_mixer_control"] = str(
+                audio_environment.get("alsa_mixer_control")
+                or preferred_mixer_control(audio_environment.get("alsa_mixer_controls", []))
+                or ""
+            ).strip()
             save_setup(data)
             audio_config = build_audio_runtime_config(audio, load_settings())
             apply_audio_profile(audio_config, AUDIO_PROFILE_DIR)
