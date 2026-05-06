@@ -623,20 +623,29 @@ textarea {
 
 .queue-item {
   display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0.9rem;
+  grid-template-columns: auto auto 1fr;
+  column-gap: 0.22rem;
+  row-gap: 0.9rem;
   align-items: center;
 }
 
 .queue-index {
-  min-width: 2.2rem;
+  min-width: 0.65rem;
   font-size: 0.9rem;
   font-weight: 800;
   color: rgba(245, 247, 250, 0.62);
+  justify-self: start;
 }
 
 .queue-title {
   min-width: 0;
+}
+
+.queue-jump-button {
+  width: 2.2rem;
+  min-width: 2.2rem;
+  padding: 0.45rem 0;
+  justify-self: start;
 }
 
 .queue-item-played {

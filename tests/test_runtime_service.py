@@ -1816,6 +1816,56 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(preview.call_args.kwargs["volume"], 23)
 
+    def test_system_sound_uses_zero_volume_when_muted_with_mpv_backend(self):
+        write_json(
+            self.data_dir / "player_state.json",
+            {
+                "current_album": "",
+                "current_track": "",
+                "cover_url": "",
+                "volume": 23,
+                "muted": True,
+                "volume_before_mute": 45,
+                "position_seconds": 0,
+                "duration_seconds": 0,
+                "sleep_timer_minutes": 0,
+                "is_playing": False,
+                "queue": [],
+                "playlist": "",
+                "playlist_entries": [],
+                "current_track_index": 0,
+            },
+        )
+        with patch.object(self.service, "_volume_backend_active", return_value=False), patch.object(
+            self.service.playback, "play_preview", return_value={"ok": True, "details": ["ok"]}
+        ) as preview:
+            result = self.service.play_system_sound("test")
+        self.assertTrue(result["ok"])
+        self.assertEqual(preview.call_args.kwargs["volume"], 0)
+
+    def test_jump_to_queue_index_plays_selected_current_playlist_track(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+
+        result = self.service.jump_to_queue_index(2)
+
+        self.assertEqual(result["player"]["current_track"], "02 weiter")
+        self.assertTrue(result["player"]["is_playing"])
+        self.assertEqual(self.queue_titles(result["player"]["queue"]), ["01 start", "02 weiter"])
+        self.assertEqual(self.queue_states(result["player"]["queue"]), ["played", "current"])
+
+        previous = self.service.previous_track()
+        self.assertEqual(previous["player"]["current_track"], "01 start")
+
+    def test_jump_to_queue_index_promotes_queued_track_and_keeps_remaining_queue(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        self.service.queue_album_by_id("album-3")
+
+        result = self.service.jump_to_queue_index(3)
+
+        self.assertEqual(result["player"]["current_track"], "04 mehr")
+        self.assertEqual(self.queue_titles(result["player"]["queue"]), ["04 mehr", "05 finale"])
+        self.assertEqual(self.queue_states(result["player"]["queue"]), ["current", "upcoming"])
+
     def test_hardware_profile_detection_is_cached_within_ttl(self):
         with patch.object(service_module, "detect_hardware", return_value=service_module.detect_hardware({}, {"albums": []})) as detect:
             runtime_state = self.service.ensure_runtime()
@@ -2685,6 +2735,17 @@ class RuntimeServiceTest(unittest.TestCase):
         raised = self.service.trigger_button("Lautstärke +", press_type="kurz")
         self.assertEqual(lowered["player"]["volume"], 38)
         self.assertEqual(raised["player"]["volume"], 45)
+
+    def test_hardware_volume_buttons_use_immediate_sync_for_mpd_fast_path(self):
+        self.service.load_album_by_id("album-1", autoplay=True)
+        runtime_state = self.service.ensure_runtime()
+        runtime_state["playback_session"]["backend"] = "mpd"
+        self.service.save_runtime(runtime_state)
+
+        with patch.object(self.service, "set_volume", wraps=self.service.set_volume) as set_volume:
+            self.service.trigger_button("Lautstärke +", press_type="kurz")
+
+        self.assertFalse(set_volume.call_args.kwargs["defer_backend_sync"])
 
     def test_sleep_timer_plus_rotates_to_zero_when_enabled(self):
         write_json(

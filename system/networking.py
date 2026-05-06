@@ -2,10 +2,15 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+from utils import normalize_hotspot_address
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+DNSMASQ_SHARED_DIR = Path("/etc/NetworkManager/dnsmasq-shared.d")
+HOTSPOT_DNSMASQ_FILE = DNSMASQ_SHARED_DIR / "phoniebox-hotspot.conf"
 
 
 def command_exists(name):
@@ -268,6 +273,8 @@ def recreate_hotspot_profile(config):
             str(config.get("hotspot_channel", 6)),
             "ipv4.method",
             "shared",
+            "ipv4.addresses",
+            f"{normalize_hotspot_address(config.get('hotspot_address'), '10.42.0.1')}/24",
             "ipv6.method",
             "ignore",
             "connection.autoconnect",
@@ -288,8 +295,6 @@ def recreate_hotspot_profile(config):
                 config.get("hotspot_password", ""),
             ]
         )
-    else:
-        commands.append(["sudo", "nmcli", "connection", "modify", hotspot_name, "wifi-sec.key-mgmt", "none"])
 
     for command in commands:
         result = run_command(command)
@@ -299,6 +304,42 @@ def recreate_hotspot_profile(config):
 
     details.append(f"Hotspot-Profil vorbereitet: {config.get('hotspot_ssid', 'Phonie-hotspot')}")
     return {"ok": True, "details": details}
+
+
+def ensure_hotspot_dns_alias(config):
+    hotspot_address = normalize_hotspot_address(config.get("hotspot_address"), "10.42.0.1")
+    browser_name = (config.get("browser_name", "phoniebox.local") or "phoniebox.local").strip().lower()
+    lines = [
+        f"address=/{browser_name}/{hotspot_address}",
+    ]
+
+    hostname = (config.get("hostname", "phoniebox") or "phoniebox").strip().lower()
+    if hostname:
+        lines.append(f"address=/{hostname}/{hotspot_address}")
+    content = "\n".join(lines) + "\n"
+
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            handle.write(content)
+            temp_path = handle.name
+    except OSError as exc:
+        return {"ok": False, "details": [f"Hotspot-DNS-Datei konnte nicht vorbereitet werden: {exc}"]}
+
+    try:
+        mkdir_result = run_command(["sudo", "mkdir", "-p", str(DNSMASQ_SHARED_DIR)])
+        if not mkdir_result["ok"]:
+            return {"ok": False, "details": [f"Hotspot-DNS-Ordner konnte nicht angelegt werden: {mkdir_result['output']}"]}
+
+        install_result = run_command(["sudo", "install", "-m", "644", temp_path, str(HOTSPOT_DNSMASQ_FILE)])
+        if not install_result["ok"]:
+            return {"ok": False, "details": [f"Hotspot-DNS-Alias konnte nicht geschrieben werden: {install_result['output']}"]}
+    finally:
+        Path(temp_path).unlink(missing_ok=True)
+
+    return {
+        "ok": True,
+        "details": [f"Hotspot-DNS-Alias gesetzt: {browser_name} -> {hotspot_address}"],
+    }
 
 
 def apply_mode(config):
@@ -342,6 +383,11 @@ def apply_wifi_profile(config):
     if not hotspot["ok"]:
         return {"ok": False, "details": details}
 
+    dns_alias = ensure_hotspot_dns_alias(config)
+    details.extend(dns_alias["details"])
+    if not dns_alias["ok"]:
+        return {"ok": False, "details": details}
+
     mode_result = apply_mode(config)
     details.extend(mode_result["details"])
     return {"ok": mode_result["ok"], "details": details}
@@ -369,9 +415,27 @@ def connection_active(name):
     return name in result["output"].splitlines()
 
 
-def fallback_hotspot_cycle(config):
+def fallback_hotspot_cycle(config, runtime_state=None):
     if not command_exists("nmcli"):
         return {"ok": False, "summary": "nmcli nicht verfügbar.", "details": ["NetworkManager wird benötigt."]}
+
+    hotspot_active = connection_active("phoniebox-hotspot")
+    runtime = dict(runtime_state or {})
+    if runtime:
+        wifi_allowed = bool(runtime.get("powered_on", True)) and bool(runtime.get("wifi_enabled", True))
+        if not wifi_allowed:
+            if hotspot_active:
+                run_command(["sudo", "nmcli", "connection", "down", "phoniebox-hotspot"])
+                return {
+                    "ok": True,
+                    "summary": "Hotspot deaktiviert.",
+                    "details": ["Runtime-Zustand hält WLAN/Hotspot derzeit absichtlich aus."],
+                }
+            return {
+                "ok": True,
+                "summary": "Hotspot bleibt aus.",
+                "details": ["Runtime-Zustand hält WLAN/Hotspot derzeit absichtlich aus."],
+            }
 
     mode = config.get("mode", "client_with_fallback_hotspot")
     if mode != "client_with_fallback_hotspot" or not config.get("fallback_hotspot", True):
@@ -381,9 +445,14 @@ def fallback_hotspot_cycle(config):
             "details": ["Modus oder Fallback-Schalter verhindern eine Umschaltung."],
         }
 
+    if hotspot_active:
+        return {
+            "ok": True,
+            "summary": "Fallback-Hotspot läuft bereits.",
+            "details": ["Der Hotspot ist bereits aktiv."],
+        }
+
     if active_wifi_connected():
-        if connection_active("phoniebox-hotspot"):
-            run_command(["sudo", "nmcli", "connection", "down", "phoniebox-hotspot"])
         return {
             "ok": True,
             "summary": "Client-WLAN aktiv, Hotspot bleibt aus.",

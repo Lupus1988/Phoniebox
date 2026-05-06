@@ -67,6 +67,7 @@ from utils import (
     json_success,
     load_json,
     merge_defaults,
+    normalize_hotspot_address,
     normalize_hotspot_security,
     progress_percent,
     safe_relative_path,
@@ -353,12 +354,38 @@ def default_setup():
             "hotspot_security": "open",
             "hotspot_ssid": "Phonie-hotspot",
             "hotspot_password": "",
+            "hotspot_address": "10.42.0.1",
             "hotspot_channel": 6,
             "hostname": "phoniebox",
             "browser_name": "phoniebox.local",
             "saved_networks": [],
         },
     }
+
+
+def normalize_saved_network_entries(saved_networks, hotspot_ssid=""):
+    normalized = []
+    seen_ssids = set()
+    hotspot_ssid = (hotspot_ssid or "").strip()
+    for entry in saved_networks or []:
+        ssid = (entry.get("ssid") or "").strip()
+        password = (entry.get("password") or "").strip()
+        if not ssid or not password:
+            continue
+        if hotspot_ssid and ssid == hotspot_ssid:
+            continue
+        if ssid in seen_ssids:
+            continue
+        seen_ssids.add(ssid)
+        normalized.append(
+            {
+                "id": (entry.get("id") or f"wifi-{secrets.token_hex(4)}").strip(),
+                "ssid": ssid,
+                "password": password,
+                "priority": to_int(entry.get("priority"), 10, 1, 100),
+            }
+        )
+    return normalized
 
 
 def factory_wifi_defaults():
@@ -371,6 +398,7 @@ def factory_wifi_defaults():
         "hotspot_security": "open",
         "hotspot_ssid": "Phonie-hotspot",
         "hotspot_password": "",
+        "hotspot_address": "10.42.0.1",
         "hotspot_channel": 6,
         "hostname": "phoniebox",
         "browser_name": "phoniebox.local",
@@ -739,6 +767,9 @@ def normalize_setup_data(data):
     legacy_allow = wifi.get("allow_button_toggle", True)
     wifi["auto_wifi_off_enabled"] = wifi.get("auto_wifi_off_enabled") in {"on", True, "true", "1", 1}
     wifi["auto_wifi_off_minutes"] = to_int(wifi.get("auto_wifi_off_minutes"), 30, 1, 720)
+    wifi["hotspot_address"] = normalize_hotspot_address(wifi.get("hotspot_address"), "10.42.0.1")
+    wifi["hotspot_channel"] = to_int(wifi.get("hotspot_channel"), 6, 1, 13)
+    wifi["saved_networks"] = normalize_saved_network_entries(wifi.get("saved_networks", []), wifi.get("hotspot_ssid", ""))
     # Altbestand: allow_button_toggle bleibt nur als Legacy-Feld erhalten und ist ab jetzt immer aktiv.
     wifi["allow_button_toggle"] = legacy_allow not in {"off", False, "false", "0", 0}
     audio = data.setdefault("audio", {})
@@ -1414,6 +1445,8 @@ def collect_conflicts(setup_data):
     wifi = setup_data.get("wifi", {})
     if normalize_hotspot_security(wifi.get("hotspot_security")) == "wpa-psk" and len(wifi.get("hotspot_password", "")) < 8:
         warnings.append("Hotspot mit WPA2 braucht mindestens 8 Zeichen Passwort.")
+    if normalize_hotspot_address(wifi.get("hotspot_address"), None) is None:
+        warnings.append("Hotspot Host-IP muss eine private IPv4-Adresse sein, zum Beispiel 10.42.0.1 oder 192.168.50.1.")
 
     return warnings
 
@@ -1544,6 +1577,11 @@ def network_targets(setup_data):
         "panel_url": f"http://{hostname}.local",
         "panel_ip_example": "http://192.168.0.xxx",
     }
+
+
+def configured_saved_networks(setup_data):
+    wifi = setup_data.get("wifi", {})
+    return normalize_saved_network_entries(wifi.get("saved_networks", []), wifi.get("hotspot_ssid", ""))
 
 
 def summarize_apply(ok):
@@ -2100,6 +2138,8 @@ def setup():
 
         if section == "wifi":
             wifi = data["wifi"]
+            raw_hotspot_address = request.form.get("hotspot_address", wifi.get("hotspot_address", "10.42.0.1")).strip()
+            normalized_hotspot_address = normalize_hotspot_address(raw_hotspot_address, None)
             wifi["mode"] = request.form.get("mode", wifi["mode"]).strip()
             wifi["allow_button_toggle"] = True
             wifi["auto_wifi_off_enabled"] = request.form.get("auto_wifi_off_enabled") == "on"
@@ -2116,6 +2156,7 @@ def setup():
             )
             wifi["hotspot_ssid"] = request.form.get("hotspot_ssid", wifi["hotspot_ssid"]).strip()
             wifi["hotspot_password"] = request.form.get("hotspot_password", wifi["hotspot_password"]).strip()
+            wifi["hotspot_address"] = normalized_hotspot_address or wifi.get("hotspot_address", "10.42.0.1")
             wifi["hotspot_channel"] = to_int(request.form.get("hotspot_channel"), wifi["hotspot_channel"], 1, 13)
             wifi["hostname"] = request.form.get("hostname", wifi.get("hostname", "phoniebox")).strip() or "phoniebox"
             wifi["browser_name"] = request.form.get(
@@ -2124,6 +2165,8 @@ def setup():
             save_setup(data)
             report = apply_network_setup(wifi)
             invalidate_wifi_caches()
+            if normalized_hotspot_address is None:
+                flash("Hotspot Host-IP war ungültig. Die bisherige private IPv4-Adresse bleibt aktiv.", "error")
             flash(
                 "Hotspot gespeichert und angewendet." if report["ok"] else "Hotspot gespeichert, Systemprofil aber nur teilweise angewendet.",
                 "success" if report["ok"] else "error",
@@ -2174,9 +2217,16 @@ def setup():
             if not ssid:
                 flash("SSID darf nicht leer sein.", "error")
                 return redirect(url_for("setup"))
+            if ssid == (wifi.get("hotspot_ssid") or "").strip():
+                flash("Der eigene Hotspot kann nicht als Client-WLAN gespeichert werden.", "error")
+                return redirect(url_for("setup"))
             existing = next((entry for entry in wifi["saved_networks"] if entry["ssid"] == ssid), None)
+            if not password and existing is None:
+                flash("WLAN ohne Passwort wird nicht gespeichert. Bitte das echte WLAN-Passwort eingeben.", "error")
+                return redirect(url_for("setup"))
             if existing:
-                existing["password"] = password
+                if password:
+                    existing["password"] = password
                 existing["priority"] = priority
                 flash(f"Netzwerk {ssid} aktualisiert.", "success")
             else:
@@ -2225,6 +2275,7 @@ def setup():
     return render_template(
         "setup.html",
         setup_data=data,
+        known_wifi_networks=configured_saved_networks(data),
         wifi_snapshot=wifi_snapshot,
         setup_warnings=collect_conflicts(data),
         network_info=network_targets(data),

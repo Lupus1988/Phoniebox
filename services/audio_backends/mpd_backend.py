@@ -231,6 +231,38 @@ class MPDAudioBackend(AudioBackend):
         for queue_path in queue_paths:
             self._run_mpc("add", queue_path)
 
+    def _launch_direct_preview(self, file_path, volume):
+        track_path = Path(file_path).expanduser().resolve()
+        volume_percent = max(0, min(100, int(volume or 0)))
+        mpv_binary = shutil.which("mpv")
+        if mpv_binary:
+            command = [
+                mpv_binary,
+                "--no-video",
+                "--really-quiet",
+                "--no-config",
+                "--no-resume-playback",
+                f"--volume={volume_percent}",
+                str(track_path),
+            ]
+        else:
+            mpg123_binary = shutil.which("mpg123")
+            if not mpg123_binary:
+                raise FileNotFoundError("Für Systemsounds wird mpg123 oder mpv benötigt.")
+            scale = max(0, min(32768, int((32768 * volume_percent) / 100)))
+            command = [mpg123_binary, "-q", "-f", str(scale), str(track_path)]
+        try:
+            subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            self._message = str(exc)
+            raise RuntimeError(str(exc)) from exc
+
     def status(self):
         if not self._ready():
             return {
@@ -263,12 +295,7 @@ class MPDAudioBackend(AudioBackend):
 
     def play_preview(self, file_path, volume=50):
         try:
-            track_path = Path(file_path).expanduser().resolve()
-            queue_path = str(track_path.relative_to(self._music_directory)).replace(os.sep, "/")
-            self._apply_queue([queue_path])
-            if self._volume_backend != "amixer":
-                self._run_mpc("volume", max(0, min(100, int(volume or 0))))
-            self._run_mpc("play", "1")
+            self._launch_direct_preview(file_path, volume)
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             return {"ok": False, "details": [str(exc)], "message": str(exc)}
         return {"ok": True, "details": ["Testton gestartet."], "message": "Testton gestartet."}

@@ -55,9 +55,10 @@ def get_volume_snapshot():
     return runtime_service.volume_snapshot()
 
 
-def _execute_player_action(action, snapshot, seek_position=0):
+def _execute_player_action(action, snapshot, payload=None):
     runtime_state = snapshot["runtime"]
     settings = snapshot["settings"]
+    payload = payload or {}
 
     if action == "toggle_play":
         return runtime_service.toggle_playback()
@@ -84,13 +85,15 @@ def _execute_player_action(action, snapshot, seek_position=0):
     if action == "clear_queue":
         return runtime_service.clear_queue()
     if action == "seek":
-        return runtime_service.seek(to_int(seek_position, 0, 0))
+        return runtime_service.seek(to_int(payload.get("seek_position", 0), 0, 0))
+    if action == "play_queue_index":
+        return runtime_service.jump_to_queue_index(to_int(payload.get("queue_index", 0), 0, 1))
     return None
 
 
 def handle_player_action(action, payload=None):
     snapshot = runtime_service.player_snapshot()
-    result = _execute_player_action(action, snapshot, (payload or {}).get("seek_position", 0))
+    result = _execute_player_action(action, snapshot, payload)
     if result is None:
         return {"ok": False, "message": "Unbekannte Player-Aktion."}, 400
     return {"ok": True, **get_player_snapshot()}, 200

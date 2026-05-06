@@ -134,6 +134,14 @@
         {% for item in player_state.queue %}
           <li class="queue-item queue-item-{{ item.state }}">
             <span class="queue-index">{{ item.index }}.</span>
+            <button
+              type="button"
+              class="button-like queue-jump-button"
+              data-queue-jump
+              data-queue-index="{{ item.queue_index or item.index }}"
+              aria-label="Titel {{ item.title }} sofort abspielen"
+              title="Diesen Titel abspielen"
+            >▶</button>
             <span class="queue-title">{{ item.title }}</span>
           </li>
         {% else %}

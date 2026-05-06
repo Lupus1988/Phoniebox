@@ -7,6 +7,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const seekSlider = document.getElementById("player-seek-slider");
   const seekBubble = document.getElementById("player-seek-bubble");
   const statusNode = document.getElementById("player-action-status");
+  const queueList = document.getElementById("player-queue");
   let pollTimer = null;
   let actionInFlight = false;
   let isSeeking = false;
@@ -69,11 +70,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function updateQueue(items) {
-    const queue = document.getElementById("player-queue");
-    if (!queue) {
+    if (!queueList) {
       return;
     }
-    queue.innerHTML = "";
+    queueList.innerHTML = "";
     const entries = items && items.length ? items : [{title: "Keine Titel geladen", state: "empty"}];
     for (const item of entries) {
       const li = document.createElement("li");
@@ -84,18 +84,27 @@ document.addEventListener("DOMContentLoaded", () => {
         title.className = "queue-title";
         title.textContent = normalized.title || "Keine Titel geladen";
         li.appendChild(title);
-        queue.appendChild(li);
+        queueList.appendChild(li);
         continue;
       }
       const index = document.createElement("span");
       index.className = "queue-index";
       index.textContent = `${normalized.index || "?"}.`;
+      const jumpButton = document.createElement("button");
+      jumpButton.type = "button";
+      jumpButton.className = "button-like queue-jump-button";
+      jumpButton.dataset.queueJump = "true";
+      jumpButton.dataset.queueIndex = `${normalized.queue_index || normalized.index || 1}`;
+      jumpButton.setAttribute("aria-label", `Titel ${normalized.title || ""} sofort abspielen`);
+      jumpButton.setAttribute("title", "Diesen Titel abspielen");
+      jumpButton.textContent = "▶";
       const title = document.createElement("span");
       title.className = "queue-title";
       title.textContent = normalized.title || "";
       li.appendChild(index);
+      li.appendChild(jumpButton);
       li.appendChild(title);
-      queue.appendChild(li);
+      queueList.appendChild(li);
     }
   }
 
@@ -155,6 +164,7 @@ document.addEventListener("DOMContentLoaded", () => {
       sleep_down: "Sleeptimer wird reduziert …",
       sleep_up: "Sleeptimer wird erhöht …",
       clear_queue: "Warteschlange wird geleert …",
+      play_queue_index: "Titel wird geladen …",
       seek: "Position wird gesetzt …",
     };
     return labels[action] || "Player wird aktualisiert …";
@@ -229,16 +239,10 @@ document.addEventListener("DOMContentLoaded", () => {
     updateQueue(player.queue || []);
   }
 
-  async function submitPlayerForm(form, submitter) {
+  async function submitPlayerPayload(payload) {
     if (actionInFlight) {
       return;
     }
-    const formData = new FormData(form);
-    if (submitter?.name) {
-      formData.set(submitter.name, submitter.value);
-    }
-    const payload = Object.fromEntries(formData.entries());
-
     actionInFlight = true;
     setFormsDisabled(true);
     setStatus(actionLabel(payload.action), "busy");
@@ -262,6 +266,14 @@ document.addEventListener("DOMContentLoaded", () => {
       actionInFlight = false;
       setFormsDisabled(false);
     }
+  }
+
+  async function submitPlayerForm(form, submitter) {
+    const formData = new FormData(form);
+    if (submitter?.name) {
+      formData.set(submitter.name, submitter.value);
+    }
+    await submitPlayerPayload(Object.fromEntries(formData.entries()));
   }
 
   async function submitVolumeForm(form, submitter) {
@@ -331,6 +343,19 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  if (queueList) {
+    queueList.addEventListener("click", async (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || !target.hasAttribute("data-queue-jump")) {
+        return;
+      }
+      await submitPlayerPayload({
+        action: "play_queue_index",
+        queue_index: Number(target.dataset.queueIndex || 1),
+      });
+    });
+  }
+
   if (seekSlider) {
     seekSlider.addEventListener("input", () => {
       isSeeking = true;
@@ -351,24 +376,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     seekSlider.addEventListener("change", async () => {
       isSeeking = true;
-      const payload = {
-        action: "seek",
-        seek_position: Number(seekSlider.value || 0),
-      };
       try {
-        setStatus(actionLabel(payload.action), "busy");
-        const response = await fetch("/api/player/action", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify(payload),
+        await submitPlayerPayload({
+          action: "seek",
+          seek_position: Number(seekSlider.value || 0),
         });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok || result.ok === false) {
-          setStatus(extractError(result, "Position konnte nicht gesetzt werden."), "error");
-          return;
-        }
-        applySnapshot(result);
-        setStatus(result.message || "Position aktualisiert.", "success");
       } finally {
         isSeeking = false;
       }

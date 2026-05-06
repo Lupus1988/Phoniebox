@@ -1,3 +1,5 @@
+import ipaddress
+
 HOTSPOT_SECURITY_CHOICES = {"open", "wpa-psk"}
 
 
@@ -32,6 +34,31 @@ def normalize_hotspot_security(value):
     if security not in HOTSPOT_SECURITY_CHOICES:
         return "open"
     return security
+
+
+def normalize_hotspot_address(value, fallback="10.42.0.1"):
+    candidate = str(value or "").strip()
+    if not candidate:
+        candidate = str(fallback or "").strip()
+    if not candidate:
+        return "10.42.0.1" if fallback is None else fallback
+
+    try:
+        if "/" in candidate:
+            address = ipaddress.ip_interface(candidate).ip
+        else:
+            address = ipaddress.ip_address(candidate)
+    except ValueError:
+        return normalize_hotspot_address(fallback, "10.42.0.1") if fallback is not None else None
+
+    if address.version != 4 or not address.is_private:
+        return normalize_hotspot_address(fallback, "10.42.0.1") if fallback is not None else None
+
+    octets = str(address).split(".")
+    if len(octets) != 4 or octets[-1] in {"0", "255"}:
+        return normalize_hotspot_address(fallback, "10.42.0.1") if fallback is not None else None
+
+    return str(address)
 
 
 def format_mmss(total_seconds):

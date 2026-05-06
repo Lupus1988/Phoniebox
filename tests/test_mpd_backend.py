@@ -123,6 +123,32 @@ class MPDAudioBackendTest(unittest.TestCase):
         self.assertEqual(session["state"], "paused")
         self.assertIn(["mpc", "--port", "6600", "pause"], commands)
 
+    def test_play_preview_uses_direct_player_instead_of_touching_mpd_queue(self):
+        commands = []
+        launched = []
+
+        def fake_run(cmd, check, capture_output, text):
+            commands.append(cmd)
+            return _Completed(stdout="")
+
+        class _Popen:
+            def __init__(self, cmd, **kwargs):
+                launched.append((cmd, kwargs))
+
+        binaries = {"mpc": "/usr/bin/mpc", "mpg123": "/usr/bin/mpg123", "mpv": "/usr/bin/mpv"}
+        with patch("services.audio_backends.mpd_backend.shutil.which", side_effect=lambda name: binaries.get(name)), patch(
+            "services.audio_backends.mpd_backend.subprocess.run", side_effect=fake_run
+        ), patch(
+            "services.audio_backends.mpd_backend.subprocess.Popen", _Popen
+        ):
+            backend = MPDAudioBackend({"mpd_music_directory": str(self.base_dir)})
+            result = backend.play_preview(self.album_dir / "01-start.mp3", volume=25)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(commands, [])
+        self.assertEqual(launched[0][0][:5], ["/usr/bin/mpv", "--no-video", "--really-quiet", "--no-config", "--no-resume-playback"])
+        self.assertIn("--volume=25", launched[0][0])
+
     def test_status_reports_missing_mpc_binary(self):
         with patch("services.audio_backends.mpd_backend.shutil.which", return_value=None):
             backend = MPDAudioBackend()

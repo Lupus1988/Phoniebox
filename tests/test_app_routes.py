@@ -10,12 +10,14 @@ from app import (
     app,
     BUTTON_FUNCTIONS,
     button_mapping_rows,
+    configured_saved_networks,
     create_app,
     collect_conflicts,
     cross_role_pin_errors,
     default_setup,
     effective_track_entries,
     ensure_data_files,
+    normalize_saved_network_entries,
     normalize_setup_data,
     pin_choices,
     prepare_button_detect_inputs,
@@ -248,6 +250,19 @@ class AppRoutesTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["message"], "Playerstatus aktualisiert.")
         handle_action.assert_called_once()
+
+    def test_api_player_action_accepts_queue_jump_payload(self):
+        with patch(
+            "routes.player.handle_player_action",
+            return_value=({"ok": True, "player_state": {"current_album": "Test"}, "runtime_state": {}, "settings": {}}, 200),
+        ) as handle_action:
+            response = self.client.post("/api/player/action", json={"action": "play_queue_index", "queue_index": 3})
+
+        self.assertEqual(response.status_code, 200)
+        handle_action.assert_called_once_with(
+            "play_queue_index",
+            {"action": "play_queue_index", "queue_index": 3, "seek_position": 0},
+        )
 
     def test_settings_post_xhr_returns_json(self):
         with patch("app.load_settings", return_value=app_module.default_settings()), patch("app.save_settings") as save_settings:
@@ -503,6 +518,7 @@ class AppRoutesTest(unittest.TestCase):
         self.assertEqual(setup["wifi"]["saved_networks"], [])
         self.assertFalse(setup["wifi"]["auto_wifi_off_enabled"])
         self.assertEqual(setup["wifi"]["auto_wifi_off_minutes"], 30)
+        self.assertEqual(setup["wifi"]["hotspot_address"], "10.42.0.1")
         self.assertEqual(setup["audio"]["playback_backend"], "current")
         self.assertEqual(setup["audio"]["volume_backend"], "mpd")
         self.assertEqual(setup["reader"]["idle_scan_interval_seconds"], 0.05)
@@ -620,8 +636,166 @@ class AppRoutesTest(unittest.TestCase):
 
         self.assertIn("auto_wifi_off_enabled", setup["wifi"])
         self.assertIn("auto_wifi_off_minutes", setup["wifi"])
+        self.assertIn("hotspot_address", setup["wifi"])
         self.assertFalse(setup["wifi"]["auto_wifi_off_enabled"])
         self.assertEqual(setup["wifi"]["auto_wifi_off_minutes"], 30)
+        self.assertEqual(setup["wifi"]["hotspot_address"], "10.42.0.1")
+
+    def test_setup_wifi_save_accepts_hotspot_address_and_channel(self):
+        setup = default_setup()
+
+        with patch("app.load_setup", return_value=setup), patch("app.save_setup") as save_setup, patch(
+            "app.apply_network_setup", return_value={"ok": True, "details": ["ok"]}
+        ), patch("app.invalidate_wifi_caches"):
+            response = self.client.post(
+                "/setup",
+                data={
+                    "section": "wifi",
+                    "mode": "hotspot_only",
+                    "country": "DE",
+                    "hostname": "phoniebox",
+                    "browser_name": "phoniebox.local",
+                    "fallback_hotspot": "on",
+                    "hotspot_ssid": "Phonie-hotspot",
+                    "hotspot_security": "open",
+                    "hotspot_password": "",
+                    "hotspot_address": "192.168.88.1",
+                    "hotspot_channel": "11",
+                },
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(setup["wifi"]["hotspot_address"], "192.168.88.1")
+        self.assertEqual(setup["wifi"]["hotspot_channel"], 11)
+        save_setup.assert_called_once_with(setup)
+
+    def test_add_wifi_network_keeps_existing_password_when_form_password_is_blank(self):
+        setup = default_setup()
+        setup["wifi"]["saved_networks"] = [
+            {
+                "id": "wifi-1",
+                "ssid": "Midgard",
+                "password": "geheim123",
+                "priority": 100,
+            }
+        ]
+
+        with patch("app.load_setup", return_value=setup), patch("app.save_setup") as save_setup, patch(
+            "app.apply_network_setup", return_value={"ok": True, "details": ["ok"]}
+        ), patch("app.invalidate_wifi_caches"):
+            response = self.client.post(
+                "/setup",
+                data={
+                    "section": "add_wifi_network",
+                    "ssid": "Midgard",
+                    "password": "",
+                    "priority": "10",
+                },
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(setup["wifi"]["saved_networks"][0]["password"], "geheim123")
+        self.assertEqual(setup["wifi"]["saved_networks"][0]["priority"], 10)
+        save_setup.assert_called_once_with(setup)
+
+    def test_add_wifi_network_rejects_blank_password_for_new_network(self):
+        setup = default_setup()
+
+        with patch("app.load_setup", return_value=setup), patch("app.save_setup") as save_setup, patch(
+            "app.apply_network_setup"
+        ) as apply_network_setup, patch("app.invalidate_wifi_caches"):
+            response = self.client.post(
+                "/setup",
+                data={
+                    "section": "add_wifi_network",
+                    "ssid": "R.Engel",
+                    "password": "",
+                    "priority": "10",
+                },
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(setup["wifi"]["saved_networks"], [])
+        save_setup.assert_not_called()
+        apply_network_setup.assert_not_called()
+
+    def test_configured_saved_networks_filters_passwordless_and_hotspot_entries(self):
+        setup = default_setup()
+        setup["wifi"]["hotspot_ssid"] = "Phonie-hotspot"
+        setup["wifi"]["saved_networks"] = [
+            {"id": "wifi-1", "ssid": "Midgard", "password": "geheim123", "priority": 10},
+            {"id": "wifi-2", "ssid": "Phonie-hotspot", "password": "geheim456", "priority": 10},
+            {"id": "wifi-3", "ssid": "R.Engel", "password": "", "priority": 10},
+            {"id": "wifi-4", "ssid": "Vodafone Homespot", "password": "", "priority": 10},
+        ]
+
+        networks = configured_saved_networks(setup)
+
+        self.assertEqual([network["ssid"] for network in networks], ["Midgard"])
+
+    def test_normalize_saved_network_entries_removes_invalid_wifi_entries(self):
+        networks = normalize_saved_network_entries(
+            [
+                {"id": "wifi-1", "ssid": "Midgard", "password": "geheim123", "priority": 10},
+                {"id": "wifi-2", "ssid": "Phonie-hotspot", "password": "geheim456", "priority": 10},
+                {"id": "wifi-3", "ssid": "R.Engel", "password": "", "priority": 10},
+                {"id": "wifi-4", "ssid": "Midgard", "password": "anderes", "priority": 5},
+            ],
+            "Phonie-hotspot",
+        )
+
+        self.assertEqual(
+            networks,
+            [{"id": "wifi-1", "ssid": "Midgard", "password": "geheim123", "priority": 10}],
+        )
+
+    def test_normalize_setup_data_cleans_stale_saved_wifi_entries(self):
+        setup = default_setup()
+        setup["wifi"]["hotspot_ssid"] = "Phonie-hotspot"
+        setup["wifi"]["saved_networks"] = [
+            {"id": "wifi-1", "ssid": "Midgard", "password": "geheim123", "priority": 10},
+            {"id": "wifi-2", "ssid": "Phonie-hotspot", "password": "geheim456", "priority": 10},
+            {"id": "wifi-3", "ssid": "R.Engel", "password": "", "priority": 10},
+        ]
+
+        normalized = normalize_setup_data(setup)
+
+        self.assertEqual(
+            normalized["wifi"]["saved_networks"],
+            [{"id": "wifi-1", "ssid": "Midgard", "password": "geheim123", "priority": 10}],
+        )
+
+    def test_setup_page_shows_only_configured_saved_networks(self):
+        setup = default_setup()
+        setup["wifi"]["hotspot_ssid"] = "Phonie-hotspot"
+        setup["wifi"]["saved_networks"] = [
+            {"id": "wifi-1", "ssid": "Midgard", "password": "geheim123", "priority": 10},
+            {"id": "wifi-2", "ssid": "Phonie-hotspot", "password": "", "priority": 10},
+            {"id": "wifi-3", "ssid": "R.Engel", "password": "", "priority": 10},
+        ]
+        runtime_snapshot = {"runtime": {"hardware": {"profile": {}}}}
+
+        with patch("app.load_setup", return_value=setup), patch("app.runtime_service.status", return_value=runtime_snapshot), patch(
+            "app.get_wifi_snapshot",
+            return_value={
+                "nmcli_available": True,
+                "wifi_enabled": "enabled",
+                "connectivity": "full",
+                "active_ssid": "Midgard",
+                "device": "wlan0",
+                "scanned_networks": [],
+            },
+        ):
+            response = self.client.get("/setup")
+
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Midgard", body)
+        self.assertNotIn("R.Engel", body)
+        self.assertNotIn("Vodafone Homespot", body)
 
     def test_default_setup_has_no_reader_installed(self):
         setup = default_setup()

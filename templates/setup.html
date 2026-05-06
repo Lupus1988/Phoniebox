@@ -459,8 +459,8 @@
         <label>
           <span>Bekannte WLAN-Netzwerke</span>
           <select name="network_id">
-            {% if setup_data.wifi.saved_networks %}
-              {% for network in setup_data.wifi.saved_networks %}
+            {% if known_wifi_networks %}
+              {% for network in known_wifi_networks %}
                 <option value="{{ network.id }}">{{ network.ssid }}</option>
               {% endfor %}
             {% else %}
@@ -468,7 +468,7 @@
             {% endif %}
           </select>
         </label>
-        <button class="danger full setup-save-button" type="submit" {% if not setup_data.wifi.saved_networks %}disabled{% endif %}>WLAN löschen</button>
+        <button class="danger full setup-save-button" type="submit" {% if not known_wifi_networks %}disabled{% endif %}>WLAN löschen</button>
       </form>
     </article>
 
@@ -483,7 +483,6 @@
         <input type="hidden" name="country" value="{{ setup_data.wifi.country }}">
         <input type="hidden" name="hostname" value="{{ setup_data.wifi.hostname }}">
         <input type="hidden" name="browser_name" value="{{ setup_data.wifi.browser_name }}">
-        <input type="hidden" name="hotspot_channel" value="{{ setup_data.wifi.hotspot_channel }}">
         <input type="hidden" name="fallback_hotspot" value="on">
         <label>
           <span>Hotspot SSID</span>
@@ -500,6 +499,27 @@
         <label data-hotspot-password-field>
           <span>Hotspot Passwort</span>
           <input name="hotspot_password" value="{{ setup_data.wifi.hotspot_password }}" {% if setup_data.wifi.hotspot_security != "wpa-psk" %}disabled{% endif %}>
+        </label>
+        <label>
+          <span>Hotspot Host-IP</span>
+          <div class="power-routine-field">
+            <input name="hotspot_address" value="{{ setup_data.wifi.hotspot_address }}" inputmode="decimal" placeholder="10.42.0.1">
+            <button
+              type="button"
+              class="button-like routine-info-button"
+              data-info-dialog
+              data-info-title="Hotspot Host-IP"
+              data-info-body='{{ ["<strong>Zulässig:</strong> <code>10.42.x.1</code> oder <code>192.168.x.1</code>.", "Die Box nutzt den eingetragenen Wert als eigene Hotspot-IP."]|tojson }}'
+            >i</button>
+          </div>
+        </label>
+        <label>
+          <span>Hotspot Kanal</span>
+          <select name="hotspot_channel">
+            {% for channel in range(1, 14) %}
+              <option value="{{ channel }}" {% if setup_data.wifi.hotspot_channel == channel %}selected{% endif %}>{{ channel }}</option>
+            {% endfor %}
+          </select>
         </label>
         <div class="setup-action-row hotspot-action-row full">
           <button class="primary setup-save-button" type="submit">Hotspot speichern</button>
@@ -637,6 +657,22 @@
             tbody.appendChild(tr);
           });
           body.replaceChildren(table);
+          dialog.showModal();
+        });
+      });
+
+      document.querySelectorAll("[data-info-dialog]").forEach((button) => {
+        button.addEventListener("click", () => {
+          title.textContent = button.dataset.infoTitle || "Info";
+          const paragraphs = JSON.parse(button.dataset.infoBody || "[]");
+          const wrapper = document.createElement("div");
+          paragraphs.forEach((entry) => {
+            const paragraph = document.createElement("p");
+            paragraph.className = "page-copy";
+            paragraph.innerHTML = entry;
+            wrapper.appendChild(paragraph);
+          });
+          body.replaceChildren(wrapper);
           dialog.showModal();
         });
       });

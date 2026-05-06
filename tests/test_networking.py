@@ -84,6 +84,62 @@ class NetworkingTest(unittest.TestCase):
         self.assertEqual(result["summary"], "Client-WLAN aktiv, Hotspot bleibt aus.")
         self.assertEqual(calls, [])
 
+    def test_fallback_hotspot_cycle_keeps_running_hotspot_up(self):
+        config = {"mode": "client_with_fallback_hotspot", "fallback_hotspot": True}
+
+        with patch.object(networking, "command_exists", return_value=True), patch.object(
+            networking, "connection_active", side_effect=lambda name: name == "phoniebox-hotspot"
+        ), patch.object(
+            networking, "active_wifi_connected", return_value=True
+        ), patch.object(
+            networking, "run_command"
+        ) as run_command:
+            result = networking.fallback_hotspot_cycle(config)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["summary"], "Fallback-Hotspot läuft bereits.")
+        run_command.assert_not_called()
+
+    def test_fallback_hotspot_cycle_respects_runtime_wifi_disabled_without_touching_inactive_hotspot(self):
+        config = {"mode": "client_with_fallback_hotspot", "fallback_hotspot": True}
+        runtime_state = {"powered_on": True, "wifi_enabled": False}
+        calls = []
+
+        def fake_run(command):
+            calls.append(command)
+            return {"ok": True, "output": ""}
+
+        with patch.object(networking, "command_exists", return_value=True), patch.object(
+            networking, "connection_active", return_value=False
+        ), patch.object(
+            networking, "run_command", side_effect=fake_run
+        ):
+            result = networking.fallback_hotspot_cycle(config, runtime_state=runtime_state)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["summary"], "Hotspot bleibt aus.")
+        self.assertEqual(calls, [])
+
+    def test_fallback_hotspot_cycle_turns_active_hotspot_off_when_runtime_disables_wifi(self):
+        config = {"mode": "client_with_fallback_hotspot", "fallback_hotspot": True}
+        runtime_state = {"powered_on": False, "wifi_enabled": True}
+        calls = []
+
+        def fake_run(command):
+            calls.append(command)
+            return {"ok": True, "output": ""}
+
+        with patch.object(networking, "command_exists", return_value=True), patch.object(
+            networking, "connection_active", return_value=True
+        ), patch.object(
+            networking, "run_command", side_effect=fake_run
+        ):
+            result = networking.fallback_hotspot_cycle(config, runtime_state=runtime_state)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["summary"], "Hotspot deaktiviert.")
+        self.assertEqual(calls, [["sudo", "nmcli", "connection", "down", "phoniebox-hotspot"]])
+
     def test_recreate_wifi_client_skips_profile_without_password(self):
         with patch.object(networking, "run_command") as run_command:
             result = networking.recreate_wifi_client("Hausnetz", "", 100)
@@ -110,6 +166,86 @@ class NetworkingTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["details"], ["fallback"])
         set_wifi_radio.assert_called_once_with(False)
+
+    def test_recreate_hotspot_profile_open_does_not_set_wep_key_mgmt(self):
+        calls = []
+
+        def fake_run(command):
+            calls.append(command)
+            if command[:5] == ["nmcli", "-t", "-f", "NAME", "connection"]:
+                return {"ok": True, "output": ""}
+            return {"ok": True, "output": ""}
+
+        with patch.object(networking, "run_command", side_effect=fake_run):
+            result = networking.recreate_hotspot_profile({"hotspot_ssid": "Phonie-hotspot", "hotspot_security": "open"})
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(any("wifi-sec.key-mgmt" in cmd for cmd in calls))
+
+    def test_recreate_hotspot_profile_sets_configured_host_address(self):
+        calls = []
+
+        def fake_run(command):
+            calls.append(command)
+            if command[:5] == ["nmcli", "-t", "-f", "NAME", "connection"]:
+                return {"ok": True, "output": ""}
+            return {"ok": True, "output": ""}
+
+        with patch.object(networking, "run_command", side_effect=fake_run):
+            result = networking.recreate_hotspot_profile(
+                {"hotspot_ssid": "Phonie-hotspot", "hotspot_security": "open", "hotspot_address": "192.168.77.1"}
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(any("ipv4.addresses" in cmd and "192.168.77.1/24" in cmd for cmd in calls))
+
+    def test_ensure_hotspot_dns_alias_writes_browser_name_and_hostname(self):
+        calls = []
+        captured = {}
+
+        def fake_run(command):
+            calls.append(command)
+            if command[:4] == ["sudo", "install", "-m", "644"]:
+                with open(command[4], encoding="utf-8") as handle:
+                    captured["content"] = handle.read()
+            return {"ok": True, "output": ""}
+
+        with patch.object(networking, "run_command", side_effect=fake_run):
+            result = networking.ensure_hotspot_dns_alias(
+                {
+                    "browser_name": "phoniebox.local",
+                    "hostname": "phoniebox",
+                    "hotspot_address": "10.42.0.1",
+                }
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(calls[0], ["sudo", "mkdir", "-p", str(networking.DNSMASQ_SHARED_DIR)])
+        self.assertEqual(calls[1][:4], ["sudo", "install", "-m", "644"])
+        self.assertIn("address=/phoniebox.local/10.42.0.1", captured["content"])
+        self.assertIn("address=/phoniebox/10.42.0.1", captured["content"])
+
+    def test_apply_wifi_profile_includes_hotspot_dns_alias(self):
+        config = {"saved_networks": []}
+        call_order = []
+
+        def mark(name, payload):
+            call_order.append(name)
+            return payload
+
+        with patch.object(networking, "command_exists", return_value=True), patch.object(
+            networking, "run_command", return_value={"ok": True, "output": ""}
+        ), patch.object(
+            networking, "recreate_hotspot_profile", side_effect=lambda cfg: mark("hotspot", {"ok": True, "details": ["hotspot"]})
+        ), patch.object(
+            networking, "ensure_hotspot_dns_alias", side_effect=lambda cfg: mark("dns", {"ok": True, "details": ["dns"]})
+        ), patch.object(
+            networking, "apply_mode", side_effect=lambda cfg: mark("mode", {"ok": True, "details": ["mode"]})
+        ):
+            result = networking.apply_wifi_profile(config)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(call_order, ["hotspot", "dns", "mode"])
 
 
 if __name__ == "__main__":

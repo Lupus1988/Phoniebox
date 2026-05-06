@@ -92,6 +92,20 @@ network={
         self.assertTrue(result["ok"])
         self.assertIn("Vorhandenes Profil entfernt", result["details"][0])
 
+    def test_normalize_saved_networks_filters_passwordless_and_hotspot_entries(self):
+        networks = bootstrap_network.normalize_saved_networks(
+            [
+                {"id": "wifi-1", "ssid": "Hausnetz", "password": "geheim123", "priority": 100},
+                {"id": "wifi-2", "ssid": "Phonie-hotspot", "password": "geheim456", "priority": 100},
+                {"id": "wifi-3", "ssid": "Gastnetz", "password": "", "priority": 100},
+            ],
+            "Phonie-hotspot",
+        )
+        self.assertEqual(
+            networks,
+            [{"id": "wifi-1", "ssid": "Hausnetz", "password": "geheim123", "priority": 100}],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

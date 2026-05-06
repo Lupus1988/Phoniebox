@@ -122,19 +122,23 @@ def find_current_wifi_password(ssid, connection_name=""):
     )
 
 
-def normalize_saved_networks(saved_networks):
+def normalize_saved_networks(saved_networks, hotspot_ssid=""):
     normalized = []
     seen = set()
+    hotspot_ssid = (hotspot_ssid or "").strip()
     for entry in saved_networks or []:
         ssid = (entry.get("ssid") or "").strip()
-        if not ssid or ssid in seen:
+        password = (entry.get("password") or "").strip()
+        if not ssid or not password or ssid in seen:
+            continue
+        if hotspot_ssid and ssid == hotspot_ssid:
             continue
         seen.add(ssid)
         normalized.append(
             {
                 "id": entry.get("id") or f"wifi-{ssid}",
                 "ssid": ssid,
-                "password": (entry.get("password") or "").strip(),
+                "password": password,
                 "priority": int(entry.get("priority", 10) or 10),
             }
         )
@@ -143,7 +147,7 @@ def normalize_saved_networks(saved_networks):
 
 def ensure_current_network_saved(config):
     wifi = config.setdefault("wifi", {})
-    saved_networks = normalize_saved_networks(wifi.setdefault("saved_networks", []))
+    saved_networks = normalize_saved_networks(wifi.setdefault("saved_networks", []), wifi.get("hotspot_ssid", ""))
     wifi["saved_networks"] = saved_networks
 
     ssid = detect_active_ssid()
