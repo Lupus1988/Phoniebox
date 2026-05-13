@@ -523,7 +523,7 @@ textarea {
 .transport-strip {
   margin-top: 1rem;
   display: grid;
-  grid-template-columns: minmax(0, 72px) minmax(98px, 132px) minmax(0, 72px) minmax(0, 72px);
+  grid-template-columns: minmax(0, 72px) minmax(98px, 132px) minmax(0, 72px) minmax(0, 72px) minmax(0, 72px);
   justify-items: center;
   align-items: center;
   justify-content: start;
@@ -542,6 +542,17 @@ textarea {
 
 .transport-button-main {
   min-height: 74px;
+}
+
+.transport-strip [data-standby-trigger] {
+  background: linear-gradient(180deg, #7e5a4d 0%, #5e3d33 100%);
+  border-color: #3e241d;
+  color: #fff3ea;
+}
+
+.transport-strip [data-standby-trigger]:hover,
+.transport-strip [data-standby-trigger]:focus-visible {
+  background: linear-gradient(180deg, #8b6557 0%, #69463a 100%);
 }
 
 .transport-symbol {
@@ -2600,6 +2611,15 @@ dialog[data-sleep-rotation-dialog]::backdrop {
   text-align: center;
 }
 
+.player-standby-modal-body {
+  width: min(380px, calc(100vw - 2rem));
+  text-align: center;
+}
+
+.player-standby-button-row {
+  justify-content: center;
+}
+
 .reader-progress-shell {
   width: 100%;
   height: 0.8rem;
@@ -2866,7 +2886,7 @@ dialog[data-sleep-rotation-dialog]::backdrop {
 
   .transport-strip {
     margin-top: 0.7rem;
-    grid-template-columns: minmax(0, 48px) minmax(82px, 98px) minmax(0, 48px) minmax(0, 48px);
+    grid-template-columns: minmax(0, 48px) minmax(82px, 98px) minmax(0, 48px) minmax(0, 48px) minmax(0, 48px);
     gap: 0.4rem;
   }
 

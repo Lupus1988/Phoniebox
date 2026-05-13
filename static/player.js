@@ -8,6 +8,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const seekBubble = document.getElementById("player-seek-bubble");
   const statusNode = document.getElementById("player-action-status");
   const queueList = document.getElementById("player-queue");
+  const standbyDialog = document.getElementById("player-standby-modal");
+  const standbyTrigger = document.querySelector("[data-standby-trigger]");
+  const standbyConfirm = document.querySelector("[data-standby-confirm]");
   let pollTimer = null;
   let actionInFlight = false;
   let isSeeking = false;
@@ -157,6 +160,7 @@ document.addEventListener("DOMContentLoaded", () => {
       prev: "Vorheriger Titel …",
       next: "Nächster Titel …",
       stop: "Wiedergabe wird gestoppt …",
+      standby: "Standby wird aktiviert …",
       volume_down: "Lautstärke wird gesenkt …",
       volume_up: "Lautstärke wird erhöht …",
       mute: "Stummschaltung wird geändert …",
@@ -353,6 +357,19 @@ document.addEventListener("DOMContentLoaded", () => {
         action: "play_queue_index",
         queue_index: Number(target.dataset.queueIndex || 1),
       });
+    });
+  }
+
+  if (standbyTrigger instanceof HTMLElement && standbyDialog instanceof HTMLDialogElement) {
+    standbyTrigger.addEventListener("click", () => {
+      standbyDialog.showModal();
+    });
+  }
+
+  if (standbyConfirm instanceof HTMLElement && standbyDialog instanceof HTMLDialogElement) {
+    standbyConfirm.addEventListener("click", async () => {
+      standbyDialog.close();
+      await submitPlayerPayload({action: "standby"});
     });
   }
 

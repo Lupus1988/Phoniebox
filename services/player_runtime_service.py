@@ -72,6 +72,8 @@ def _execute_player_action(action, snapshot, payload=None):
         return runtime_service.set_volume(-int(settings.get("volume_step", 5)))
     if action == "volume_up":
         return runtime_service.set_volume(int(settings.get("volume_step", 5)))
+    if action == "standby":
+        return runtime_service.power_off()
     if action == "mute":
         return runtime_service.toggle_mute()
     if action == "sleep_reset":

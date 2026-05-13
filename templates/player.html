@@ -90,6 +90,15 @@
             >
               <span class="transport-symbol">⏹</span>
             </button>
+            <button
+              type="button"
+              class="transport-button"
+              aria-label="Standby"
+              title="Standby"
+              data-standby-trigger
+            >
+              <span class="transport-symbol">⏻</span>
+            </button>
           </form>
         </div>
       </div>
@@ -152,5 +161,19 @@
       </ul>
     </article>
   </section>
+  <dialog class="modal" id="player-standby-modal">
+    <article class="modal-body compact-modal-body player-standby-modal-body">
+      <div class="panel-box-head">
+        <h3>Standby</h3>
+      </div>
+      <p>Phonie in standby schicken?</p>
+      <div class="button-row player-standby-button-row">
+        <button type="button" class="primary" data-standby-confirm>Ja</button>
+        <form method="dialog">
+          <button type="submit">Nein</button>
+        </form>
+      </div>
+    </article>
+  </dialog>
   <script src="{{ url_for('static', filename='player.js', v=asset_version) }}"></script>
 {% endblock %}
