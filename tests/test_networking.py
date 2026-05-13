@@ -6,6 +6,51 @@ from system import networking
 
 
 class NetworkingTest(unittest.TestCase):
+    def test_enable_wifi_with_recovery_returns_after_client_reconnect(self):
+        with patch.object(networking, "set_wifi_radio", return_value={"ok": True, "details": ["WLAN aktiviert."]}), patch.object(
+            networking, "active_wifi_connected", side_effect=[False, True]
+        ), patch.object(
+            networking, "connection_active", return_value=False
+        ), patch.object(
+            networking.time, "sleep"
+        ) as sleep_mock, patch.object(
+            networking, "fallback_hotspot_cycle"
+        ) as fallback:
+            result = networking.enable_wifi_with_recovery({"mode": "client_with_fallback_hotspot"})
+
+        self.assertTrue(result["ok"])
+        self.assertIn("Client-WLAN", " ".join(result["details"]))
+        sleep_mock.assert_called_once()
+        fallback.assert_not_called()
+
+    def test_enable_wifi_with_recovery_activates_hotspot_in_hotspot_only_mode(self):
+        with patch.object(networking, "set_wifi_radio", return_value={"ok": True, "details": ["WLAN aktiviert."]}), patch.object(
+            networking, "activate_hotspot_with_recovery", return_value={"ok": True, "details": ["Hotspot aktiviert."]}
+        ) as activate_hotspot:
+            result = networking.enable_wifi_with_recovery({"mode": "hotspot_only"})
+
+        self.assertTrue(result["ok"])
+        self.assertIn("Hotspot aktiviert.", result["details"])
+        activate_hotspot.assert_called_once_with("phoniebox-hotspot")
+
+    def test_enable_wifi_with_recovery_triggers_fallback_after_timeout(self):
+        with patch.object(networking, "set_wifi_radio", return_value={"ok": True, "details": ["WLAN aktiviert."]}), patch.object(
+            networking, "active_wifi_connected", return_value=False
+        ), patch.object(
+            networking, "connection_active", return_value=False
+        ), patch.object(
+            networking.time, "sleep"
+        ), patch.object(
+            networking.time, "monotonic", side_effect=[0.0, 0.0, 1.0, 12.5]
+        ), patch.object(
+            networking, "fallback_hotspot_cycle", return_value={"ok": True, "details": ["Hotspot auf wlan0 aktiviert."]}
+        ) as fallback:
+            result = networking.enable_wifi_with_recovery({"mode": "client_with_fallback_hotspot"}, reconnect_wait_seconds=12)
+
+        self.assertTrue(result["ok"])
+        self.assertIn("Hotspot auf wlan0 aktiviert.", result["details"])
+        fallback.assert_called_once()
+
     def test_activate_hotspot_succeeds_directly(self):
         with patch.object(networking, "run_command", return_value={"ok": True, "output": "ok"}):
             result = networking.activate_hotspot_with_recovery("phoniebox-hotspot")

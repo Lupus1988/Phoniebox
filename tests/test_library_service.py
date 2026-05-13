@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+import subprocess
 
 from services import library_service
 
@@ -285,3 +286,84 @@ class LibraryServiceMetadataTest(unittest.TestCase):
         self.assertFalse(library_service.is_audio_file(Path("track.wav")))
         self.assertFalse(library_service.is_audio_file(Path("track.flac")))
         self.assertFalse(library_service.is_audio_file(Path("track.m4a")))
+
+
+class _FakeStorage:
+    def __init__(self, filename, content=b"fake-audio"):
+        self.filename = filename
+        self._content = content
+
+    def save(self, target):
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        Path(target).write_bytes(self._content)
+
+
+class LibraryServiceMpdRefreshTest(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.base_dir = Path(self.temp_dir.name)
+        (self.base_dir / "data").mkdir(parents=True, exist_ok=True)
+        self.patchers = [
+            patch.object(library_service, "BASE_DIR", self.base_dir),
+            patch.object(library_service, "MEDIA_DIR", self.base_dir / "media"),
+            patch.object(library_service, "ALBUMS_DIR", self.base_dir / "media" / "albums"),
+            patch.object(library_service, "LIBRARY_FILE", self.base_dir / "data" / "library.json"),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+        library_service.save_json(
+            self.base_dir / "data" / "setup.json",
+            {"audio": {"playback_backend": "mpd"}},
+        )
+
+    def tearDown(self):
+        for patcher in reversed(self.patchers):
+            patcher.stop()
+        self.temp_dir.cleanup()
+
+    def test_refresh_mpd_library_if_needed_uses_wait_and_falls_back_without_raising(self):
+        commands = []
+
+        def fake_run(cmd, check, capture_output, text):
+            commands.append(cmd)
+            if cmd[-2:] == ["update", "--wait"]:
+                return subprocess.CompletedProcess(cmd, 1, "", "mpc: unrecognized option '--wait'")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with patch.object(library_service.shutil, "which", return_value="/usr/bin/mpc"), patch.object(
+            library_service.subprocess, "run", side_effect=fake_run
+        ):
+            refreshed = library_service.refresh_mpd_library_if_needed()
+
+        self.assertTrue(refreshed)
+        self.assertEqual(commands[0], ["/usr/bin/mpc", "--port", "6600", "update", "--wait"])
+        self.assertEqual(commands[1], ["/usr/bin/mpc", "--port", "6600", "update"])
+
+    def test_import_album_folder_refreshes_mpd_library(self):
+        files = [_FakeStorage("Bauernhof/01-track.mp3", b"one"), _FakeStorage("Bauernhof/cover.jpg", b"jpg")]
+
+        with patch.object(library_service, "refresh_mpd_library_if_needed", return_value=True) as refresh_mpd:
+            album, _report = library_service.import_album_folder(files, "Bauernhof")
+
+        self.assertEqual(album["track_count"], 1)
+        refresh_mpd.assert_called_once()
+
+    def test_add_tracks_to_album_refreshes_mpd_library_after_saving_audio(self):
+        album_dir = self.base_dir / "media" / "albums" / "test"
+        album_dir.mkdir(parents=True, exist_ok=True)
+        album = {
+            "id": "album-1",
+            "name": "Test",
+            "folder": "media/albums/test",
+            "playlist": "",
+            "track_count": 0,
+            "rfid_uid": "",
+            "cover_url": "",
+            "tracks": [],
+        }
+
+        with patch.object(library_service, "refresh_mpd_library_if_needed", return_value=True) as refresh_mpd:
+            updated, _report = library_service.add_tracks_to_album(album, [_FakeStorage("01-track.mp3", b"one")])
+
+        self.assertEqual(updated["track_count"], 1)
+        refresh_mpd.assert_called_once()

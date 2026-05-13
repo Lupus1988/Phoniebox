@@ -36,7 +36,14 @@
           {% endif %}
         {% endwith %}
         {% block content %}{% endblock %}
-        <footer class="page-footer">Phoniebox Panel v1.0 · by Lupus1988</footer>
+        <footer class="page-footer">
+          <img
+            class="page-footer-signature"
+            src="{{ url_for('static', filename='branding/signatur.png', v=asset_version) }}"
+            alt="Signatur Lupus1988"
+          >
+          <div class="page-footer-caption">Phoniebox Panel v1.0</div>
+        </footer>
       </main>
     </div>
   </body>

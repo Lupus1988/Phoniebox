@@ -2663,6 +2663,18 @@ dialog[data-sleep-rotation-dialog]::backdrop {
   font-size: 0.92rem;
 }
 
+.page-footer-signature {
+  display: block;
+  width: min(240px, 72vw);
+  height: auto;
+  margin: 0 auto 0.4rem;
+  opacity: 0.96;
+}
+
+.page-footer-caption {
+  letter-spacing: 0.04em;
+}
+
 .modal-close {
   min-width: 120px;
 }

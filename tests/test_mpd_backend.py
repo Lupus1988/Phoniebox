@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+import subprocess
 
 from services.audio_backends.mpd_backend import MPDAudioBackend
 
@@ -148,6 +149,46 @@ class MPDAudioBackendTest(unittest.TestCase):
         self.assertEqual(commands, [])
         self.assertEqual(launched[0][0][:5], ["/usr/bin/mpv", "--no-video", "--really-quiet", "--no-config", "--no-resume-playback"])
         self.assertIn("--volume=25", launched[0][0])
+
+    def test_open_track_refreshes_mpd_library_once_when_new_album_is_missing_from_database(self):
+        commands = []
+        missing_once = {"raised": False}
+
+        def fake_run(cmd, check, capture_output, text):
+            commands.append(cmd)
+            if cmd[-1] == "status":
+                return _Completed(stdout="Track\n[paused] #1/2   0:00/3:05 (0%)\nvolume: 45%   repeat: off\n")
+            if cmd[-3:] == ["%file%", "current"]:
+                return _Completed(stdout="media/albums/test/01-start.mp3\n")
+            if cmd[-2:] == ["add", "media/albums/test/01-start.mp3"] and not missing_once["raised"]:
+                missing_once["raised"] = True
+                raise subprocess.CalledProcessError(
+                    1,
+                    cmd,
+                    stderr="error adding media/albums/test/01-start.mp3: No such directory\n",
+                )
+            return _Completed(stdout="")
+
+        with patch("runtime.audio.BASE_DIR", self.base_dir), patch(
+            "services.audio_backends.mpd_backend.shutil.which", return_value="/usr/bin/mpc"
+        ), patch(
+            "services.audio_backends.mpd_backend.subprocess.run", side_effect=fake_run
+        ):
+            backend = MPDAudioBackend({"mpd_music_directory": str(self.base_dir)})
+            session = backend.open_track(
+                "media/albums/test/playlist.m3u",
+                "01-start.mp3",
+                volume=45,
+                current_index=0,
+                entries=["01-start.mp3", "02-next.mp3"],
+            )
+
+        self.assertEqual(session["backend"], "mpd")
+        self.assertEqual(session["state"], "paused")
+        self.assertIn(["mpc", "--port", "6600", "update", "--wait"], commands)
+        self.assertGreaterEqual(commands.count(["mpc", "--port", "6600", "clear"]), 2)
+        self.assertGreaterEqual(commands.count(["mpc", "--port", "6600", "add", "media/albums/test/01-start.mp3"]), 2)
+        self.assertGreaterEqual(commands.count(["mpc", "--port", "6600", "add", "media/albums/test/02-next.mp3"]), 1)
 
     def test_status_reports_missing_mpc_binary(self):
         with patch("services.audio_backends.mpd_backend.shutil.which", return_value=None):

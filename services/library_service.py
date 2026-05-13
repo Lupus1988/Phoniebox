@@ -27,6 +27,7 @@ AUDIO_NORMALIZE_TARGET_TP = -1.5
 AUDIO_NORMALIZE_TARGET_LRA = 11.0
 AUDIO_NORMALIZE_TOLERANCE_LU = 1.0
 AUDIO_NORMALIZE_TOLERANCE_TP = 0.2
+DEFAULT_MPD_PORT = "6600"
 
 
 def default_library():
@@ -59,6 +60,40 @@ def load_link_session():
 
 def save_link_session(data):
     save_json(LINK_SESSION_FILE, data)
+
+
+def _configured_playback_backend():
+    setup = load_json(BASE_DIR / "data" / "setup.json", {})
+    audio = setup.get("audio") or {}
+    return str(audio.get("playback_backend") or "current").strip().lower()
+
+
+def refresh_mpd_library_if_needed():
+    if _configured_playback_backend() != "mpd":
+        return False
+    mpc_binary = shutil.which("mpc")
+    if not mpc_binary:
+        return False
+    command = [mpc_binary, "--port", DEFAULT_MPD_PORT, "update", "--wait"]
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True)
+    except OSError:
+        return False
+    if result.returncode == 0:
+        return True
+    detail = f"{result.stdout or ''}\n{result.stderr or ''}".strip().lower()
+    if "unknown command" in detail or "unrecognized option" in detail:
+        try:
+            fallback = subprocess.run(
+                [mpc_binary, "--port", DEFAULT_MPD_PORT, "update"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return False
+        return fallback.returncode == 0
+    return False
 
 
 def is_audio_file(path):
@@ -777,6 +812,7 @@ def import_album_folder(files, album_name, rfid_uid=""):
 
     library_data["albums"].append(album_entry)
     save_library(library_data)
+    refresh_mpd_library_if_needed()
     return album_entry, audio_report
 
 
@@ -907,6 +943,7 @@ def create_album_with_tracks(files, album_name, rfid_uid=""):
         return album_entry, audio_report
     target.update(album_entry)
     save_library(library_data)
+    refresh_mpd_library_if_needed()
     return target, audio_report
 
 
@@ -943,7 +980,9 @@ def add_tracks_to_album(album, files):
     if not saved_audio:
         raise ValueError("Es wurden keine unterstützten Audiodateien hochgeladen. Unterstützt werden nur MP3-Dateien.")
     audio_report = default_audio_processing_report()
-    return refresh_album_metadata(album), audio_report
+    updated_album = refresh_album_metadata(album)
+    refresh_mpd_library_if_needed()
+    return updated_album, audio_report
 
 
 def remove_tracks_from_album(album, track_paths):

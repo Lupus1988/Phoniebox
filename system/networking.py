@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from utils import normalize_hotspot_address
@@ -42,6 +43,43 @@ def set_wifi_radio(enabled):
     if not result["ok"]:
         details = [f"WLAN konnte nicht {'aktiviert' if enabled else 'deaktiviert'} werden: {result['output']}"]
     return {"ok": result["ok"], "details": details}
+
+
+def enable_wifi_with_recovery(config, reconnect_wait_seconds=12, poll_interval_seconds=1.0):
+    radio = set_wifi_radio(True)
+    details = list(radio.get("details", []) or [])
+    if not radio.get("ok"):
+        return {"ok": False, "details": details}
+
+    mode = (config or {}).get("mode", "client_with_fallback_hotspot")
+    if mode == "hotspot_only":
+        hotspot = activate_hotspot_with_recovery("phoniebox-hotspot")
+        return {
+            "ok": bool(hotspot.get("ok")),
+            "details": details + (hotspot.get("details", []) or []),
+        }
+
+    wait_seconds = max(0.0, float(reconnect_wait_seconds or 0))
+    poll_seconds = max(0.1, float(poll_interval_seconds or 0.1))
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() < deadline:
+        if active_wifi_connected():
+            return {
+                "ok": True,
+                "details": details + ["Client-WLAN nach dem Einschalten wieder verbunden."],
+            }
+        if connection_active("phoniebox-hotspot"):
+            return {
+                "ok": True,
+                "details": details + ["Hotspot ist nach dem Einschalten bereits aktiv."],
+            }
+        time.sleep(poll_seconds)
+
+    fallback = fallback_hotspot_cycle(config or {})
+    return {
+        "ok": bool(fallback.get("ok")),
+        "details": details + (fallback.get("details", []) or []),
+    }
 
 
 def wifi_state_command_path(enabled):

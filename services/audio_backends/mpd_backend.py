@@ -228,8 +228,30 @@ class MPDAudioBackend(AudioBackend):
 
     def _apply_queue(self, queue_paths):
         self._run_mpc("clear")
+        refreshed_library = False
         for queue_path in queue_paths:
-            self._run_mpc("add", queue_path)
+            try:
+                self._run_mpc("add", queue_path)
+            except RuntimeError as exc:
+                detail = str(exc or "").strip().lower()
+                needs_refresh = "no such directory" in detail or "no such file" in detail
+                if refreshed_library or not needs_refresh:
+                    raise
+                self._refresh_library()
+                refreshed_library = True
+                self._run_mpc("clear")
+                for retry_path in queue_paths:
+                    self._run_mpc("add", retry_path)
+                return
+
+    def _refresh_library(self):
+        try:
+            self._run_mpc("update", "--wait")
+        except RuntimeError as exc:
+            detail = str(exc or "").strip().lower()
+            if "unknown command" not in detail and "unrecognized option" not in detail:
+                raise
+            self._run_mpc("update")
 
     def _launch_direct_preview(self, file_path, volume):
         track_path = Path(file_path).expanduser().resolve()
