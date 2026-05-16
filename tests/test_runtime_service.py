@@ -699,6 +699,55 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertEqual(result["player"]["current_track"], "02 weiter")
         self.assertEqual(result["runtime"]["last_event"], "Album zur Warteschlange hinzugefügt: Testalbum (Shuffle)")
 
+    def test_shuffle_rotates_start_track_across_repeated_album_loads(self):
+        (self.album_dir / "playlist.m3u").write_text(
+            "#EXTM3U\n01-start.mp3\n02-weiter.mp3\n03-dritte.mp3\n",
+            encoding="utf-8",
+        )
+        (self.album_dir / "03-dritte.mp3").write_bytes(b"")
+
+        with patch.object(service_module.random, "shuffle", side_effect=lambda items: items.reverse()):
+            first = self.service.load_album_by_id("album-1", autoplay=True, shuffle=True)
+            second = self.service.load_album_by_id("album-1", autoplay=True, shuffle=True)
+            third = self.service.load_album_by_id("album-1", autoplay=True, shuffle=True)
+
+        self.assertEqual(first["player"]["current_track"], "03 dritte")
+        self.assertEqual(second["player"]["current_track"], "02 weiter")
+        self.assertEqual(third["player"]["current_track"], "01 start")
+
+    def test_shuffle_start_memory_is_kept_per_album_when_switching_between_albums(self):
+        (self.album_dir / "playlist.m3u").write_text(
+            "#EXTM3U\n01-start.mp3\n02-weiter.mp3\n03-dritte.mp3\n",
+            encoding="utf-8",
+        )
+        (self.album_dir / "03-dritte.mp3").write_bytes(b"")
+        (self.album_dir_3 / "playlist.m3u").write_text(
+            "#EXTM3U\n04-mehr.mp3\n05-finale.mp3\n06-zugabe.mp3\n",
+            encoding="utf-8",
+        )
+        (self.album_dir_3 / "06-zugabe.mp3").write_bytes(b"")
+
+        with patch.object(service_module.random, "shuffle", side_effect=lambda items: items.reverse()):
+            first_album_first = self.service.load_album_by_id("album-1", autoplay=True, shuffle=True)
+            second_album_first = self.service.load_album_by_id("album-3", autoplay=True, shuffle=True)
+            first_album_second = self.service.load_album_by_id("album-1", autoplay=True, shuffle=True)
+            second_album_second = self.service.load_album_by_id("album-3", autoplay=True, shuffle=True)
+
+        self.assertEqual(first_album_first["player"]["current_track"], "03 dritte")
+        self.assertEqual(first_album_second["player"]["current_track"], "02 weiter")
+        self.assertEqual(second_album_first["player"]["current_track"], "06 zugabe")
+        self.assertEqual(second_album_second["player"]["current_track"], "05 finale")
+
+    def test_shuffle_cycle_reset_avoids_immediate_repeat_of_previous_start_track(self):
+        with patch.object(service_module.random, "shuffle", side_effect=lambda items: items.reverse()):
+            first = self.service.load_album_by_id("album-1", autoplay=True, shuffle=True)
+            second = self.service.load_album_by_id("album-1", autoplay=True, shuffle=True)
+            third = self.service.load_album_by_id("album-1", autoplay=True, shuffle=True)
+
+        self.assertEqual(first["player"]["current_track"], "02 weiter")
+        self.assertEqual(second["player"]["current_track"], "01 start")
+        self.assertEqual(third["player"]["current_track"], "02 weiter")
+
     def test_remove_rfid_stop_resets_position_and_session(self):
         started = self.service.assign_album_by_rfid("1234567890")
         self.service.seek(37)

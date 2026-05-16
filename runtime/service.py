@@ -146,6 +146,9 @@ def default_runtime_state():
         "led_status": [],
         "queue_revision": secrets.token_hex(4),
         "playback_session": {},
+        "shuffle_memory": {
+            "albums": {},
+        },
         "event_log": [],
         "wifi_enabled": True,
         "last_activity_at": int(time.time()),
@@ -2209,11 +2212,47 @@ class RuntimeService:
             seen.add(normalized)
         return unique_entries
 
-    def _playlist_entries_for_album(self, album, shuffle=False):
+    def _shuffle_album_memory(self, runtime_state, album_id):
+        shuffle_memory = runtime_state.setdefault("shuffle_memory", {})
+        albums = shuffle_memory.setdefault("albums", {})
+        key = str(album_id or "").strip()
+        if not key:
+            return {}
+        memory = albums.get(key)
+        if not isinstance(memory, dict):
+            memory = {}
+            albums[key] = memory
+        return memory
+
+    def _pick_shuffle_start_entry(self, entries, runtime_state, album):
+        album_id = str((album or {}).get("id", "")).strip()
+        if len(entries) <= 1 or not album_id:
+            return entries[0] if entries else ""
+        memory = self._shuffle_album_memory(runtime_state, album_id)
+        remaining = [
+            str(entry or "").strip()
+            for entry in list(memory.get("remaining_start_entries", []) or [])
+            if str(entry or "").strip() in entries
+        ]
+        last_start_entry = str(memory.get("last_start_entry", "") or "").strip()
+        if not remaining:
+            remaining = list(entries)
+        candidates = [entry for entry in remaining if entry != last_start_entry] or list(remaining)
+        random.shuffle(candidates)
+        start_entry = str(candidates[0] or "").strip()
+        memory["remaining_start_entries"] = [entry for entry in remaining if entry != start_entry]
+        memory["last_start_entry"] = start_entry
+        memory["updated_at"] = int(time.time())
+        return start_entry
+
+    def _playlist_entries_for_album(self, album, runtime_state=None, shuffle=False):
         entries = self._unique_playlist_entries(load_playlist_entries(album.get("playlist", "")))
         if shuffle and len(entries) > 1:
-            entries = list(entries)
-            random.shuffle(entries)
+            runtime_state = runtime_state or {}
+            start_entry = self._pick_shuffle_start_entry(entries, runtime_state, album)
+            trailing_entries = [entry for entry in entries if entry != start_entry]
+            random.shuffle(trailing_entries)
+            entries = [start_entry] + trailing_entries if start_entry else trailing_entries
         return entries
 
     def _session_matches_playlist(self, session, player, entries):
@@ -2231,7 +2270,7 @@ class RuntimeService:
         autoplay = bool(autoplay and powered_on)
         if shuffle is None:
             shuffle = bool(album.get("shuffle_enabled", False))
-        entries = self._playlist_entries_for_album(album, shuffle=shuffle)
+        entries = self._playlist_entries_for_album(album, runtime_state=runtime_state, shuffle=shuffle)
         player["playlist"] = album.get("playlist", "")
         player["playlist_entries"] = entries
         player["playlist_tracks"] = self._ordered_album_tracks(album, entries)
@@ -2971,7 +3010,7 @@ class RuntimeService:
         player = player or self.load_player()
         if shuffle is None:
             shuffle = bool(album.get("shuffle_enabled", False))
-        entries = self._playlist_entries_for_album(album, shuffle=shuffle)
+        entries = self._playlist_entries_for_album(album, runtime_state=runtime_state, shuffle=shuffle)
         queued_items = self._queue_track_items(album, entries)
         queued_block = self._queue_album_block(album, entries)
         if not player.get("current_track") and not player.get("playlist_entries") and queued_items:
