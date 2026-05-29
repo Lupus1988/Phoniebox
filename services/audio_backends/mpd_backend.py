@@ -371,9 +371,7 @@ class MPDAudioBackend(AudioBackend):
         try:
             current_index = max(0, int(updated.get("current_index", 0) or 0))
             session_state = str(updated.get("state") or "").strip().lower()
-            if session_state == STATE_PAUSED:
-                self._run_mpc("play")
-            elif session_state != STATE_PLAYING:
+            if session_state != STATE_PLAYING:
                 self._run_mpc("play", str(current_index + 1))
             position_seconds = max(0, int(updated.get("position_seconds", 0) or 0))
             if position_seconds > 0:
@@ -431,7 +429,12 @@ class MPDAudioBackend(AudioBackend):
     def next_track(self, session):
         updated = dict(session or {})
         try:
-            self._run_mpc("next")
+            queue_total = len(list(updated.get("playlist_entries", []) or []))
+            current_index = max(0, int(updated.get("current_index", 0) or 0))
+            target_index = current_index + 1
+            if queue_total:
+                target_index = min(queue_total - 1, target_index)
+            self._run_mpc("play", str(target_index + 1))
         except (FileNotFoundError, RuntimeError) as exc:
             return self._session_error(updated, str(exc))
         return self._sync_from_mpd(updated)

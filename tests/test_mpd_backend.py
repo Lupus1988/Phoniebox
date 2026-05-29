@@ -92,8 +92,40 @@ class MPDAudioBackendTest(unittest.TestCase):
 
         self.assertEqual(session["state"], "playing")
         self.assertEqual(session["position_seconds"], 37)
-        self.assertIn(["mpc", "--port", "6600", "play"], commands)
+        self.assertIn(["mpc", "--port", "6600", "play", "2"], commands)
         self.assertIn(["mpc", "--port", "6600", "seek", "0:37"], commands)
+
+    def test_play_uses_absolute_index_for_paused_session_without_seek_position(self):
+        commands = []
+
+        def fake_run(cmd, check, capture_output, text):
+            commands.append(cmd)
+            if cmd[-1] == "status":
+                return _Completed(stdout="Track\n[playing] #2/2   0:00/3:05 (0%)\nvolume: 30%   repeat: off\n")
+            if cmd[-3:] == ["%file%", "current"]:
+                return _Completed(stdout="media/albums/test/02-next.mp3\n")
+            return _Completed(stdout="")
+
+        with patch("services.audio_backends.mpd_backend.shutil.which", return_value="/usr/bin/mpc"), patch(
+            "services.audio_backends.mpd_backend.subprocess.run", side_effect=fake_run
+        ):
+            backend = MPDAudioBackend({"mpd_music_directory": str(self.base_dir)})
+            session = backend.play(
+                {
+                    "backend": "mpd",
+                    "state": "paused",
+                    "playlist_entries": ["01-start.mp3", "02-next.mp3"],
+                    "queue_paths": ["media/albums/test/01-start.mp3", "media/albums/test/02-next.mp3"],
+                    "current_index": 1,
+                    "position_seconds": 0,
+                    "volume": 30,
+                }
+            )
+
+        self.assertEqual(session["state"], "playing")
+        self.assertEqual(session["current_index"], 1)
+        self.assertIn(["mpc", "--port", "6600", "play", "2"], commands)
+        self.assertNotIn(["mpc", "--port", "6600", "play"], commands)
 
     def test_pause_uses_mpc_pause_without_argument(self):
         commands = []
@@ -123,6 +155,38 @@ class MPDAudioBackendTest(unittest.TestCase):
 
         self.assertEqual(session["state"], "paused")
         self.assertIn(["mpc", "--port", "6600", "pause"], commands)
+
+    def test_next_track_uses_absolute_target_index_instead_of_relative_next(self):
+        commands = []
+
+        def fake_run(cmd, check, capture_output, text):
+            commands.append(cmd)
+            if cmd[-1] == "status":
+                return _Completed(stdout="Track\n[playing] #2/2   0:00/3:05 (0%)\nvolume: 30%   repeat: off\n")
+            if cmd[-3:] == ["%file%", "current"]:
+                return _Completed(stdout="media/albums/test/02-next.mp3\n")
+            return _Completed(stdout="")
+
+        with patch("services.audio_backends.mpd_backend.shutil.which", return_value="/usr/bin/mpc"), patch(
+            "services.audio_backends.mpd_backend.subprocess.run", side_effect=fake_run
+        ):
+            backend = MPDAudioBackend({"mpd_music_directory": str(self.base_dir)})
+            session = backend.next_track(
+                {
+                    "backend": "mpd",
+                    "state": "playing",
+                    "playlist_entries": ["01-start.mp3", "02-next.mp3"],
+                    "queue_paths": ["media/albums/test/01-start.mp3", "media/albums/test/02-next.mp3"],
+                    "current_index": 0,
+                    "position_seconds": 179,
+                    "volume": 30,
+                }
+            )
+
+        self.assertEqual(session["state"], "playing")
+        self.assertEqual(session["current_index"], 1)
+        self.assertIn(["mpc", "--port", "6600", "play", "2"], commands)
+        self.assertNotIn(["mpc", "--port", "6600", "next"], commands)
 
     def test_play_preview_uses_direct_player_instead_of_touching_mpd_queue(self):
         commands = []
