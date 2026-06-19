@@ -2420,14 +2420,18 @@ class RuntimeService:
                 runtime_state, player = self._clear_playback_context(runtime_state, player, keep_loaded_media=False)
                 message = event_message or "Standby aktiv"
             runtime_state = self.add_event(runtime_state, message)
+            should_play_sound = self._should_play_power_sound(target_powered_on, reason)
+            sound_name = "power_on" if target_powered_on else "power_off"
+            self.save_runtime(runtime_state)
+            self.save_player(player)
+            if should_play_sound:
+                self.play_system_sound(sound_name)
             runtime_state = self.update_hardware_profile(runtime_state)
             runtime_state = self.apply_wifi_policy(runtime_state)
             self._set_service_active("phoniebox-rfid.service", target_powered_on)
             runtime_state = self.update_led_status(runtime_state)
             self.save_runtime(runtime_state)
             self.save_player(player)
-            if self._should_play_power_sound(target_powered_on, reason):
-                self.play_system_sound("power_on" if target_powered_on else "power_off")
             return {"runtime": runtime_state, "player": player}
 
     def power_off(self, runtime_state=None, player=None, event_message=None, reason="manual"):

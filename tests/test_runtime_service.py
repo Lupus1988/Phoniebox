@@ -2605,6 +2605,64 @@ class RuntimeServiceTest(unittest.TestCase):
         self.assertTrue(result["runtime"]["powered_on"])
         self.assertTrue(result["runtime"]["wifi_enabled"])
 
+    def test_power_on_starts_sound_before_wifi_policy(self):
+        state = self.service.ensure_runtime()
+        state["powered_on"] = False
+        state["playback_state"] = "stopped"
+        state["wifi_enabled"] = False
+        self.service.save_runtime(state)
+        order = []
+
+        with patch.object(self.service, "_should_play_power_sound", return_value=True), patch.object(
+            self.service, "play_system_sound", side_effect=lambda name: order.append(("sound", name)) or {"ok": True}
+        ), patch.object(
+            self.service, "save_runtime", side_effect=lambda runtime: order.append("save_runtime")
+        ), patch.object(
+            self.service, "save_player", side_effect=lambda player: order.append("save_player")
+        ), patch.object(
+            self.service, "update_hardware_profile", side_effect=lambda runtime: order.append("hardware") or runtime
+        ), patch.object(
+            self.service, "apply_wifi_policy", side_effect=lambda runtime: order.append("wifi") or runtime
+        ), patch.object(
+            self.service, "update_led_status", side_effect=lambda runtime: order.append("leds") or runtime
+        ), patch.object(
+            self.service, "_set_service_active", side_effect=lambda *args, **kwargs: order.append("rfid")
+        ):
+            self.service.power_on()
+
+        self.assertIn(("sound", "power_on"), order)
+        self.assertIn("wifi", order)
+        self.assertLess(order.index(("sound", "power_on")), order.index("wifi"))
+
+    def test_power_off_starts_sound_before_wifi_policy(self):
+        state = self.service.ensure_runtime()
+        state["powered_on"] = True
+        state["playback_state"] = "paused"
+        state["wifi_enabled"] = True
+        self.service.save_runtime(state)
+        order = []
+
+        with patch.object(self.service, "_should_play_power_sound", return_value=True), patch.object(
+            self.service, "play_system_sound", side_effect=lambda name: order.append(("sound", name)) or {"ok": True}
+        ), patch.object(
+            self.service, "save_runtime", side_effect=lambda runtime: order.append("save_runtime")
+        ), patch.object(
+            self.service, "save_player", side_effect=lambda player: order.append("save_player")
+        ), patch.object(
+            self.service, "update_hardware_profile", side_effect=lambda runtime: order.append("hardware") or runtime
+        ), patch.object(
+            self.service, "apply_wifi_policy", side_effect=lambda runtime: order.append("wifi") or runtime
+        ), patch.object(
+            self.service, "update_led_status", side_effect=lambda runtime: order.append("leds") or runtime
+        ), patch.object(
+            self.service, "_set_service_active", side_effect=lambda *args, **kwargs: order.append("rfid")
+        ):
+            self.service.power_off()
+
+        self.assertIn(("sound", "power_off"), order)
+        self.assertIn("wifi", order)
+        self.assertLess(order.index(("sound", "power_off")), order.index("wifi"))
+
     def test_wifi_button_can_reenable_wifi_after_auto_wifi_off(self):
         state = self.service.ensure_runtime()
         state["powered_on"] = True
